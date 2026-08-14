@@ -1,0 +1,21 @@
+# Runtime authentication state
+cookies
+cookies.json
+*.cookies.json
+
+# Local credentials and environment
+.env
+.env.*
+!.env.example
+
+# Build and test output
+bin/
+coverage.out
+*.test
+*.exe
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
