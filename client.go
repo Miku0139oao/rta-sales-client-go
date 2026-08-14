@@ -28,13 +28,15 @@ const (
 type endpoints struct {
 	sso        string
 	dsa        string
+	cockpit    string
 	authStores string
 }
 
 var productionEndpoints = endpoints{
 	sso:        "https://mansso.rta-os.com",
 	dsa:        "https://dsa-api-partner.rta-os.com",
-	authStores: "https://oop-partner.rta-os.com",
+	cockpit:    "https://cockpit-report-gateway.rta-os.com",
+	authStores: "https://manrdprequisition-partner.rta-os.com",
 }
 
 // Config configures one RTA account. The client retrieves that account's

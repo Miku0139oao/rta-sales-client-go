@@ -24,10 +24,9 @@ type storeRecord struct {
 	filterText string
 }
 
-type authorizedStoreRecord struct {
-	StoreID   flexibleString `json:"storeId"`
-	StoreName string         `json:"storeName"`
-	SAPID     flexibleString `json:"sapId"`
+type authorizedStoreOption struct {
+	Key   flexibleString `json:"key"`
+	Value string         `json:"value"`
 }
 
 // Stores returns the authenticated account's authorized stores. Results are
@@ -108,11 +107,10 @@ func (c *Client) cachedStores() ([]storeRecord, bool) {
 func (c *Client) fetchAuthorizedStores(ctx context.Context) ([]storeRecord, error) {
 	const operation = "load authorized stores"
 	body, err := c.doAuthenticated(ctx, operation, func(ctx context.Context) (*http.Request, error) {
-		request, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoints.authStores+"/api/store/listAuthStore", nil)
+		request, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoints.authStores+"/appQuery/listStore", nil)
 		if requestErr == nil {
 			setCommonHeaders(request)
-			request.Header.Set("Accept", "application/json, text/plain, */*")
-			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Accept", "application/json")
 			request.Header.Set("Origin", "https://partner.rta-os.com")
 			request.Header.Set("Referer", "https://partner.rta-os.com/")
 		}
@@ -125,7 +123,7 @@ func (c *Client) fetchAuthorizedStores(ctx context.Context) ([]storeRecord, erro
 	if err != nil {
 		return nil, err
 	}
-	var upstream []authorizedStoreRecord
+	var upstream []authorizedStoreOption
 	decoder := json.NewDecoder(bytes.NewReader(envelope.Data))
 	decoder.UseNumber()
 	if err := decoder.Decode(&upstream); err != nil {
@@ -134,16 +132,17 @@ func (c *Client) fetchAuthorizedStores(ctx context.Context) ([]storeRecord, erro
 
 	records := make([]storeRecord, 0, len(upstream))
 	byBusinessID := make(map[string]storeRecord, len(upstream))
-	for _, value := range upstream {
+	for _, option := range upstream {
+		businessID, label, validValue := splitAuthorizedStoreValue(option.Value)
 		record := storeRecord{
 			Store: Store{
-				BusinessID: strings.TrimSpace(string(value.SAPID)),
-				Label:      strings.TrimSpace(value.StoreName),
+				BusinessID: businessID,
+				Label:      label,
 			},
-			upstreamID: strings.TrimSpace(string(value.StoreID)),
-			filterText: strings.TrimSpace(value.StoreName),
+			upstreamID: strings.TrimSpace(string(option.Key)),
+			filterText: label,
 		}
-		if record.BusinessID == "" || record.Label == "" || record.upstreamID == "" {
+		if !validValue || record.upstreamID == "" {
 			continue
 		}
 		if existing, exists := byBusinessID[record.BusinessID]; exists {
@@ -162,6 +161,13 @@ func (c *Client) fetchAuthorizedStores(ctx context.Context) ([]storeRecord, erro
 		return records[left].BusinessID < records[right].BusinessID
 	})
 	return records, nil
+}
+
+func splitAuthorizedStoreValue(value string) (businessID, label string, ok bool) {
+	label = strings.TrimSpace(value)
+	businessID, storeName, found := strings.Cut(label, "-")
+	businessID = strings.TrimSpace(businessID)
+	return businessID, label, found && businessID != "" && strings.TrimSpace(storeName) != ""
 }
 
 func publicStores(records []storeRecord) []Store {

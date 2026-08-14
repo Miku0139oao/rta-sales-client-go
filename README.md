@@ -117,7 +117,7 @@ Use `RefreshStores` when permissions may have changed:
 stores, err := client.RefreshStores(ctx)
 ```
 
-Both methods expose only `BusinessID` and `Label`. RTA's internal query values are retained in memory and used automatically by `Sales`.
+RTA returns the authorized stores as a `data` array. For each entry, the client keeps `key` only for the Article View private filter and derives `BusinessID` from the part of `value` before the first `-`. The same `BusinessID` is used by Trend View. The ID stays a string, so leading zeroes are preserved. Only `BusinessID` and the full `Label` are exposed; no store mapping is written to disk.
 
 ### Sales query fields
 
@@ -129,7 +129,7 @@ Both methods expose only `BusinessID` and `Label`. RTA's internal query values a
 | `Category` | Optional caller-owned result label; it does not filter RTA by itself |
 | `ItemCodes` | Optional SKU/ManCode filter; empty queries all products |
 
-Blank and duplicate `ItemCodes` are removed before the request. `TotalTransactionCount` comes from the report-level transaction aggregate and is not summed from item rows.
+Blank and duplicate `ItemCodes` are removed before the request. `TotalTransactionCount` is read directly from the matching daily rows in RTA Trend View (`group_sales_ticket_num`) and summed over the requested inclusive date range. It is not derived from Article View item rows.
 
 ## Fill an existing Excel workbook
 
@@ -138,9 +138,9 @@ Blank and duplicate `ItemCodes` are removed before the request. `TotalTransactio
 - column `C`: business-facing store ID;
 - column `F`: calendar date;
 - column `L`: daily sales amount;
-- column `AB`: daily customer/transaction count.
+- column `AB`: the matching date's Trend View transaction count.
 
-The command logs in first, loads the account's authorized-store list, and then compares every row for the requested date. Column `C` is resolved by exact business ID; rows belonging to stores outside the signed-in account are skipped without being queried. No row number or extra store environment variable is needed.
+The command logs in first, loads the account's `data[]` authorized-store list, and then compares every row for the requested date. Column `C` is resolved against the string prefix of each store `value`; the private `key` is used only by Article View, while Trend View uses that prefix. Rows belonging to stores outside the signed-in account are skipped without being queried. No row number, local store mapping, or extra store environment variable is needed.
 
 Create a local `.env` file; it is ignored by Git:
 
@@ -230,7 +230,7 @@ type CaptchaSolver interface {
 
 ## Results and errors
 
-`SalesResult` contains the selected `Store`, date range, normalized item codes, every item page in deterministic order, `TotalAmount`, report-level `TotalTransactionCount`, `GrossQuantity`, category aggregates, and query duration. Each `SaleItem` also retains the complete upstream row in `Raw`.
+`SalesResult` contains the selected `Store`, date range, normalized item codes, every item page in deterministic order, `TotalAmount`, Trend View `TotalTransactionCount`, `GrossQuantity`, category aggregates, and query duration. Each `SaleItem` also retains the complete upstream row in `Raw`.
 
 Typed errors support `errors.As`:
 

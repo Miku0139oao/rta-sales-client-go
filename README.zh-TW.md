@@ -117,7 +117,7 @@ for _, store := range stores {
 stores, err := client.RefreshStores(ctx)
 ```
 
-這兩個方法只公開 `BusinessID` 與 `Label`。RTA 查詢所需的內部門店值只留在記憶體，由 `Sales` 自動使用。
+RTA 會以 `data` array 回傳授權門店。套件逐筆處理：`key` 只保留作 Article View 私有 filter；`value` 只切第一個 `-`，左邊作 `BusinessID` 並供 Trend View 使用，完整字串作 `Label`。門店代碼全程保留為字串，因此前導 `0` 不會遺失。程式只公開 `BusinessID` 與 `Label`，不會把門店對照寫入磁碟。
 
 ### SalesQuery 欄位
 
@@ -129,7 +129,7 @@ stores, err := client.RefreshStores(ctx)
 | `Category` | 選用的呼叫端結果標籤，本身不會篩選 RTA 資料 |
 | `ItemCodes` | 選用的 SKU／ManCode 篩選；空值查詢全部商品 |
 
-送出前會移除空白與重複的 `ItemCodes`。`TotalTransactionCount` 使用報表層級的交易總數，不會將商品明細列相加。
+送出前會移除空白與重複的 `ItemCodes`。`TotalTransactionCount` 直接讀取 RTA Trend View 同門店、同日期的 `group_sales_ticket_num`，日期範圍超過一天時會加總範圍內的每日列；不會由 Article View 商品明細推算。
 
 ## 填入既有 Excel 活頁簿
 
@@ -138,9 +138,9 @@ stores, err := client.RefreshStores(ctx)
 - `C` 欄：業務門店編號；
 - `F` 欄：日曆日期；
 - `L` 欄：當日銷售額；
-- `AB` 欄：當日顧客／交易總數。
+- `AB` 欄：相同日期的 Trend View 交易次數。
 
-指令會先登入並取得此帳號的授權門店，再自動比對指定日期的所有列。程式以 `C` 欄的完整業務門店編號精確比對；屬於其他帳號的門店列會在查詢前略過。不需要手動提供列號，也不需要額外設定門店環境變數。
+指令會先登入並取得此帳號的 `data[]` 授權門店，再自動比對指定日期的所有列。程式以每筆 `value` 第一個 `-` 前的字串與 `C` 欄精確比對；私有 `key` 只供 Article View 使用，Trend View 使用該字串前綴。屬於其他帳號的門店列會在查詢前略過。不需要手動提供列號、本機門店對照或額外門店環境變數。
 
 先建立本機 `.env`，此檔案已被 Git 忽略：
 
@@ -230,7 +230,7 @@ type CaptchaSolver interface {
 
 ## 回傳結果與錯誤
 
-`SalesResult` 包含所選 `Store`、日期範圍、正規化商品編號、依分頁順序排列的所有明細、`TotalAmount`、報表層級的 `TotalTransactionCount`、`GrossQuantity`、分類彙總與查詢時間。每個 `SaleItem` 的 `Raw` 亦保留完整上游列。
+`SalesResult` 包含所選 `Store`、日期範圍、正規化商品編號、依分頁順序排列的所有明細、`TotalAmount`、Trend View 的 `TotalTransactionCount`、`GrossQuantity`、分類彙總與查詢時間。每個 `SaleItem` 的 `Raw` 亦保留完整上游列。
 
 可使用 `errors.As` 判斷：
 

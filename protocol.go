@@ -73,7 +73,7 @@ func decodeSuccessfulEnvelope(body []byte, operation string) (rtaEnvelope, error
 	return envelope, nil
 }
 
-func successfulCode(code string) bool { return code == "0000" || code == "0" }
+func successfulCode(code string) bool { return code == "0000" || code == "0" || code == "success" }
 
 func compactPreview(value string) string {
 	value = strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ").Replace(value))

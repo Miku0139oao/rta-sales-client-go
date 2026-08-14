@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -22,17 +23,20 @@ func (solver solverFunc) Solve(ctx context.Context, image []byte) (string, error
 }
 
 type rtaFixture struct {
-	testing          *testing.T
-	server           *httptest.Server
-	loginSubmissions atomic.Int32
-	captchaRequests  atomic.Int32
-	salesRequests    atomic.Int32
-	storeRequests    atomic.Int32
-	mu               sync.Mutex
-	payloads         []salesQueryPayload
-	rawPayloads      []map[string]any
-	failPage         int
-	expireNextSales  bool
+	testing             *testing.T
+	server              *httptest.Server
+	loginSubmissions    atomic.Int32
+	captchaRequests     atomic.Int32
+	salesRequests       atomic.Int32
+	transactionRequests atomic.Int32
+	storeRequests       atomic.Int32
+	mu                  sync.Mutex
+	payloads            []salesQueryPayload
+	rawPayloads         []map[string]any
+	transactionPayloads []trendTransactionQueryPayload
+	transactionForms    []url.Values
+	failPage            int
+	expireNextSales     bool
 }
 
 func newRTAFixture(t *testing.T) *rtaFixture {
@@ -117,24 +121,61 @@ func (f *rtaFixture) serveHTTP(response http.ResponseWriter, request *http.Reque
 		writeJSON(response, map[string]any{
 			"code": "0000",
 			"data": map[string]any{
-				"countResult":   map[string]any{"result": []any{map[string]any{"counts": 1001, "tp_transaction_count": "431"}}},
+				"countResult":   map[string]any{"result": []any{map[string]any{"counts": 1001, "tp_transaction_count": "9999"}}},
 				"executeResult": map[string]any{"result": []any{row}},
 			},
 		})
-	case "/api/store/listAuthStore":
+	case "/data/pc/v1/query":
+		f.transactionRequests.Add(1)
+		if !hasCookie(request, "sid", "valid") {
+			writeJSON(response, map[string]any{"code": "9800", "msg": "用户未登录"})
+			return
+		}
+		if request.Method != http.MethodPost || request.Header.Get("Accept") != "application/json" || request.Header.Get("Origin") != "https://partner.rta-os.com" || request.Header.Get("Referer") != "https://partner.rta-os.com/" {
+			f.testing.Errorf("unexpected Trend View request metadata")
+		}
+		if err := request.ParseForm(); err != nil {
+			f.testing.Errorf("parse Trend View form: %v", err)
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		var payload trendTransactionQueryPayload
+		if err := json.Unmarshal([]byte(request.Form.Get("queryParam")), &payload); err != nil {
+			f.testing.Errorf("decode Trend View query: %v", err)
+		}
+		formCopy := make(url.Values, len(request.Form))
+		for key, values := range request.Form {
+			formCopy[key] = append([]string(nil), values...)
+		}
+		f.mu.Lock()
+		f.transactionPayloads = append(f.transactionPayloads, payload)
+		f.transactionForms = append(f.transactionForms, formCopy)
+		f.mu.Unlock()
+		writeJSON(response, map[string]any{
+			"code": 0,
+			"data": map[string]any{
+				"count": 3,
+				"data": []any{
+					map[string]any{"show_date": "25-06-2026", "group_sales_ticket_num": "120"},
+					map[string]any{"show_date": "26-06-2026", "group_sales_ticket_num": 311},
+					map[string]any{"show_date": "27-06-2026", "group_sales_ticket_num": "4000"},
+				},
+			},
+		})
+	case "/appQuery/listStore":
 		f.storeRequests.Add(1)
 		if !hasCookie(request, "sid", "valid") {
 			writeJSON(response, map[string]any{"code": "9800", "msg": "用户未登录"})
 			return
 		}
-		if request.Method != http.MethodPost || request.Header.Get("Origin") != "https://partner.rta-os.com" || request.Header.Get("Referer") != "https://partner.rta-os.com/" {
+		if request.Method != http.MethodGet || request.Header.Get("Origin") != "https://partner.rta-os.com" || request.Header.Get("Referer") != "https://partner.rta-os.com/" {
 			f.testing.Errorf("unexpected authorized-store request metadata")
 		}
 		writeJSON(response, map[string]any{
-			"code": "0000",
+			"code": "success",
 			"data": []any{
-				map[string]any{"storeId": "INTERNAL-A", "storeName": "Fixture Store A", "sapId": "STOREA"},
-				map[string]any{"storeId": 2002, "storeName": "Fixture Store B", "sapId": 9002},
+				map[string]any{"key": "INTERNAL-A", "value": "STOREA-Fixture Store A"},
+				map[string]any{"key": 2002, "value": "STOREB-Fixture Store B"},
 			},
 		})
 	default:
@@ -165,7 +206,7 @@ func (f *rtaFixture) client(t *testing.T, cookieFile string) (*Client, *atomic.I
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.endpoints = endpoints{sso: f.server.URL, dsa: f.server.URL, authStores: f.server.URL}
+	client.endpoints = endpoints{sso: f.server.URL, dsa: f.server.URL, cockpit: f.server.URL, authStores: f.server.URL}
 	return client, &ocrCalls, &fallbackCalls
 }
 
@@ -185,14 +226,17 @@ func TestSalesResolvesStorePaginatesAndAggregates(t *testing.T) {
 	if fixture.loginSubmissions.Load() != 2 || ocrCalls.Load() != 1 || fallbackCalls.Load() != 1 {
 		t.Fatalf("login submissions=%d OCR=%d fallback=%d, want 2/1/1", fixture.loginSubmissions.Load(), ocrCalls.Load(), fallbackCalls.Load())
 	}
-	if result.Store.BusinessID != "STOREA" || result.Store.Label != "Fixture Store A" {
+	if fixture.transactionRequests.Load() != 1 {
+		t.Fatalf("Trend View requests=%d, want 1", fixture.transactionRequests.Load())
+	}
+	if result.Store.BusinessID != "STOREA" || result.Store.Label != "STOREA-Fixture Store A" {
 		t.Fatalf("unexpected store: %+v", result.Store)
 	}
 	storeJSON, err := json.Marshal(result.Store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(storeJSON), `{"business_id":"STOREA","label":"Fixture Store A"}`; got != want {
+	if got, want := string(storeJSON), `{"business_id":"STOREA","label":"STOREA-Fixture Store A"}`; got != want {
 		t.Fatalf("public store JSON=%s, want %s", got, want)
 	}
 	if result.StartDate != "2026-06-25" || result.EndDate != "2026-06-26" {
@@ -205,7 +249,7 @@ func TestSalesResolvesStorePaginatesAndAggregates(t *testing.T) {
 		t.Fatalf("aggregate total=%v quantity=%v, want 31/3", result.TotalAmount, result.GrossQuantity)
 	}
 	if result.TotalTransactionCount == nil || *result.TotalTransactionCount != 431 {
-		t.Fatalf("aggregate transaction count=%v, want 431", result.TotalTransactionCount)
+		t.Fatalf("Trend View transaction total=%v, want 431", result.TotalTransactionCount)
 	}
 	if len(result.Categories) != 1 || len(result.Categories[0].Items) != 2 {
 		t.Fatalf("unexpected category aggregate: %+v", result.Categories)
@@ -216,20 +260,49 @@ func TestSalesResolvesStorePaginatesAndAggregates(t *testing.T) {
 		t.Fatalf("payload count=%d, want 2", len(fixture.payloads))
 	}
 	for index, payload := range fixture.payloads {
-		if payload.StoreID != "INTERNAL-A" || payload.StoreIDString != "Fixture Store A" {
+		if payload.StoreID != "INTERNAL-A" || payload.StoreIDString != "STOREA-Fixture Store A" {
 			t.Fatalf("sales payload has wrong authorized-store filter: %+v", payload)
 		}
 		if payload.Matnr != "SKU-A,SKU-B" || payload.MatnrString != "SKU-A,SKU-B" {
 			t.Fatalf("unexpected item code filter: %+v", payload)
 		}
 		for key, want := range map[string]string{
-			"store_id": "INTERNAL-A", "store_id_str": "Fixture Store A",
+			"store_id": "INTERNAL-A", "store_id_str": "STOREA-Fixture Store A",
 			"store_cluster_code": "", "large_area_code": "",
 		} {
 			if value, exists := fixture.rawPayloads[index][key]; !exists || value != want {
 				t.Fatalf("query field %q=%v exists=%t, want %q", key, value, exists, want)
 			}
 		}
+	}
+	if len(fixture.transactionPayloads) != 1 || len(fixture.transactionForms) != 1 {
+		t.Fatalf("Trend View payloads=%d forms=%d, want 1/1", len(fixture.transactionPayloads), len(fixture.transactionForms))
+	}
+	transactionPayload := fixture.transactionPayloads[0]
+	if transactionPayload.SiteCode != "STOREA" || transactionPayload.CurrentStart != "2026-06-25" || transactionPayload.CurrentEnd != "2026-06-26" || transactionPayload.DateType != "1" || transactionPayload.CalendarUnit != "one" {
+		t.Fatalf("unexpected Trend View query payload: %+v", transactionPayload)
+	}
+	transactionForm := fixture.transactionForms[0]
+	for key, want := range map[string]string{
+		"pageCode":    "storeRealTimeSalesMannings",
+		"moduleCode":  "trendTable",
+		"tabCode":     "trend",
+		"serviceCode": "achievement",
+		"dataCode":    "storeRealTimeSalesMannings.trendTable",
+		"filterParam": "{}",
+		"pageNum":     "1",
+		"pageSize":    "50",
+	} {
+		if got := transactionForm.Get(key); got != want {
+			t.Fatalf("Trend View form %q=%q, want %q", key, got, want)
+		}
+	}
+	var columns []string
+	if err := json.Unmarshal([]byte(transactionForm.Get("showColumns")), &columns); err != nil {
+		t.Fatalf("decode Trend View columns: %v", err)
+	}
+	if !containsString(columns, "show_date") || !containsString(columns, "group_sales_ticket_num") {
+		t.Fatalf("Trend View columns omit date or transaction fields: %v", columns)
 	}
 }
 
@@ -250,7 +323,7 @@ func TestEmbeddedOCRFailureUsesConfiguredFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.endpoints = endpoints{sso: fixture.server.URL, dsa: fixture.server.URL, authStores: fixture.server.URL}
+	client.endpoints = endpoints{sso: fixture.server.URL, dsa: fixture.server.URL, cockpit: fixture.server.URL, authStores: fixture.server.URL}
 	result, err := client.Sales(context.Background(), SalesQuery{
 		BusinessStoreID: "STOREA",
 		StartDate:       time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC),
@@ -421,11 +494,18 @@ func TestStoresReturnsAuthorizedBusinessValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stores) != 2 || stores[0].BusinessID != "9002" || stores[0].Label != "Fixture Store B" || stores[1].BusinessID != "STOREA" {
+	if len(stores) != 2 || stores[0].BusinessID != "STOREA" || stores[0].Label != "STOREA-Fixture Store A" || stores[1].BusinessID != "STOREB" || stores[1].Label != "STOREB-Fixture Store B" {
 		t.Fatalf("unexpected authorized stores: %+v", stores)
 	}
 	if fixture.loginSubmissions.Load() != 2 || fixture.storeRequests.Load() != 2 || fixture.salesRequests.Load() != 0 {
 		t.Fatalf("login=%d stores=%d sales=%d, want 2/2/0", fixture.loginSubmissions.Load(), fixture.storeRequests.Load(), fixture.salesRequests.Load())
+	}
+}
+
+func TestAuthorizedStoreValuePreservesStringPrefix(t *testing.T) {
+	businessID, label, ok := splitAuthorizedStoreValue(" 00A-Fixture Store - Branch ")
+	if !ok || businessID != "00A" || label != "00A-Fixture Store - Branch" {
+		t.Fatalf("businessID=%q label=%q ok=%t", businessID, label, ok)
 	}
 }
 
@@ -504,4 +584,13 @@ func writeJSON(response http.ResponseWriter, payload any) {
 func hasCookie(request *http.Request, name, value string) bool {
 	cookie, err := request.Cookie(name)
 	return err == nil && cookie.Value == value
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }

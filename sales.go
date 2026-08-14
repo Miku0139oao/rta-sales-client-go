@@ -16,6 +16,21 @@ import (
 
 const salesPageSize = 1000
 
+const trendTransactionPageSize = 50
+
+var trendTransactionColumns = []string{
+	"show_date",
+	"base_currency",
+	"group_sales_ticket_num",
+	"group_sales_sales_qty",
+	"group_sales_order_sale_untaxed_amt",
+	"group_return_return_ticket_num",
+	"group_return_refund_sale_num",
+	"group_return_refund_sale_untaxed_amt",
+	"gross_sales_gross_sale_qty",
+	"gross_sales_gross_sale_untaxed_amt",
+}
+
 // SalesQuery selects an inclusive calendar-date range for one business store.
 // ItemCodes is optional; an empty slice queries all products.
 type SalesQuery struct {
@@ -63,9 +78,9 @@ type SalesResult struct {
 	Category    string   `json:"category"`
 	ItemCodes   []string `json:"item_codes,omitempty"`
 	TotalAmount float64  `json:"total_amount"`
-	// TotalTransactionCount comes from countResult.result[0].tp_transaction_count.
-	// It is never derived from item rows because one transaction can contain
-	// multiple items.
+	// TotalTransactionCount is the Trend View transaction total for the
+	// selected calendar-date range. It is never derived from item rows because
+	// one transaction can contain multiple items.
 	TotalTransactionCount *float64            `json:"total_transaction_count,omitempty"`
 	GrossQuantity         float64             `json:"gross_quantity"`
 	Items                 []SaleItem          `json:"items"`
@@ -116,6 +131,33 @@ type salesDataEnvelope struct {
 	} `json:"executeResult"`
 }
 
+type trendTransactionQueryPayload struct {
+	SiteTreeCode1  string `json:"site_tree_code_1"`
+	SiteTreeCode2  string `json:"site_tree_code_2"`
+	SiteTreeCode3  string `json:"site_tree_code_3"`
+	SiteTreeCode4  string `json:"site_tree_code_4"`
+	SiteTreeCode5  string `json:"site_tree_code_5"`
+	SiteCode       string `json:"site_code"`
+	DivisionCode   string `json:"division_code"`
+	DepartmentCode string `json:"department_code"`
+	CategoryCode   string `json:"category_code"`
+	SubCategory    string `json:"sub_category_code"`
+	ClassCode      string `json:"class_code"`
+	StoreCluster   string `json:"store_cluster"`
+	Transaction    string `json:"trans_type"`
+	ArticleCode    string `json:"article_code"`
+	OrderStatus    string `json:"sale_order_status"`
+	DateType       string `json:"dateType"`
+	CurrentStart   string `json:"currentStart"`
+	CurrentEnd     string `json:"currentEnd"`
+	CalendarUnit   string `json:"unit"`
+}
+
+type trendTransactionDataEnvelope struct {
+	Count int              `json:"count"`
+	Data  []map[string]any `json:"data"`
+}
+
 // Sales resolves the requested business store through RTA's authenticated
 // authorized-store list, fetches every result page, and returns raw rows plus
 // deterministic aggregates. RTA's query-only store values remain private.
@@ -132,7 +174,7 @@ func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, err
 	payload := newSalesPayload(query)
 	payload.StoreID = store.upstreamID
 	payload.StoreIDString = store.filterText
-	firstItems, totalPages, totalTransactionCount, err := c.fetchSalesPage(ctx, payload, 1)
+	firstItems, totalPages, err := c.fetchSalesPage(ctx, payload, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -146,6 +188,10 @@ func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, err
 	items := make([]SaleItem, 0)
 	for _, page := range pages {
 		items = append(items, page...)
+	}
+	totalTransactionCount, err := c.fetchTrendTransactionCount(ctx, query, store)
+	if err != nil {
+		return nil, err
 	}
 	total, quantity, categories := aggregateSales(items)
 	return &SalesResult{
@@ -161,6 +207,111 @@ func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, err
 		Categories:            categories,
 		QueryDuration:         time.Since(started),
 	}, nil
+}
+
+func (c *Client) fetchTrendTransactionCount(ctx context.Context, query SalesQuery, store storeRecord) (*float64, error) {
+	payload := trendTransactionQueryPayload{
+		SiteCode:     store.BusinessID,
+		DateType:     "1",
+		CurrentStart: query.StartDate.Format("2006-01-02"),
+		CurrentEnd:   query.EndDate.Format("2006-01-02"),
+		CalendarUnit: "one",
+	}
+	queryJSON, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	columnsJSON, err := json.Marshal(trendTransactionColumns)
+	if err != nil {
+		return nil, err
+	}
+	total := 0.0
+	found := false
+	startKey := query.StartDate.Format("20060102")
+	endKey := query.EndDate.Format("20060102")
+	for page := 1; ; page++ {
+		rows, count, err := c.fetchTrendTransactionPage(ctx, queryJSON, columnsJSON, page)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			dateText := strings.TrimSpace(stringFrom(row["show_date"]))
+			if dateText == "" {
+				continue
+			}
+			dateKey, err := trendDateKey(dateText)
+			if err != nil {
+				return nil, &ProtocolError{Operation: "fetch Trend View transaction count", Message: "a Trend View row has an invalid date", Err: err}
+			}
+			if dateKey < startKey || dateKey > endKey {
+				continue
+			}
+			value := optionalFloatFrom(row["group_sales_ticket_num"])
+			if value == nil {
+				return nil, &ProtocolError{Operation: "fetch Trend View transaction count", Message: "a dated Trend View row has no valid transaction count"}
+			}
+			total += *value
+			found = true
+		}
+		if page*trendTransactionPageSize >= count || len(rows) == 0 {
+			break
+		}
+	}
+	if !found {
+		return nil, nil
+	}
+	return &total, nil
+}
+
+func trendDateKey(value string) (string, error) {
+	for _, layout := range []string{"02-01-2006", "2006-01-02"} {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			return parsed.Format("20060102"), nil
+		}
+	}
+	return "", fmt.Errorf("unsupported date %q", value)
+}
+
+func (c *Client) fetchTrendTransactionPage(ctx context.Context, queryJSON, columnsJSON []byte, page int) ([]map[string]any, int, error) {
+	const operation = "fetch Trend View transaction count"
+	form := url.Values{
+		"pageCode":    {"storeRealTimeSalesMannings"},
+		"moduleCode":  {"trendTable"},
+		"tabCode":     {"trend"},
+		"serviceCode": {"achievement"},
+		"dataCode":    {"storeRealTimeSalesMannings.trendTable"},
+		"queryParam":  {string(queryJSON)},
+		"filterParam": {"{}"},
+		"showColumns": {string(columnsJSON)},
+		"pageNum":     {strconv.Itoa(page)},
+		"pageSize":    {strconv.Itoa(trendTransactionPageSize)},
+	}
+	body, err := c.doAuthenticated(ctx, operation, func(ctx context.Context) (*http.Request, error) {
+		request, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoints.cockpit+"/data/pc/v1/query", strings.NewReader(form.Encode()))
+		if requestErr == nil {
+			setCommonHeaders(request)
+			request.Header.Set("Accept", "application/json")
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			request.Header.Set("Origin", "https://partner.rta-os.com")
+			request.Header.Set("Referer", "https://partner.rta-os.com/")
+		}
+		return request, requestErr
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	envelope, err := decodeSuccessfulEnvelope(body, operation)
+	if err != nil {
+		return nil, 0, err
+	}
+	var data trendTransactionDataEnvelope
+	decoder := json.NewDecoder(bytes.NewReader(envelope.Data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&data); err != nil {
+		return nil, 0, &ProtocolError{Operation: operation, Message: "invalid Trend View data", Err: err}
+	}
+	return data.Data, data.Count, nil
 }
 
 func validateSalesQuery(query SalesQuery) (SalesQuery, error) {
@@ -219,10 +370,10 @@ func newSalesPayload(query SalesQuery) salesQueryPayload {
 	}
 }
 
-func (c *Client) fetchSalesPage(ctx context.Context, payload salesQueryPayload, page int) ([]SaleItem, int, *float64, error) {
+func (c *Client) fetchSalesPage(ctx context.Context, payload salesQueryPayload, page int) ([]SaleItem, int, error) {
 	queryJSON, err := json.Marshal(payload)
 	if err != nil {
-		return nil, 0, nil, err
+		return nil, 0, err
 	}
 	form := fixedSalesForm(page)
 	form.Set("queryParam", string(queryJSON))
@@ -244,24 +395,23 @@ func (c *Client) fetchSalesPage(ctx context.Context, payload salesQueryPayload, 
 		return request, err
 	})
 	if err != nil {
-		return nil, 0, nil, err
+		return nil, 0, err
 	}
 	envelope, err := decodeSuccessfulEnvelope(body, fmt.Sprintf("fetch sales page %d", page))
 	if err != nil {
-		return nil, 0, nil, err
+		return nil, 0, err
 	}
 	var data salesDataEnvelope
 	decoder := json.NewDecoder(bytes.NewReader(envelope.Data))
 	decoder.UseNumber()
 	if err := decoder.Decode(&data); err != nil {
-		return nil, 0, nil, &ProtocolError{Operation: fmt.Sprintf("fetch sales page %d", page), Message: "invalid sales data", Err: err}
+		return nil, 0, &ProtocolError{Operation: fmt.Sprintf("fetch sales page %d", page), Message: "invalid sales data", Err: err}
 	}
 	items := make([]SaleItem, 0, len(data.ExecuteResult.Result))
 	for _, row := range data.ExecuteResult.Result {
 		items = append(items, saleItemFromRow(row))
 	}
 	totalPages := 1
-	var totalTransactionCount *float64
 	if page == 1 && len(data.CountResult.Result) > 0 {
 		counts := data.CountResult.Result[0]
 		count := floatFrom(counts["counts"])
@@ -271,9 +421,8 @@ func (c *Client) fetchSalesPage(ctx context.Context, payload salesQueryPayload, 
 		if count > 0 {
 			totalPages = (int(count) + salesPageSize - 1) / salesPageSize
 		}
-		totalTransactionCount = optionalFloatFrom(counts["tp_transaction_count"])
 	}
-	return items, totalPages, totalTransactionCount, nil
+	return items, totalPages, nil
 }
 
 func (c *Client) fetchRemainingSalesPages(ctx context.Context, payload salesQueryPayload, pages [][]SaleItem) error {
@@ -292,7 +441,7 @@ func (c *Client) fetchRemainingSalesPages(ctx context.Context, payload salesQuer
 		go func() {
 			defer waitGroup.Done()
 			for page := range jobs {
-				items, _, _, err := c.fetchSalesPage(workContext, payload, page)
+				items, _, err := c.fetchSalesPage(workContext, payload, page)
 				if err != nil {
 					errorOnce.Do(func() {
 						firstError = err
