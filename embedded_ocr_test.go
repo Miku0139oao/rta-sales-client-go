@@ -9,6 +9,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"math"
+	"math/rand"
 	"strings"
 	"testing"
 )
@@ -60,6 +61,18 @@ func TestEmbeddedOCRSolverRejectsUncertainAnswer(t *testing.T) {
 	}
 }
 
+func TestEmbeddedOCRSolverUsesCalibratedConsensusDefaults(t *testing.T) {
+	solver := NewEmbeddedOCRSolver(EmbeddedOCRConfig{})
+	if solver.maximumDistance != 0.20 || solver.minimumScoreMargin != 0.02 {
+		t.Fatalf("defaults=(%.3f, %.3f), want (0.20, 0.02)", solver.maximumDistance, solver.minimumScoreMargin)
+	}
+	for _, character := range []byte(defaultOCRAlphabet) {
+		if len(solver.templates[character]) == 0 || len(solver.fittedTemplates[character]) == 0 {
+			t.Fatalf("missing consensus templates for %q", character)
+		}
+	}
+}
+
 func TestSelectBestGlyphMatchUsesStrongestExtraction(t *testing.T) {
 	match := selectBestGlyphMatch([]glyphMatch{
 		{character: '5', distance: 0.166, margin: 0.030},
@@ -78,6 +91,46 @@ func TestSelectBestGlyphMatchPenalizesCloseDisagreement(t *testing.T) {
 	if match.character != 'e' || match.margin < 0.0039 || match.margin > 0.0041 {
 		t.Fatalf("match=%+v, want character e with cross-extraction margin about 0.004", match)
 	}
+}
+
+func TestPackedGlyphDistanceMatchesReference(t *testing.T) {
+	random := rand.New(rand.NewSource(20260814))
+	for sample := 0; sample < 100; sample++ {
+		left := newBinaryGlyph(templateWidth, templateHeight)
+		right := newBinaryGlyph(templateWidth, templateHeight)
+		for position := range left.pixels {
+			left.pixels[position] = random.Intn(4) == 0
+			right.pixels[position] = random.Intn(4) == 0
+		}
+		preparedLeft := prepareGlyph(left)
+		preparedRight := prepareGlyph(right)
+		got := alignedGlyphOverlapDistance(preparedLeft, preparedRight)
+		want := alignedGlyphOverlapDistanceReference(preparedLeft, preparedRight)
+		if math.Abs(got-want) > 1e-12 {
+			t.Fatalf("sample %d distance=%.12f, want %.12f", sample, got, want)
+		}
+	}
+}
+
+func alignedGlyphOverlapDistanceReference(left, right preparedGlyph) float64 {
+	best := 1.0
+	for offsetY := -2; offsetY <= 2; offsetY++ {
+		for offsetX := -2; offsetX <= 2; offsetX++ {
+			intersection := 0
+			for _, position := range left.foreground {
+				x := position%left.width + offsetX
+				y := position/left.width + offsetY
+				if right.at(x, y) {
+					intersection++
+				}
+			}
+			distance := 1 - 2*float64(intersection)/float64(len(left.foreground)+len(right.foreground))
+			if distance < best {
+				best = distance
+			}
+		}
+	}
+	return best
 }
 
 func syntheticCaptchaJPEG(t *testing.T, answer string) []byte {

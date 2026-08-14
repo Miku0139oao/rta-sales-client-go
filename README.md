@@ -173,16 +173,17 @@ Prepare any category-specific `ItemCodes` in the caller. `Category` is metadata 
 
 The recommended order is embedded OCR first and 2Captcha second:
 
-1. `EmbeddedOCRSolver` independently extracts each glyph with color-component and grayscale paths, then keeps the stronger template match.
-2. If the image is malformed or the score is uncertain, the next solver receives the same image.
-3. If RTA rejects a plausible answer, the next login attempt gets a fresh image and starts with the next solver.
-4. Login performs four attempts by default; `LoginAttempts` can set `1`–`10`.
+1. `EmbeddedOCRSolver` extracts every complete glyph cell through independent color-component and grayscale paths.
+2. Two template models classify the result: one normalizes stroke topology, while the other preserves the original aspect ratio.
+3. A character is accepted only when both models agree, its worst match distance is at most `0.20`, and its smallest runner-up margin is at least `0.02`.
+4. If the image is malformed or the gate rejects any character, the next solver receives the same image.
+5. If no fallback solver succeeds, the next login attempt obtains a fresh challenge. Login performs four attempts by default; `LoginAttempts` can set `1`–`10`.
 
-When embedded OCR is the only configured solver, an uncertain image is not submitted. The next login attempt requests a fresh captcha instead. Close disagreements between the two extraction paths are also rejected, so lowering `MinimumScoreMargin` merely to avoid retries is not recommended.
+When embedded OCR is the only configured solver, an uncertain image is not submitted. The next login attempt requests a fresh captcha instead. Model or extraction-path disagreements are intentionally rejected, so loosening `MaximumDistance` or `MinimumScoreMargin` merely to reduce retries is not recommended.
 
-At the observed 5% per-image safe-rejection rate, four independent fresh images reduce the probability that every attempt is rejected to `0.05^4 = 0.000625%` (99.999375% chance of obtaining a submitted answer). This is an operational retry estimate, not a claim that one image has certified 99.99% accuracy.
+In an independent 1,000-challenge validation run, raw top-1 recognition was `989/1000`. The default confidence gate submitted `905/1000`, and RTA accepted all `905/905` submitted answers; the other 95 were safely rejected. This finite observation is not a 99.99% accuracy guarantee. At the observed 9.5% rejection rate, four independent fresh challenges give an estimated `1 - 0.095^4 = 99.9919%` chance that at least one passes the local gate. That is an operational retry estimate, not per-image OCR accuracy.
 
-Embedded OCR uses ordinary CPU instructions. Templates are compiled into the package, prepared once per process, and shared across solver instances. It has no background service and requires no GPU, CGO, executable, or external model file.
+Embedded OCR uses ordinary CPU instructions. Both template sets are compiled into the package, prepared once per process, and shared across solver instances. It has no background service and requires no GPU, CGO, executable, or external model file.
 
 The zero-value configuration is recommended:
 
@@ -196,8 +197,8 @@ Advanced fields are available when the upstream captcha format changes:
 | --- | --- |
 | `Length` | Fixed glyph count; non-positive uses `5` |
 | `Alphabet` | Supported ASCII candidates; empty uses hexadecimal digits |
-| `MaximumDistance` | Reject above this match distance; smaller is stricter |
-| `MinimumScoreMargin` | Required lead over the runner-up; larger is stricter |
+| `MaximumDistance` | Reject above this match distance; zero uses `0.20`, and smaller is stricter |
+| `MinimumScoreMargin` | Required lead over the runner-up; zero uses `0.02`, and larger is stricter |
 
 Keep the defaults unless they have been recalibrated with independent samples. `TesseractSolver` remains available for applications that already deploy Tesseract. A custom solver only needs this interface:
 
