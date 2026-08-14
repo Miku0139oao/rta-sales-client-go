@@ -3,6 +3,11 @@ cookies
 cookies.json
 *.cookies.json
 
+# Private runtime mappings and generated workbooks
+*.local.csv
+*.local.json
+*.filled.xlsx
+
 # Local credentials and environment
 .env
 .env.*

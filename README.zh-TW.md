@@ -10,6 +10,7 @@
 - 使用門店 ID 與日期區間精確查詢銷售資料；
 - 可選的 SKU／ManCode 篩選；
 - 完整型別化明細、原始欄位、總計與分類彙總；
+- 可按指定日期安全填入既有 Excel，同時保留公式與樣式；
 - 有上限的並行分頁查詢，任一頁失敗時不回傳不完整結果。
 
 本套件不依賴資料庫或全域程序狀態，也不需要 GPU、CGO、Tesseract 或外部 OCR 模型。每個 RTA 帳號應建立各自的 `Client`，避免 Cookie 與門店快取互相混用。
@@ -30,6 +31,7 @@ go get github.com/Miku0139oao/rta-sales-client-go@latest
 RTA_ACCOUNT=
 RTA_PASSWORD=
 RTA_BUSINESS_STORE_ID=
+RTA_COOKIE_FILE=
 TWOCAPTCHA_API_KEY=
 ```
 
@@ -155,6 +157,48 @@ result, err := client.Sales(ctx, rtasales.SalesQuery{
 
 若需依分類查詢，請由呼叫端準備相應的 `ItemCodes`。`Category` 只會複製到 `SalesResult` 作為中繼資料，實際送給上游的商品篩選欄位是 `ItemCodes`。
 
+## 填入既有 Excel 活頁簿
+
+`xlsxfill` package 與 `cmd/rta-xlsx-fill` 指令可填入既有活頁簿的兩個每日人工輸入欄，同時保留公式、格式、合併儲存格與其他工作表。預設工作表配置為：
+
+- `C` 欄：活頁簿使用的門店 ID；
+- `F` 欄：日曆日期；
+- `L` 欄：當日銷售額；
+- `AB` 欄：當日顧客／交易總數。
+
+標示為 `Total` 的列、缺少門店或日期的列，以及非指定日期的列都會略過。預設直接把 `C` 欄交給 `Client.Sales`，client 仍會透過登入後取得的 RTA 門店表解析。如果其他專案的活頁簿使用不同 ID，可用 `-mapping` 指定私有 JSON object，或包含 `sheet_store_id`、`rta_business_store_id` 標題的 CSV；請勿提交任何已填入資料的對照檔。
+
+指令會從環境變數或已被 Git 忽略的本機 `.env` 讀取 `RTA_ACCOUNT`、`RTA_PASSWORD`，且只使用內建 OCR。請先執行 dry-run：
+
+```bash
+go run ./cmd/rta-xlsx-fill \
+  -input <來源.xlsx> \
+  -date <YYYY-MM-DD>
+```
+
+確認 dry-run 沒有問題後，另存新的活頁簿：
+
+```bash
+go run ./cmd/rta-xlsx-fill \
+  -input <來源.xlsx> \
+  -output <填入完成.xlsx> \
+  -date <YYYY-MM-DD> \
+  -write
+```
+
+重要的安全預設：
+
+- 輸出路徑不可與來源檔相同；
+- 原有數值不同時不會覆寫，除非明確加入 `-overwrite`；
+- 對照缺漏、門店無權限、缺少聚合交易總數或查詢失敗時，預設不會產生任何部分結果；只有明確加入 `-allow-partial` 才會另存安全完成的列；
+- `L` 或 `AB` 若是公式儲存格，絕不覆寫；
+- 成功輸出的檔案會設定為使用 Excel 開啟時完整重算；
+- JSON 報告只包含列號與問題代碼，不包含帳密、門店 ID 或實際銷售數值。
+
+只有 `C` 欄不是 `Stores` 回傳的業務門店 ID 時，才需要加入 `-mapping <private.local.csv>`。repository 已忽略 `*.local.csv`、`*.local.json`、Cookie 檔及 `*.filled.xlsx`。
+
+使用權限有限的帳號做 smoke test 時，可加入 `-row <工作表列號>` 與 `-max-queries 1`。這樣最多只會查詢該列所代表的一個門店與日期；除非另外明確加入 `-write`，否則仍是 dry-run。
+
 ## Client 設定
 
 | 欄位 | 用途 | 預設值 |
@@ -216,13 +260,13 @@ type CaptchaSolver interface {
 
 - `Store`、`StartDate`、`EndDate`、`Category` 與正規化後的 `ItemCodes`；
 - `Items`，依 RTA 分頁順序包含所有明細；
-- `TotalAmount` 與 `GrossQuantity`；
+- `TotalAmount`、`TotalTransactionCount` 與 `GrossQuantity`；
 - `Categories`，依第四與第五層分類彙總；
 - `QueryDuration`。
 
 每個 `SaleItem` 都提供常用的型別化欄位，以及保留完整上游資料的 `Raw` map。數量使用 `float64`，避免秤重商品被截斷。任何分頁失敗時，`Sales` 會回傳錯誤，不會回傳部分 `SalesResult`。
 
-`TotalAmount` 為 `tp_sale_amount` 加總；`GrossQuantity` 為 `tp_gross_sale_qty` 加總。
+`TotalAmount` 為 `tp_sale_amount` 加總；`GrossQuantity` 為 `tp_gross_sale_qty` 加總。`TotalTransactionCount` 是 pointer，只有 RTA 在所有回傳列提供一致的 `tp_transaction_count_agg` 時才會有值。它不會把商品層級的交易次數直接相加，因為同一張交易可能包含多個商品。
 
 ## 錯誤處理
 

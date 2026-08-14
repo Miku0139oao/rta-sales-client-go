@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -110,4 +111,19 @@ func floatFrom(value any) float64 {
 	default:
 		return 0
 	}
+}
+
+func optionalFloatFrom(value any) *float64 {
+	if value == nil {
+		return nil
+	}
+	text := strings.TrimSpace(stringFrom(value))
+	if text == "" {
+		return nil
+	}
+	parsed, err := strconv.ParseFloat(text, 64)
+	if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return nil
+	}
+	return &parsed
 }

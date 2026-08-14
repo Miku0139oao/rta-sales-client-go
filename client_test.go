@@ -128,12 +128,14 @@ func (f *rtaFixture) serveHTTP(response http.ResponseWriter, request *http.Reque
 		f.payloads = append(f.payloads, payload)
 		f.mu.Unlock()
 		row := map[string]any{
-			"purchase_category4_name": "HEALTH",
-			"purchase_category5_name": "VITAMINS",
-			"matnr":                   fmt.Sprintf("SKU-%d", page),
-			"article_name":            fmt.Sprintf("Item %d", page),
-			"tp_sale_amount":          fmt.Sprintf("%d.5", page*10),
-			"tp_gross_sale_qty":       page,
+			"purchase_category4_name":  "HEALTH",
+			"purchase_category5_name":  "VITAMINS",
+			"matnr":                    fmt.Sprintf("SKU-%d", page),
+			"article_name":             fmt.Sprintf("Item %d", page),
+			"tp_transaction_count":     page * 3,
+			"tp_transaction_count_agg": "431",
+			"tp_sale_amount":           fmt.Sprintf("%d.5", page*10),
+			"tp_gross_sale_qty":        page,
 		}
 		writeJSON(response, map[string]any{
 			"code": "0000",
@@ -209,6 +211,9 @@ func TestSalesResolvesStorePaginatesAndAggregates(t *testing.T) {
 	if result.TotalAmount != 31 || result.GrossQuantity != 3 {
 		t.Fatalf("aggregate total=%v quantity=%v, want 31/3", result.TotalAmount, result.GrossQuantity)
 	}
+	if result.TotalTransactionCount == nil || *result.TotalTransactionCount != 431 {
+		t.Fatalf("aggregate transaction count=%v, want 431", result.TotalTransactionCount)
+	}
 	if len(result.Categories) != 1 || len(result.Categories[0].Items) != 2 {
 		t.Fatalf("unexpected category aggregate: %+v", result.Categories)
 	}
@@ -224,6 +229,38 @@ func TestSalesResolvesStorePaginatesAndAggregates(t *testing.T) {
 		if payload.Matnr != "SKU-A,SKU-B" || payload.MatnrString != "SKU-A,SKU-B" {
 			t.Fatalf("unexpected item code filter: %+v", payload)
 		}
+	}
+}
+
+func TestAggregateTransactionCountRejectsInconsistentValues(t *testing.T) {
+	first := 10.0
+	second := 11.0
+	if got := aggregateTransactionCount([]SaleItem{
+		{TPTransactionCount: 2, TPTransactionCountAgg: &first},
+		{TPTransactionCount: 3, TPTransactionCountAgg: &second},
+	}); got != nil {
+		t.Fatalf("aggregate=%v, want nil for inconsistent upstream values", *got)
+	}
+}
+
+func TestAggregateTransactionCountDoesNotSumItemCounts(t *testing.T) {
+	aggregate := 7.0
+	got := aggregateTransactionCount([]SaleItem{
+		{TPTransactionCount: 5, TPTransactionCountAgg: &aggregate},
+		{TPTransactionCount: 6, TPTransactionCountAgg: &aggregate},
+	})
+	if got == nil || *got != 7 {
+		t.Fatalf("aggregate=%v, want repeated upstream total 7", got)
+	}
+}
+
+func TestAggregateTransactionCountRequiresValueOnEveryRow(t *testing.T) {
+	aggregate := 7.0
+	if got := aggregateTransactionCount([]SaleItem{
+		{TPTransactionCount: 5, TPTransactionCountAgg: &aggregate},
+		{TPTransactionCount: 6},
+	}); got != nil {
+		t.Fatalf("aggregate=%v, want nil when one upstream row omits the aggregate", *got)
 	}
 }
 
@@ -395,6 +432,31 @@ func TestValidateStoreRecordsRejectsConflictingBusinessIDs(t *testing.T) {
 	var protocol *ProtocolError
 	if !errors.As(err, &protocol) {
 		t.Fatalf("unexpected error: %T %v", err, err)
+	}
+}
+
+func TestAppendNodesIgnoresIdentifiedContainerNodes(t *testing.T) {
+	var stores []storeRecord
+	appendNodes(&stores, []storeNode{
+		{
+			Label: "DC-First Area",
+			Value: "AREA-A",
+			Children: []storeNode{{
+				Label:   "STOREA-Main Store",
+				StoreID: "UPSTREAM-A",
+			}},
+		},
+		{
+			Label: "DC-Second Area",
+			Value: "AREA-B",
+			Stores: []storeNode{{
+				Label: "STOREB-Second Store",
+				Value: "UPSTREAM-B",
+			}},
+		},
+	})
+	if len(stores) != 2 || stores[0].BusinessID != "STOREA" || stores[1].BusinessID != "STOREB" {
+		t.Fatalf("unexpected stores: %+v", stores)
 	}
 }
 

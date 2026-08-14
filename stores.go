@@ -163,7 +163,9 @@ func appendNodes(stores *[]storeRecord, nodes []storeNode) {
 		}
 		label := strings.TrimSpace(node.Label)
 		businessID := businessIDFromLabel(label)
-		if upstreamID != "" && businessID != "" {
+		// Area and distribution-center containers can also carry identifiers.
+		// Only leaf nodes are selectable business stores.
+		if len(node.Stores) == 0 && len(node.Children) == 0 && upstreamID != "" && businessID != "" {
 			*stores = append(*stores, storeRecord{
 				Store: Store{
 					BusinessID: businessID,

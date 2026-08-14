@@ -10,6 +10,7 @@ English | [繁體中文](README.zh-TW.md)
 - exact store selection and inclusive date-range sales queries;
 - optional SKU/ManCode filtering;
 - complete typed rows, raw upstream fields, totals, and category aggregates;
+- safe date-scoped filling of existing Excel workbooks without replacing formulas or styles;
 - bounded concurrent pagination with whole-query error handling.
 
 The module has no database or global process-state dependency and does not require GPU hardware, CGO, Tesseract, or a separate OCR model. Use one `Client` per RTA account so cookies and authorized-store state remain isolated.
@@ -30,6 +31,7 @@ Set credentials through your environment or secret manager:
 RTA_ACCOUNT=
 RTA_PASSWORD=
 RTA_BUSINESS_STORE_ID=
+RTA_COOKIE_FILE=
 TWOCAPTCHA_API_KEY=
 ```
 
@@ -155,6 +157,48 @@ result, err := client.Sales(ctx, rtasales.SalesQuery{
 
 Prepare any category-specific `ItemCodes` in the caller. `Category` is metadata copied into `SalesResult`, while `ItemCodes` is the field that filters the upstream query.
 
+## Fill an existing Excel workbook
+
+The `xlsxfill` package and `cmd/rta-xlsx-fill` command can populate the two manual daily-input fields in an existing workbook while retaining its formulas, formatting, merged cells, and other sheets. The default worksheet layout is:
+
+- column `C`: workbook-facing store ID;
+- column `F`: calendar date;
+- column `L`: daily sales amount;
+- column `AB`: daily customer/transaction count.
+
+Rows labeled `Total`, rows without both a store and date, and dates other than the requested date are skipped. Column `C` is passed to `Client.Sales` by default, so the client still resolves it through the authenticated RTA store table. If another project uses different workbook IDs, `-mapping` accepts a private JSON object or a CSV with `sheet_store_id` and `rta_business_store_id` headers. Never commit a populated mapping.
+
+The command loads `RTA_ACCOUNT` and `RTA_PASSWORD` from the environment or an ignored local `.env`. It uses embedded OCR only. Start with a dry run:
+
+```bash
+go run ./cmd/rta-xlsx-fill \
+  -input <source.xlsx> \
+  -date <YYYY-MM-DD>
+```
+
+To save a new workbook after a clean dry run:
+
+```bash
+go run ./cmd/rta-xlsx-fill \
+  -input <source.xlsx> \
+  -output <filled.xlsx> \
+  -date <YYYY-MM-DD> \
+  -write
+```
+
+Important safety defaults:
+
+- the source workbook can never be used as the output path;
+- existing values that differ are not replaced unless `-overwrite` is explicit;
+- any missing mapping, inaccessible store, missing transaction aggregate, or query failure prevents all output unless `-allow-partial` is explicit;
+- formula cells in `L` or `AB` are never replaced;
+- successful output is marked for full recalculation when opened in Excel;
+- the JSON report contains row numbers and issue codes, not credentials, store IDs, or returned sales values.
+
+Use `-mapping <private.local.csv>` only when column `C` is not already the business-facing ID returned by `Stores`. The repository ignores `*.local.csv`, `*.local.json`, cookie files, and `*.filled.xlsx`.
+
+For a permission-limited smoke test, add `-row <worksheet-row>` and `-max-queries 1`. This queries at most the single store/date represented by that row and remains a dry run unless `-write` is also explicit.
+
 ## Client configuration
 
 | Field | Purpose | Default |
@@ -216,13 +260,13 @@ Do not configure a paid fallback if local OCR failure should fail the request in
 
 - `Store`, `StartDate`, `EndDate`, `Category`, and normalized `ItemCodes`;
 - `Items`, containing every result page in deterministic page order;
-- `TotalAmount` and `GrossQuantity`;
+- `TotalAmount`, `TotalTransactionCount`, and `GrossQuantity`;
 - `Categories`, aggregated from category levels 4 and 5;
 - `QueryDuration`.
 
 Each `SaleItem` exposes commonly used typed fields and a `Raw` map containing the complete upstream row. Quantities use `float64` so weighted-product sales are not truncated. If any page fails, `Sales` returns an error and no partial `SalesResult`.
 
-`TotalAmount` sums `tp_sale_amount`; `GrossQuantity` sums `tp_gross_sale_qty`.
+`TotalAmount` sums `tp_sale_amount`; `GrossQuantity` sums `tp_gross_sale_qty`. `TotalTransactionCount` is a pointer and is populated only when RTA supplies one consistent `tp_transaction_count_agg` value across the returned rows. It is deliberately not calculated by summing item-level transaction counts because one transaction can contain multiple items.
 
 ## Error handling
 

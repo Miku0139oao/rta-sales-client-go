@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -29,22 +30,24 @@ type SalesQuery struct {
 // SaleItem preserves the typed RTA sales fields and the complete raw row.
 // Quantities are float64 so weighted products are not truncated.
 type SaleItem struct {
-	PurchaseCategory1Name    string         `json:"purchase_category1_name"`
-	PurchaseCategory2Name    string         `json:"purchase_category2_name"`
-	PurchaseCategory3Name    string         `json:"purchase_category3_name"`
-	PurchaseCategory4Name    string         `json:"purchase_category4_name"`
-	PurchaseCategory5Name    string         `json:"purchase_category5_name"`
-	Matnr                    string         `json:"matnr"`
-	ArticleName              string         `json:"article_name"`
-	TPTransactionCount       float64        `json:"tp_transaction_count"`
-	TPSaleQuantity           float64        `json:"tp_sale_qty"`
-	TPSaleAmount             float64        `json:"tp_sale_amount"`
-	TPReturnTransactionCount float64        `json:"tp_return_transaction_count"`
-	TPReturnSaleQuantity     float64        `json:"tp_return_sale_qty"`
-	TPReturnSaleAmount       float64        `json:"tp_return_sale_amount"`
-	TPGrossSaleQuantity      float64        `json:"tp_gross_sale_qty"`
-	TPGrossSaleAmount        float64        `json:"tp_gross_sale_amount"`
-	Raw                      map[string]any `json:"raw"`
+	PurchaseCategory1Name       string         `json:"purchase_category1_name"`
+	PurchaseCategory2Name       string         `json:"purchase_category2_name"`
+	PurchaseCategory3Name       string         `json:"purchase_category3_name"`
+	PurchaseCategory4Name       string         `json:"purchase_category4_name"`
+	PurchaseCategory5Name       string         `json:"purchase_category5_name"`
+	Matnr                       string         `json:"matnr"`
+	ArticleName                 string         `json:"article_name"`
+	TPTransactionCount          float64        `json:"tp_transaction_count"`
+	TPTransactionCountAgg       *float64       `json:"tp_transaction_count_agg,omitempty"`
+	TPSaleQuantity              float64        `json:"tp_sale_qty"`
+	TPSaleAmount                float64        `json:"tp_sale_amount"`
+	TPReturnTransactionCount    float64        `json:"tp_return_transaction_count"`
+	TPReturnTransactionCountAgg *float64       `json:"tp_return_transaction_count_agg,omitempty"`
+	TPReturnSaleQuantity        float64        `json:"tp_return_sale_qty"`
+	TPReturnSaleAmount          float64        `json:"tp_return_sale_amount"`
+	TPGrossSaleQuantity         float64        `json:"tp_gross_sale_qty"`
+	TPGrossSaleAmount           float64        `json:"tp_gross_sale_amount"`
+	Raw                         map[string]any `json:"raw"`
 }
 
 type CategoryAggregate struct {
@@ -55,16 +58,20 @@ type CategoryAggregate struct {
 }
 
 type SalesResult struct {
-	Store         Store               `json:"store"`
-	StartDate     string              `json:"start_date"`
-	EndDate       string              `json:"end_date"`
-	Category      string              `json:"category"`
-	ItemCodes     []string            `json:"item_codes,omitempty"`
-	TotalAmount   float64             `json:"total_amount"`
-	GrossQuantity float64             `json:"gross_quantity"`
-	Items         []SaleItem          `json:"items"`
-	Categories    []CategoryAggregate `json:"categories"`
-	QueryDuration time.Duration       `json:"query_duration"`
+	Store       Store    `json:"store"`
+	StartDate   string   `json:"start_date"`
+	EndDate     string   `json:"end_date"`
+	Category    string   `json:"category"`
+	ItemCodes   []string `json:"item_codes,omitempty"`
+	TotalAmount float64  `json:"total_amount"`
+	// TotalTransactionCount is populated only when RTA returns one consistent
+	// aggregate value. It is never derived by summing item-level transaction
+	// counts because one transaction may contain multiple items.
+	TotalTransactionCount *float64            `json:"total_transaction_count,omitempty"`
+	GrossQuantity         float64             `json:"gross_quantity"`
+	Items                 []SaleItem          `json:"items"`
+	Categories            []CategoryAggregate `json:"categories"`
+	QueryDuration         time.Duration       `json:"query_duration"`
 }
 
 type salesQueryPayload struct {
@@ -122,17 +129,19 @@ func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, err
 		items = append(items, page...)
 	}
 	total, quantity, categories := aggregateSales(items)
+	totalTransactionCount := aggregateTransactionCount(items)
 	return &SalesResult{
-		Store:         store.Store,
-		StartDate:     query.StartDate.Format("2006-01-02"),
-		EndDate:       query.EndDate.Format("2006-01-02"),
-		Category:      query.Category,
-		ItemCodes:     append([]string(nil), query.ItemCodes...),
-		TotalAmount:   total,
-		GrossQuantity: quantity,
-		Items:         items,
-		Categories:    categories,
-		QueryDuration: time.Since(started),
+		Store:                 store.Store,
+		StartDate:             query.StartDate.Format("2006-01-02"),
+		EndDate:               query.EndDate.Format("2006-01-02"),
+		Category:              query.Category,
+		ItemCodes:             append([]string(nil), query.ItemCodes...),
+		TotalAmount:           total,
+		TotalTransactionCount: totalTransactionCount,
+		GrossQuantity:         quantity,
+		Items:                 items,
+		Categories:            categories,
+		QueryDuration:         time.Since(started),
 	}, nil
 }
 
@@ -301,23 +310,48 @@ func saleItemFromRow(row map[string]any) SaleItem {
 		raw[key] = value
 	}
 	return SaleItem{
-		PurchaseCategory1Name:    stringFrom(row["purchase_category1_name"]),
-		PurchaseCategory2Name:    stringFrom(row["purchase_category2_name"]),
-		PurchaseCategory3Name:    stringFrom(row["purchase_category3_name"]),
-		PurchaseCategory4Name:    stringFrom(row["purchase_category4_name"]),
-		PurchaseCategory5Name:    stringFrom(row["purchase_category5_name"]),
-		Matnr:                    stringFrom(row["matnr"]),
-		ArticleName:              stringFrom(row["article_name"]),
-		TPTransactionCount:       floatFrom(row["tp_transaction_count"]),
-		TPSaleQuantity:           floatFrom(row["tp_sale_qty"]),
-		TPSaleAmount:             floatFrom(row["tp_sale_amount"]),
-		TPReturnTransactionCount: floatFrom(row["tp_return_transaction_count"]),
-		TPReturnSaleQuantity:     floatFrom(row["tp_return_sale_qty"]),
-		TPReturnSaleAmount:       floatFrom(row["tp_return_sale_amount"]),
-		TPGrossSaleQuantity:      floatFrom(row["tp_gross_sale_qty"]),
-		TPGrossSaleAmount:        floatFrom(row["tp_gross_sale_amount"]),
-		Raw:                      raw,
+		PurchaseCategory1Name:       stringFrom(row["purchase_category1_name"]),
+		PurchaseCategory2Name:       stringFrom(row["purchase_category2_name"]),
+		PurchaseCategory3Name:       stringFrom(row["purchase_category3_name"]),
+		PurchaseCategory4Name:       stringFrom(row["purchase_category4_name"]),
+		PurchaseCategory5Name:       stringFrom(row["purchase_category5_name"]),
+		Matnr:                       stringFrom(row["matnr"]),
+		ArticleName:                 stringFrom(row["article_name"]),
+		TPTransactionCount:          floatFrom(row["tp_transaction_count"]),
+		TPTransactionCountAgg:       optionalFloatFrom(row["tp_transaction_count_agg"]),
+		TPSaleQuantity:              floatFrom(row["tp_sale_qty"]),
+		TPSaleAmount:                floatFrom(row["tp_sale_amount"]),
+		TPReturnTransactionCount:    floatFrom(row["tp_return_transaction_count"]),
+		TPReturnTransactionCountAgg: optionalFloatFrom(row["tp_return_transaction_count_agg"]),
+		TPReturnSaleQuantity:        floatFrom(row["tp_return_sale_qty"]),
+		TPReturnSaleAmount:          floatFrom(row["tp_return_sale_amount"]),
+		TPGrossSaleQuantity:         floatFrom(row["tp_gross_sale_qty"]),
+		TPGrossSaleAmount:           floatFrom(row["tp_gross_sale_amount"]),
+		Raw:                         raw,
 	}
+}
+
+func aggregateTransactionCount(items []SaleItem) *float64 {
+	if len(items) == 0 {
+		return nil
+	}
+	var aggregate *float64
+	for _, item := range items {
+		if item.TPTransactionCountAgg == nil {
+			return nil
+		}
+		value := *item.TPTransactionCountAgg
+		if aggregate == nil {
+			aggregate = new(float64)
+			*aggregate = value
+			continue
+		}
+		tolerance := math.Max(1, math.Max(math.Abs(*aggregate), math.Abs(value))) * 1e-9
+		if math.Abs(*aggregate-value) > tolerance {
+			return nil
+		}
+	}
+	return aggregate
 }
 
 func aggregateSales(items []SaleItem) (float64, float64, []CategoryAggregate) {
