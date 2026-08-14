@@ -55,9 +55,8 @@ func run() error {
 	}
 	account := strings.TrimSpace(os.Getenv("RTA_ACCOUNT"))
 	password := os.Getenv("RTA_PASSWORD")
-	businessStoreID := strings.TrimSpace(os.Getenv("RTA_BUSINESS_STORE_ID"))
-	if account == "" || password == "" || businessStoreID == "" {
-		return errors.New("RTA_ACCOUNT, RTA_PASSWORD, and RTA_BUSINESS_STORE_ID are required in the environment or ignored .env file")
+	if account == "" || password == "" {
+		return errors.New("RTA_ACCOUNT and RTA_PASSWORD are required in the environment or ignored .env file")
 	}
 	cookieFile := strings.TrimSpace(os.Getenv("RTA_COOKIE_FILE"))
 	if cookieFile == "" {
@@ -66,7 +65,6 @@ func run() error {
 	client, err := rtasales.NewClient(rtasales.Config{
 		Account:         account,
 		Password:        password,
-		BusinessStoreID: businessStoreID,
 		CaptchaSolvers:  []rtasales.CaptchaSolver{rtasales.NewEmbeddedOCRSolver(rtasales.EmbeddedOCRConfig{})},
 		CookieFile:      cookieFile,
 		PageConcurrency: *pageConcurrency,

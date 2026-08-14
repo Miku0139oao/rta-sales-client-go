@@ -27,6 +27,7 @@ type rtaFixture struct {
 	loginSubmissions atomic.Int32
 	captchaRequests  atomic.Int32
 	salesRequests    atomic.Int32
+	storeRequests    atomic.Int32
 	mu               sync.Mutex
 	payloads         []salesQueryPayload
 	rawPayloads      []map[string]any
@@ -120,6 +121,22 @@ func (f *rtaFixture) serveHTTP(response http.ResponseWriter, request *http.Reque
 				"executeResult": map[string]any{"result": []any{row}},
 			},
 		})
+	case "/api/store/listAuthStore":
+		f.storeRequests.Add(1)
+		if !hasCookie(request, "sid", "valid") {
+			writeJSON(response, map[string]any{"code": "9800", "msg": "用户未登录"})
+			return
+		}
+		if request.Method != http.MethodPost || request.Header.Get("Origin") != "https://partner.rta-os.com" || request.Header.Get("Referer") != "https://partner.rta-os.com/" {
+			f.testing.Errorf("unexpected authorized-store request metadata")
+		}
+		writeJSON(response, map[string]any{
+			"code": "0000",
+			"data": []any{
+				map[string]any{"storeId": "INTERNAL-A", "storeName": "Fixture Store A", "sapId": "STOREA"},
+				map[string]any{"storeId": 2002, "storeName": "Fixture Store B", "sapId": 9002},
+			},
+		})
 	default:
 		http.NotFound(response, request)
 	}
@@ -130,11 +147,9 @@ func (f *rtaFixture) client(t *testing.T, cookieFile string) (*Client, *atomic.I
 	var ocrCalls atomic.Int32
 	var fallbackCalls atomic.Int32
 	client, err := NewClient(Config{
-		Account:            "account",
-		Password:           "secret",
-		BusinessStoreID:    "STOREA",
-		BusinessStoreLabel: "STOREA-Main Store",
-		CookieFile:         cookieFile,
+		Account:    "account",
+		Password:   "secret",
+		CookieFile: cookieFile,
 		CaptchaSolvers: []CaptchaSolver{
 			solverFunc(func(context.Context, []byte) (string, error) {
 				ocrCalls.Add(1)
@@ -150,7 +165,7 @@ func (f *rtaFixture) client(t *testing.T, cookieFile string) (*Client, *atomic.I
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.endpoints = endpoints{sso: f.server.URL, dsa: f.server.URL}
+	client.endpoints = endpoints{sso: f.server.URL, dsa: f.server.URL, authStores: f.server.URL}
 	return client, &ocrCalls, &fallbackCalls
 }
 
@@ -170,14 +185,14 @@ func TestSalesResolvesStorePaginatesAndAggregates(t *testing.T) {
 	if fixture.loginSubmissions.Load() != 2 || ocrCalls.Load() != 1 || fallbackCalls.Load() != 1 {
 		t.Fatalf("login submissions=%d OCR=%d fallback=%d, want 2/1/1", fixture.loginSubmissions.Load(), ocrCalls.Load(), fallbackCalls.Load())
 	}
-	if result.Store.BusinessID != "STOREA" || result.Store.Label != "STOREA-Main Store" {
+	if result.Store.BusinessID != "STOREA" || result.Store.Label != "Fixture Store A" {
 		t.Fatalf("unexpected store: %+v", result.Store)
 	}
 	storeJSON, err := json.Marshal(result.Store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(storeJSON), `{"business_id":"STOREA","label":"STOREA-Main Store"}`; got != want {
+	if got, want := string(storeJSON), `{"business_id":"STOREA","label":"Fixture Store A"}`; got != want {
 		t.Fatalf("public store JSON=%s, want %s", got, want)
 	}
 	if result.StartDate != "2026-06-25" || result.EndDate != "2026-06-26" {
@@ -201,15 +216,18 @@ func TestSalesResolvesStorePaginatesAndAggregates(t *testing.T) {
 		t.Fatalf("payload count=%d, want 2", len(fixture.payloads))
 	}
 	for index, payload := range fixture.payloads {
-		if payload.StoreID != "" || payload.StoreIDString != "" {
-			t.Fatalf("sales payload unexpectedly filtered by store: %+v", payload)
+		if payload.StoreID != "INTERNAL-A" || payload.StoreIDString != "Fixture Store A" {
+			t.Fatalf("sales payload has wrong authorized-store filter: %+v", payload)
 		}
 		if payload.Matnr != "SKU-A,SKU-B" || payload.MatnrString != "SKU-A,SKU-B" {
 			t.Fatalf("unexpected item code filter: %+v", payload)
 		}
-		for _, key := range []string{"store_id", "store_id_str", "store_cluster_code", "large_area_code"} {
-			if value, exists := fixture.rawPayloads[index][key]; !exists || value != "" {
-				t.Fatalf("query field %q=%v exists=%t, want present and empty", key, value, exists)
+		for key, want := range map[string]string{
+			"store_id": "INTERNAL-A", "store_id_str": "Fixture Store A",
+			"store_cluster_code": "", "large_area_code": "",
+		} {
+			if value, exists := fixture.rawPayloads[index][key]; !exists || value != want {
+				t.Fatalf("query field %q=%v exists=%t, want %q", key, value, exists, want)
 			}
 		}
 	}
@@ -219,9 +237,8 @@ func TestEmbeddedOCRFailureUsesConfiguredFallback(t *testing.T) {
 	fixture := newRTAFixture(t)
 	var fallbackCalls atomic.Int32
 	client, err := NewClient(Config{
-		Account:         "account",
-		Password:        "secret",
-		BusinessStoreID: "STOREA",
+		Account:  "account",
+		Password: "secret",
 		CaptchaSolvers: []CaptchaSolver{
 			NewEmbeddedOCRSolver(EmbeddedOCRConfig{}),
 			solverFunc(func(context.Context, []byte) (string, error) {
@@ -233,7 +250,7 @@ func TestEmbeddedOCRFailureUsesConfiguredFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.endpoints = endpoints{sso: fixture.server.URL, dsa: fixture.server.URL}
+	client.endpoints = endpoints{sso: fixture.server.URL, dsa: fixture.server.URL, authStores: fixture.server.URL}
 	result, err := client.Sales(context.Background(), SalesQuery{
 		BusinessStoreID: "STOREA",
 		StartDate:       time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC),
@@ -261,10 +278,9 @@ func TestLoginAttemptsRequestFreshCaptchas(t *testing.T) {
 			fixture := newRTAFixture(t)
 			var solverCalls atomic.Int32
 			client, err := NewClient(Config{
-				Account:         "account",
-				Password:        "secret",
-				BusinessStoreID: "STOREA",
-				LoginAttempts:   test.configured,
+				Account:       "account",
+				Password:      "secret",
+				LoginAttempts: test.configured,
 				CaptchaSolvers: []CaptchaSolver{solverFunc(func(context.Context, []byte) (string, error) {
 					solverCalls.Add(1)
 					return "", errors.New("uncertain captcha")
@@ -273,7 +289,7 @@ func TestLoginAttemptsRequestFreshCaptchas(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			client.endpoints = endpoints{sso: fixture.server.URL, dsa: fixture.server.URL}
+			client.endpoints = endpoints{sso: fixture.server.URL, dsa: fixture.server.URL, authStores: fixture.server.URL}
 			err = client.login(context.Background())
 			var captchaError *CaptchaError
 			if !errors.As(err, &captchaError) {
@@ -293,7 +309,6 @@ func TestNewClientRejectsExcessiveLoginAttempts(t *testing.T) {
 	_, err := NewClient(Config{
 		Account:         "account",
 		Password:        "secret",
-		BusinessStoreID: "STOREA",
 		LoginAttempts:   maximumLoginAttempts + 1,
 		CaptchaSolvers:  []CaptchaSolver{solverFunc(func(context.Context, []byte) (string, error) { return "RIGHT", nil })},
 		PageConcurrency: 1,
@@ -304,15 +319,14 @@ func TestNewClientRejectsExcessiveLoginAttempts(t *testing.T) {
 	}
 }
 
-func TestNewClientRequiresBusinessStoreBinding(t *testing.T) {
-	_, err := NewClient(Config{
+func TestNewClientDoesNotRequireBusinessStoreBinding(t *testing.T) {
+	client, err := NewClient(Config{
 		Account:        "account",
 		Password:       "secret",
 		CaptchaSolvers: []CaptchaSolver{solverFunc(func(context.Context, []byte) (string, error) { return "RIGHT", nil })},
 	})
-	var input *InputError
-	if !errors.As(err, &input) || input.Field != "BusinessStoreID" {
-		t.Fatalf("error=%T %v, want BusinessStoreID InputError", err, err)
+	if err != nil || client == nil {
+		t.Fatalf("client=%v error=%v, want a configured account client", client, err)
 	}
 }
 
@@ -382,10 +396,9 @@ func TestSalesFailsInsteadOfReturningPartialPages(t *testing.T) {
 
 func TestSalesValidatesDateBeforeNetwork(t *testing.T) {
 	client, err := NewClient(Config{
-		Account:         "account",
-		Password:        "secret",
-		BusinessStoreID: "STOREA",
-		CaptchaSolvers:  []CaptchaSolver{solverFunc(func(context.Context, []byte) (string, error) { return "RIGHT", nil })},
+		Account:        "account",
+		Password:       "secret",
+		CaptchaSolvers: []CaptchaSolver{solverFunc(func(context.Context, []byte) (string, error) { return "RIGHT", nil })},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -401,18 +414,39 @@ func TestSalesValidatesDateBeforeNetwork(t *testing.T) {
 	}
 }
 
-func TestStoresReturnsOnlyConfiguredBindingWithoutNetwork(t *testing.T) {
+func TestStoresReturnsAuthorizedBusinessValues(t *testing.T) {
 	fixture := newRTAFixture(t)
 	client, _, _ := fixture.client(t, "")
 	stores, err := client.Stores(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stores) != 1 || stores[0].BusinessID != "STOREA" || stores[0].Label != "STOREA-Main Store" {
-		t.Fatalf("unexpected bound stores: %+v", stores)
+	if len(stores) != 2 || stores[0].BusinessID != "9002" || stores[0].Label != "Fixture Store B" || stores[1].BusinessID != "STOREA" {
+		t.Fatalf("unexpected authorized stores: %+v", stores)
 	}
-	if fixture.loginSubmissions.Load() != 0 || fixture.salesRequests.Load() != 0 {
-		t.Fatal("reading the local store binding unexpectedly performed network I/O")
+	if fixture.loginSubmissions.Load() != 2 || fixture.storeRequests.Load() != 2 || fixture.salesRequests.Load() != 0 {
+		t.Fatalf("login=%d stores=%d sales=%d, want 2/2/0", fixture.loginSubmissions.Load(), fixture.storeRequests.Load(), fixture.salesRequests.Load())
+	}
+}
+
+func TestStoresCachesAndRefreshStoresReloads(t *testing.T) {
+	fixture := newRTAFixture(t)
+	client, _, _ := fixture.client(t, "")
+	if _, err := client.Stores(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	afterFirstLoad := fixture.storeRequests.Load()
+	if _, err := client.Stores(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.storeRequests.Load() != afterFirstLoad {
+		t.Fatal("Stores ignored the authorized-store cache")
+	}
+	if _, err := client.RefreshStores(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.storeRequests.Load() != afterFirstLoad+1 {
+		t.Fatal("RefreshStores did not reload the authorized-store list")
 	}
 }
 
@@ -428,9 +462,12 @@ func TestStoreLookupIsExact(t *testing.T) {
 	if !errors.As(err, &missing) || missing.BusinessStoreID != "STORE" {
 		t.Fatalf("unexpected error: %T %v", err, err)
 	}
+	if fixture.salesRequests.Load() != 0 {
+		t.Fatal("unknown business store unexpectedly reached the sales endpoint")
+	}
 }
 
-func TestConcurrentStoresReturnsConfiguredBinding(t *testing.T) {
+func TestConcurrentStoresSharesAuthorizedStoreLoad(t *testing.T) {
 	fixture := newRTAFixture(t)
 	client, _, _ := fixture.client(t, "")
 	const callers = 12
@@ -441,7 +478,7 @@ func TestConcurrentStoresReturnsConfiguredBinding(t *testing.T) {
 		go func() {
 			defer waitGroup.Done()
 			stores, err := client.Stores(context.Background())
-			if err == nil && len(stores) != 1 {
+			if err == nil && len(stores) != 2 {
 				err = fmt.Errorf("store count=%d", len(stores))
 			}
 			errorsFound <- err
@@ -454,8 +491,8 @@ func TestConcurrentStoresReturnsConfiguredBinding(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if fixture.loginSubmissions.Load() != 0 || fixture.salesRequests.Load() != 0 {
-		t.Fatal("concurrent local binding reads unexpectedly performed network I/O")
+	if fixture.loginSubmissions.Load() != 2 || fixture.storeRequests.Load() != 2 || fixture.salesRequests.Load() != 0 {
+		t.Fatalf("login=%d stores=%d sales=%d, want one shared authorized-store load", fixture.loginSubmissions.Load(), fixture.storeRequests.Load(), fixture.salesRequests.Load())
 	}
 }
 

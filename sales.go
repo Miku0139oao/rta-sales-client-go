@@ -116,11 +116,9 @@ type salesDataEnvelope struct {
 	} `json:"executeResult"`
 }
 
-// Sales verifies the requested business store against this client's private
-// account binding, fetches every RTA result page, and returns raw rows plus
-// deterministic aggregates. The business store ID is deliberately not sent
-// to RTA: RTA scopes this report by the authenticated account, and its exposed
-// store-tree identifiers are not valid filters for this query.
+// Sales resolves the requested business store through RTA's authenticated
+// authorized-store list, fetches every result page, and returns raw rows plus
+// deterministic aggregates. RTA's query-only store values remain private.
 func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, error) {
 	started := time.Now()
 	query, err := validateSalesQuery(query)
@@ -132,6 +130,8 @@ func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, err
 		return nil, err
 	}
 	payload := newSalesPayload(query)
+	payload.StoreID = store.upstreamID
+	payload.StoreIDString = store.filterText
 	firstItems, totalPages, totalTransactionCount, err := c.fetchSalesPage(ctx, payload, 1)
 	if err != nil {
 		return nil, err
@@ -149,7 +149,7 @@ func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, err
 	}
 	total, quantity, categories := aggregateSales(items)
 	return &SalesResult{
-		Store:                 store,
+		Store:                 store.Store,
 		StartDate:             query.StartDate.Format("2006-01-02"),
 		EndDate:               query.EndDate.Format("2006-01-02"),
 		Category:              query.Category,

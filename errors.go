@@ -29,14 +29,14 @@ func (e *AuthError) Error() string {
 	return fmt.Sprintf("RTA authentication failed (code %s): %s", e.Code, e.Message)
 }
 
-// StoreNotFoundError reports that a request does not match the business store
-// bound to the Client by the caller's private account/store mapping.
+// StoreNotFoundError reports that the authenticated account's authorized-store
+// list does not contain the requested business store ID.
 type StoreNotFoundError struct {
 	BusinessStoreID string
 }
 
 func (e *StoreNotFoundError) Error() string {
-	return fmt.Sprintf("business store %q does not match this RTA client binding", e.BusinessStoreID)
+	return fmt.Sprintf("business store %q is not authorized for this RTA account", e.BusinessStoreID)
 }
 
 // UpstreamError reports an HTTP or transport failure while calling RTA.

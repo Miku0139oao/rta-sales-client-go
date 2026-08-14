@@ -18,11 +18,10 @@ func ExampleClient_Sales() {
 	}
 
 	client, err := rtasales.NewClient(rtasales.Config{
-		Account:         os.Getenv("RTA_ACCOUNT"),
-		Password:        os.Getenv("RTA_PASSWORD"),
-		BusinessStoreID: os.Getenv("RTA_BUSINESS_STORE_ID"),
-		CookieFile:      "state/rta.cookies.json",
-		CaptchaSolvers:  solvers,
+		Account:        os.Getenv("RTA_ACCOUNT"),
+		Password:       os.Getenv("RTA_PASSWORD"),
+		CookieFile:     "state/rta.cookies.json",
+		CaptchaSolvers: solvers,
 	})
 	if err != nil {
 		return
@@ -30,8 +29,12 @@ func ExampleClient_Sales() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	stores, err := client.Stores(ctx)
+	if err != nil || len(stores) == 0 {
+		return
+	}
 	_, _ = client.Sales(ctx, rtasales.SalesQuery{
-		BusinessStoreID: os.Getenv("RTA_BUSINESS_STORE_ID"),
+		BusinessStoreID: stores[0].BusinessID,
 		StartDate:       time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local),
 		EndDate:         time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local),
 		Category:        "HA",

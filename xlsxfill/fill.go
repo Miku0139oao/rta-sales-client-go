@@ -399,7 +399,7 @@ func classifyQueryError(err error) string {
 	var upstream *rtasales.UpstreamError
 	switch {
 	case errors.As(err, &notFound):
-		return "store_binding_mismatch"
+		return "store_not_authorized"
 	case errors.As(err, &auth):
 		return "authentication_failed"
 	case errors.As(err, &captcha):

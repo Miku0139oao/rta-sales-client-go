@@ -8,9 +8,9 @@ import (
 	rtasales "github.com/Miku0139oao/rta-sales-client-go"
 )
 
-// ProviderRouter routes each workbook business store to its own account-bound
-// sales provider. It is useful when a private mapping contains one RTA account
-// per store. The input map is copied during construction.
+// ProviderRouter routes each workbook business store to its configured sales
+// provider. It is useful when different RTA accounts cover different store
+// sets. The input map is copied during construction.
 type ProviderRouter struct {
 	providers map[string]SalesProvider
 }
