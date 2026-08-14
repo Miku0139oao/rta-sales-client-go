@@ -165,6 +165,7 @@ Prepare any category-specific `ItemCodes` in the caller. `Category` is metadata 
 | `CookieFile` | Persistent cookie-jar path | in-memory cookies |
 | `HTTPClient` | Optional custom transport, proxy, timeout, or cookie jar | 30-second client |
 | `PageConcurrency` | Maximum concurrent requests after the first sales page | `4` |
+| `LoginAttempts` | Fresh captcha/login attempts; accepted range `1`–`10` | `4` |
 
 `Client` is safe for concurrent use. Create separate clients for separate accounts and give each persistent client a different cookie file.
 
@@ -175,9 +176,11 @@ The recommended order is embedded OCR first and 2Captcha second:
 1. `EmbeddedOCRSolver` independently extracts each glyph with color-component and grayscale paths, then keeps the stronger template match.
 2. If the image is malformed or the score is uncertain, the next solver receives the same image.
 3. If RTA rejects a plausible answer, the next login attempt gets a fresh image and starts with the next solver.
-4. Login performs at most three attempts.
+4. Login performs four attempts by default; `LoginAttempts` can set `1`–`10`.
 
 When embedded OCR is the only configured solver, an uncertain image is not submitted. The next login attempt requests a fresh captcha instead. Close disagreements between the two extraction paths are also rejected, so lowering `MinimumScoreMargin` merely to avoid retries is not recommended.
+
+At the observed 5% per-image safe-rejection rate, four independent fresh images reduce the probability that every attempt is rejected to `0.05^4 = 0.000625%` (99.999375% chance of obtaining a submitted answer). This is an operational retry estimate, not a claim that one image has certified 99.99% accuracy.
 
 Embedded OCR uses ordinary CPU instructions. Templates are compiled into the package, prepared once per process, and shared across solver instances. It has no background service and requires no GPU, CGO, executable, or external model file.
 

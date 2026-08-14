@@ -14,8 +14,6 @@ import (
 	"strings"
 )
 
-const loginAttempts = 3
-
 func (c *Client) ensureLogin(ctx context.Context, observedVersion uint64) error {
 	c.loginMu.Lock()
 	defer c.loginMu.Unlock()
@@ -28,7 +26,7 @@ func (c *Client) ensureLogin(ctx context.Context, observedVersion uint64) error 
 func (c *Client) login(ctx context.Context) error {
 	solverStart := 0
 	var lastError error
-	for attempt := 0; attempt < loginAttempts; attempt++ {
+	for attempt := 0; attempt < c.loginAttempts; attempt++ {
 		image, flag, err := c.fetchCaptcha(ctx)
 		if err != nil {
 			lastError = err
@@ -71,7 +69,7 @@ func (c *Client) login(ctx context.Context) error {
 	if errors.As(lastError, &captchaError) {
 		return captchaError
 	}
-	return fmt.Errorf("RTA login failed after %d attempts: %w", loginAttempts, lastError)
+	return fmt.Errorf("RTA login failed after %d attempts: %w", c.loginAttempts, lastError)
 }
 
 func (c *Client) solveCaptcha(ctx context.Context, image []byte, start int) (string, int, error) {

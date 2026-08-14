@@ -254,6 +254,61 @@ func TestEmbeddedOCRFailureUsesConfiguredFallback(t *testing.T) {
 	}
 }
 
+func TestLoginAttemptsRequestFreshCaptchas(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured int
+		want       int32
+	}{
+		{name: "default", want: 4},
+		{name: "configured", configured: 2, want: 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newRTAFixture(t)
+			var solverCalls atomic.Int32
+			client, err := NewClient(Config{
+				Account:       "account",
+				Password:      "secret",
+				LoginAttempts: test.configured,
+				CaptchaSolvers: []CaptchaSolver{solverFunc(func(context.Context, []byte) (string, error) {
+					solverCalls.Add(1)
+					return "", errors.New("uncertain captcha")
+				})},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			client.endpoints = endpoints{sso: fixture.server.URL, stock: fixture.server.URL, dsa: fixture.server.URL}
+			err = client.login(context.Background())
+			var captchaError *CaptchaError
+			if !errors.As(err, &captchaError) {
+				t.Fatalf("error=%T %v, want CaptchaError", err, err)
+			}
+			if fixture.captchaRequests.Load() != test.want || solverCalls.Load() != test.want {
+				t.Fatalf("captcha requests=%d solver calls=%d, want %d/%d", fixture.captchaRequests.Load(), solverCalls.Load(), test.want, test.want)
+			}
+			if fixture.loginSubmissions.Load() != 0 {
+				t.Fatalf("uncertain captcha was submitted %d times", fixture.loginSubmissions.Load())
+			}
+		})
+	}
+}
+
+func TestNewClientRejectsExcessiveLoginAttempts(t *testing.T) {
+	_, err := NewClient(Config{
+		Account:         "account",
+		Password:        "secret",
+		LoginAttempts:   maximumLoginAttempts + 1,
+		CaptchaSolvers:  []CaptchaSolver{solverFunc(func(context.Context, []byte) (string, error) { return "RIGHT", nil })},
+		PageConcurrency: 1,
+	})
+	var input *InputError
+	if !errors.As(err, &input) || input.Field != "LoginAttempts" {
+		t.Fatalf("error=%T %v, want LoginAttempts InputError", err, err)
+	}
+}
+
 func TestSavedCookiesAvoidAnotherLogin(t *testing.T) {
 	fixture := newRTAFixture(t)
 	cookieFile := filepath.Join(t.TempDir(), "rta.cookies.json")

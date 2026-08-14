@@ -165,6 +165,7 @@ result, err := client.Sales(ctx, rtasales.SalesQuery{
 | `CookieFile` | Cookie jar 保存路徑 | 僅記憶體 |
 | `HTTPClient` | 自訂 transport、proxy、timeout 或 cookie jar | timeout 30 秒 |
 | `PageConcurrency` | 第一頁之後的最大並行查詢數 | `4` |
+| `LoginAttempts` | 重新取得驗證碼並登入的次數，可設為 `1`–`10` | `4` |
 
 `Client` 可安全地並行使用。不同帳號請建立不同 `Client`；若要保存 Cookie，也必須使用不同檔案路徑。
 
@@ -175,9 +176,11 @@ result, err := client.Sales(ctx, rtasales.SalesQuery{
 1. `EmbeddedOCRSolver` 會分別用彩色元件與灰階路徑擷取每個字元，再採用模板距離較佳的結果。
 2. 圖片格式錯誤或辨識信心不足時，下一個 solver 會收到同一張圖片。
 3. 若 RTA 拒絕一個格式合理的答案，下次登入會取得新圖片，並從下一個 solver 開始。
-4. 登入最多嘗試三次。
+4. 登入預設嘗試四次；可用 `LoginAttempts` 設為 `1`–`10`。
 
 只設定內建 OCR 時，信心不足的圖片不會送出；下一次登入嘗試會改抓新的驗證碼。兩條擷取路徑若結果不同且分數接近，也會安全拒絕，因此不建議只為了減少重試而降低 `MinimumScoreMargin`。
+
+依目前觀測到的單張 5% 安全拒絕率計算，四張互相獨立的新圖全部被拒絕的機率為 `0.05^4 = 0.000625%`，也就是取得可提交答案的機率為 99.999375%。這是登入重試層的估算，不代表已認證單張圖片具有 99.99% 準確率。
 
 內建 OCR 只使用一般 CPU 指令。字形模板已編譯進套件，每個程序只會準備一次，並由所有 solver 實例共用。它沒有背景服務，也不需要 GPU、CGO、外部執行檔或模型檔。
 

@@ -19,6 +19,8 @@ import (
 
 const (
 	defaultPageConcurrency = 4
+	defaultLoginAttempts   = 4
+	maximumLoginAttempts   = 10
 	maxResponseBytes       = 64 << 20
 	userAgent              = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36 Edg/118.0.1264.123"
 )
@@ -44,6 +46,9 @@ type Config struct {
 	CookieFile      string
 	HTTPClient      *http.Client
 	PageConcurrency int
+	// LoginAttempts is the maximum number of fresh captcha/login attempts.
+	// Non-positive values use four; values above ten are rejected.
+	LoginAttempts int
 }
 
 // Client is safe for concurrent use.
@@ -54,6 +59,7 @@ type Client struct {
 	httpClient      *http.Client
 	saveCookies     func() error
 	pageConcurrency int
+	loginAttempts   int
 	endpoints       endpoints
 
 	loginMu        sync.Mutex
@@ -84,6 +90,13 @@ func NewClient(config Config) (*Client, error) {
 	if len(solvers) == 0 {
 		return nil, &InputError{Field: "CaptchaSolvers", Message: "at least one solver is required"}
 	}
+	loginAttempts := config.LoginAttempts
+	if loginAttempts <= 0 {
+		loginAttempts = defaultLoginAttempts
+	}
+	if loginAttempts > maximumLoginAttempts {
+		return nil, &InputError{Field: "LoginAttempts", Message: "must not exceed 10"}
+	}
 
 	jar, saveCookies, err := clientCookieJar(config)
 	if err != nil {
@@ -111,6 +124,7 @@ func NewClient(config Config) (*Client, error) {
 		httpClient:      &httpClient,
 		saveCookies:     saveCookies,
 		pageConcurrency: concurrency,
+		loginAttempts:   loginAttempts,
 		endpoints:       productionEndpoints,
 	}, nil
 }
