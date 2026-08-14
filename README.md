@@ -140,7 +140,7 @@ Blank and duplicate `ItemCodes` are removed before the request. `TotalTransactio
 - column `L`: daily sales amount;
 - column `AB`: daily customer/transaction count.
 
-Column `C` is resolved exactly through the account's authorized-store list. No extra store environment variable is needed.
+The command logs in first, loads the account's authorized-store list, and then compares every row for the requested date. Column `C` is resolved by exact business ID; rows belonging to stores outside the signed-in account are skipped without being queried. No row number or extra store environment variable is needed.
 
 Create a local `.env` file; it is ignored by Git:
 
@@ -176,15 +176,9 @@ go run ./cmd/rta-xlsx-fill `
   -write
 ```
 
-For a permission-limited test, process only one row and one store query:
+Do not pass `-row` during normal use. It remains available only as an optional diagnostic limit. `-max-queries` is an independent safety ceiling after automatic store matching.
 
-```powershell
-go run ./cmd/rta-xlsx-fill `
-  -input "C:\path\source.xlsx" `
-  -date 2026-08-13 `
-  -row <worksheet-row> `
-  -max-queries 1
-```
+The JSON report distinguishes the stages: `matched_rows` counts rows for the date, `selected_rows` counts rows authorized for this account, and `skipped_store_rows` counts date rows belonging to other accounts. If none of the date rows match an authorized store, the command fails instead of silently producing an unchanged workbook.
 
 Safety defaults:
 
@@ -192,10 +186,13 @@ Safety defaults:
 - output can never overwrite the source workbook;
 - existing different values require explicit `-overwrite`;
 - formula cells in `L` or `AB` are never replaced;
-- unauthorized stores, missing report totals, or query failures prevent output unless `-allow-partial` is explicit;
+- stores outside the signed-in account are skipped before any sales request;
+- no authorized store match, missing report totals, or query failures prevent output unless `-allow-partial` is explicit;
 - the JSON report contains row numbers and issue codes, not credentials, store IDs, or sales values.
 
 If a different workbook uses codes that are not RTA business-facing IDs, `-mapping` accepts a private local JSON object or CSV. Populated mapping files, cookies, `.env`, and `*.filled.xlsx` are ignored and must not be committed.
+
+Library callers using `xlsxfill.Fill` can supply the IDs returned by `Client.Stores` through `Request.AllowedBusinessStoreIDs` to apply the same automatic selection.
 
 ## Client configuration
 

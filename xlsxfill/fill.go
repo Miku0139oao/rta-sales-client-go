@@ -39,15 +39,18 @@ type StoreMapper interface {
 // Request describes one date-scoped fill operation. Write is false by default,
 // making the operation a dry run. OutputPath must differ from InputPath.
 type Request struct {
-	InputPath    string
-	OutputPath   string
-	SheetName    string
-	Date         time.Time
-	Mapper       StoreMapper
-	Write        bool
-	Overwrite    bool
-	AllowPartial bool
-	MaxQueries   int
+	InputPath  string
+	OutputPath string
+	SheetName  string
+	Date       time.Time
+	Mapper     StoreMapper
+	// AllowedBusinessStoreIDs limits queries to the exact business IDs returned
+	// by the authenticated client's Stores method. Empty disables filtering.
+	AllowedBusinessStoreIDs []string
+	Write                   bool
+	Overwrite               bool
+	AllowPartial            bool
+	MaxQueries              int
 	// OnlyRow restricts the operation to one worksheet row for a bounded test.
 	// Zero processes every row matching Date.
 	OnlyRow int
@@ -63,15 +66,17 @@ type Issue struct {
 // Report summarizes a fill operation without embedding private mapping data or
 // sales figures. StagedCells is the number of cells that would be written.
 type Report struct {
-	Date            string  `json:"date"`
-	Sheet           string  `json:"sheet"`
-	MatchedRows     int     `json:"matched_rows"`
-	UniqueQueries   int     `json:"unique_queries"`
-	StagedCells     int     `json:"staged_cells"`
-	UnchangedCells  int     `json:"unchanged_cells"`
-	SkippedDataRows int     `json:"skipped_data_rows"`
-	Issues          []Issue `json:"issues,omitempty"`
-	WroteWorkbook   bool    `json:"wrote_workbook"`
+	Date             string  `json:"date"`
+	Sheet            string  `json:"sheet"`
+	MatchedRows      int     `json:"matched_rows"`
+	SelectedRows     int     `json:"selected_rows"`
+	SkippedStoreRows int     `json:"skipped_store_rows"`
+	UniqueQueries    int     `json:"unique_queries"`
+	StagedCells      int     `json:"staged_cells"`
+	UnchangedCells   int     `json:"unchanged_cells"`
+	SkippedDataRows  int     `json:"skipped_data_rows"`
+	Issues           []Issue `json:"issues,omitempty"`
+	WroteWorkbook    bool    `json:"wrote_workbook"`
 }
 
 // ValidationError means at least one matching row could not be filled safely.
@@ -93,9 +98,10 @@ type cellUpdate struct {
 	value float64
 }
 
-// Fill queries one RTA day per mapped store and stages values for column L
-// (daily sales) and column AB (daily customer/transaction count). Total rows,
-// blank rows, formulas, and unrelated cells are never modified.
+// Fill selects the mapped stores allowed by the caller, queries one RTA day per
+// selected store, and stages values for column L (daily sales) and column AB
+// (daily customer/transaction count). Total rows, blank rows, formulas, and
+// unrelated cells are never modified.
 func Fill(ctx context.Context, provider SalesProvider, request Request) (Report, error) {
 	report := Report{Date: request.Date.Format("2006-01-02")}
 	if provider == nil {
@@ -103,6 +109,10 @@ func Fill(ctx context.Context, provider SalesProvider, request Request) (Report,
 	}
 	if request.Mapper == nil {
 		request.Mapper = IdentityStoreMap{}
+	}
+	allowedStores, err := normalizeAllowedStoreIDs(request.AllowedBusinessStoreIDs)
+	if err != nil {
+		return report, err
 	}
 	request.InputPath = strings.TrimSpace(request.InputPath)
 	if request.InputPath == "" {
@@ -162,6 +172,7 @@ func Fill(ctx context.Context, provider SalesProvider, request Request) (Report,
 
 	targetsByStore := make(map[string][]rowTarget)
 	issues := make(map[string][]int)
+	skippedStoreRows := make([]int, 0)
 	for row := 2; row <= maxRow; row++ {
 		if request.OnlyRow > 0 && row != request.OnlyRow {
 			continue
@@ -197,7 +208,18 @@ func Fill(ctx context.Context, provider SalesProvider, request Request) (Report,
 			continue
 		}
 		businessStoreID = strings.TrimSpace(businessStoreID)
+		if len(allowedStores) > 0 {
+			if _, allowed := allowedStores[businessStoreID]; !allowed {
+				report.SkippedStoreRows++
+				skippedStoreRows = append(skippedStoreRows, row)
+				continue
+			}
+		}
+		report.SelectedRows++
 		targetsByStore[businessStoreID] = append(targetsByStore[businessStoreID], rowTarget{row: row})
+	}
+	if len(allowedStores) > 0 && report.SelectedRows == 0 && len(skippedStoreRows) > 0 {
+		issues["no_authorized_store_match"] = append(issues["no_authorized_store_match"], skippedStoreRows...)
 	}
 	report.UniqueQueries = len(targetsByStore)
 	if report.UniqueQueries > request.MaxQueries {
@@ -285,6 +307,21 @@ func Fill(ctx context.Context, provider SalesProvider, request Request) (Report,
 	}
 	report.WroteWorkbook = true
 	return report, nil
+}
+
+func normalizeAllowedStoreIDs(values []string) (map[string]struct{}, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	result := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return nil, &rtasales.InputError{Field: "AllowedBusinessStoreIDs", Message: "must not contain empty IDs"}
+		}
+		result[value] = struct{}{}
+	}
+	return result, nil
 }
 
 func usedRangeLastRow(book *excelize.File, sheet string) (int, error) {

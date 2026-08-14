@@ -56,7 +56,7 @@ func TestFillWritesOnlyManualInputsAndPreservesFormulasAndStyles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !report.WroteWorkbook || report.MatchedRows != 2 || report.UniqueQueries != 2 || report.StagedCells != 2 || report.UnchangedCells != 2 {
+	if !report.WroteWorkbook || report.MatchedRows != 2 || report.SelectedRows != 2 || report.SkippedStoreRows != 0 || report.UniqueQueries != 2 || report.StagedCells != 2 || report.UnchangedCells != 2 {
 		t.Fatalf("unexpected report: %+v", report)
 	}
 	if len(provider.calls) != 2 {
@@ -93,6 +93,55 @@ func TestFillWritesOnlyManualInputsAndPreservesFormulasAndStyles(t *testing.T) {
 	}
 	if calc.CalcMode == nil || *calc.CalcMode != "auto" || calc.FullCalcOnLoad == nil || !*calc.FullCalcOnLoad || calc.ForceFullCalc == nil || !*calc.ForceFullCalc {
 		t.Fatalf("calculation properties were not set for recalculation: %+v", calc)
+	}
+}
+
+func TestFillAutomaticallySelectsAuthorizedStores(t *testing.T) {
+	input := filepath.Join(t.TempDir(), "input.xlsx")
+	targetDate := time.Date(2026, time.August, 13, 0, 0, 0, 0, time.Local)
+	createTestWorkbook(t, input, targetDate)
+	count := 11.0
+	provider := &fakeSalesProvider{results: map[string]*rtasales.SalesResult{
+		"RTA_B": {TotalAmount: 101, TotalTransactionCount: &count, Items: []rtasales.SaleItem{{Matnr: "ITEM_B"}}},
+	}}
+	report, err := Fill(context.Background(), provider, Request{
+		InputPath:               input,
+		Date:                    targetDate,
+		Mapper:                  StoreMap{"STORE_A": "RTA_A", "STORE_B": "RTA_B"},
+		AllowedBusinessStoreIDs: []string{"RTA_B"},
+		Overwrite:               true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.MatchedRows != 2 || report.SelectedRows != 1 || report.SkippedStoreRows != 1 || report.UniqueQueries != 1 || report.StagedCells != 2 {
+		t.Fatalf("unexpected automatic selection report: %+v", report)
+	}
+	if len(provider.calls) != 1 || provider.calls[0].BusinessStoreID != "RTA_B" {
+		t.Fatalf("unexpected provider calls: %+v", provider.calls)
+	}
+}
+
+func TestFillRejectsWhenNoAuthorizedStoreMatches(t *testing.T) {
+	input := filepath.Join(t.TempDir(), "input.xlsx")
+	targetDate := time.Date(2026, time.August, 13, 0, 0, 0, 0, time.Local)
+	createTestWorkbook(t, input, targetDate)
+	provider := &fakeSalesProvider{}
+	report, err := Fill(context.Background(), provider, Request{
+		InputPath:               input,
+		Date:                    targetDate,
+		Mapper:                  StoreMap{"STORE_A": "RTA_A", "STORE_B": "RTA_B"},
+		AllowedBusinessStoreIDs: []string{"RTA_C"},
+	})
+	var validation *ValidationError
+	if !errors.As(err, &validation) {
+		t.Fatalf("error=%T %v, want ValidationError", err, err)
+	}
+	if report.MatchedRows != 2 || report.SelectedRows != 0 || report.SkippedStoreRows != 2 || report.UniqueQueries != 0 || len(provider.calls) != 0 {
+		t.Fatalf("unexpected no-match report: %+v calls=%+v", report, provider.calls)
+	}
+	if len(report.Issues) != 1 || report.Issues[0].Code != "no_authorized_store_match" || len(report.Issues[0].Rows) != 2 {
+		t.Fatalf("unexpected no-match issues: %+v", report.Issues)
 	}
 }
 

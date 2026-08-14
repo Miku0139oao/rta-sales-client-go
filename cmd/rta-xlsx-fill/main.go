@@ -36,12 +36,21 @@ func run() error {
 	overwrite := flag.Bool("overwrite", false, "replace existing L/AB values that differ")
 	allowPartial := flag.Bool("allow-partial", false, "write safe rows even when other rows have issues")
 	maxQueries := flag.Int("max-queries", 25, "maximum unique store queries for this run")
-	onlyRow := flag.Int("row", 0, "only process one worksheet data row; zero processes the date")
+	onlyRow := flag.Int("row", 0, "optional diagnostic row limit; zero auto-matches authorized stores for the date")
 	pageConcurrency := flag.Int("page-concurrency", 1, "maximum concurrent RTA page requests after page one")
 	loginAttempts := flag.Int("login-attempts", 4, "maximum fresh captcha/login attempts")
 	timeout := flag.Duration("timeout", 5*time.Minute, "whole-operation timeout")
 	flag.Parse()
 
+	if strings.TrimSpace(*input) == "" {
+		return errors.New("-input is required")
+	}
+	if *write && strings.TrimSpace(*output) == "" {
+		return errors.New("-output is required with -write")
+	}
+	if *onlyRow < 0 || *onlyRow == 1 {
+		return errors.New("-row must be zero or a data row greater than one")
+	}
 	date, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(*dateText), time.Local)
 	if err != nil {
 		return errors.New("-date must use YYYY-MM-DD")
@@ -75,17 +84,26 @@ func run() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
+	stores, err := client.Stores(ctx)
+	if err != nil {
+		return fmt.Errorf("load authorized stores: %w", err)
+	}
+	allowedStoreIDs := make([]string, len(stores))
+	for index, store := range stores {
+		allowedStoreIDs[index] = store.BusinessID
+	}
 	report, fillErr := xlsxfill.Fill(ctx, client, xlsxfill.Request{
-		InputPath:    *input,
-		OutputPath:   *output,
-		SheetName:    *sheet,
-		Date:         date,
-		Mapper:       mapping,
-		Write:        *write,
-		Overwrite:    *overwrite,
-		AllowPartial: *allowPartial,
-		MaxQueries:   *maxQueries,
-		OnlyRow:      *onlyRow,
+		InputPath:               *input,
+		OutputPath:              *output,
+		SheetName:               *sheet,
+		Date:                    date,
+		Mapper:                  mapping,
+		AllowedBusinessStoreIDs: allowedStoreIDs,
+		Write:                   *write,
+		Overwrite:               *overwrite,
+		AllowPartial:            *allowPartial,
+		MaxQueries:              *maxQueries,
+		OnlyRow:                 *onlyRow,
 	})
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")

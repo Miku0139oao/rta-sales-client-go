@@ -140,7 +140,7 @@ stores, err := client.RefreshStores(ctx)
 - `L` 欄：當日銷售額；
 - `AB` 欄：當日顧客／交易總數。
 
-程式會以 `C` 欄的完整值查找帳號授權門店，再自動套用 RTA 所需的查詢值；不需要額外設定門店環境變數。
+指令會先登入並取得此帳號的授權門店，再自動比對指定日期的所有列。程式以 `C` 欄的完整業務門店編號精確比對；屬於其他帳號的門店列會在查詢前略過。不需要手動提供列號，也不需要額外設定門店環境變數。
 
 先建立本機 `.env`，此檔案已被 Git 忽略：
 
@@ -176,15 +176,9 @@ go run ./cmd/rta-xlsx-fill `
   -write
 ```
 
-使用權限有限時，可只測一列及一個門店查詢：
+正常使用不要加入 `-row`。這個參數只保留作選用的診斷限制；`-max-queries` 則是在自動選店後獨立生效的查詢數量上限。
 
-```powershell
-go run ./cmd/rta-xlsx-fill `
-  -input "C:\path\來源.xlsx" `
-  -date 2026-08-13 `
-  -row <工作表列號> `
-  -max-queries 1
-```
+JSON 報告會分開顯示比對階段：`matched_rows` 是符合日期的列數，`selected_rows` 是此帳號有權限的列數，`skipped_store_rows` 是屬於其他帳號而略過的列數。若該日期沒有任何授權門店相符，指令會明確失敗，不會靜默產生沒有變更的活頁簿。
 
 安全預設：
 
@@ -192,10 +186,13 @@ go run ./cmd/rta-xlsx-fill `
 - 輸出檔不可覆寫來源活頁簿；
 - 現有數值不同時，必須明確加入 `-overwrite` 才會取代；
 - `L` 或 `AB` 若為公式儲存格，絕不覆寫；
-- 門店未獲授權、缺少報表總數或查詢失敗時，預設不輸出；只有明確加入 `-allow-partial` 才可保存安全完成的列；
+- 其他帳號的門店會在送出銷售請求前略過；
+- 完全沒有授權門店相符、缺少報表總數或查詢失敗時，預設不輸出；只有明確加入 `-allow-partial` 才可保存安全完成的列；
 - JSON 報告只包含列號與問題代碼，不包含帳密、門店 ID 或實際銷售數值。
 
 若其他活頁簿的 `C` 欄不是 RTA 的業務門店編號，可用 `-mapping` 指定本機私有 JSON 或 CSV。含資料的對照檔、Cookie、`.env` 與 `*.filled.xlsx` 都已被忽略，不可提交。
+
+直接使用 `xlsxfill.Fill` 的 library 呼叫端，可將 `Client.Stores` 回傳的 ID 放入 `Request.AllowedBusinessStoreIDs`，取得相同的自動選列行為。
 
 ## Client 設定
 
