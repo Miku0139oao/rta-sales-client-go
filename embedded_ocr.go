@@ -115,11 +115,10 @@ func (s *EmbeddedOCRSolver) Solve(ctx context.Context, encoded []byte) (string, 
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		glyph, err := extractCaptchaGlyph(decoded, index, s.length)
+		match, best, margin, err := s.classifyCaptchaCharacter(decoded, index)
 		if err != nil {
 			return "", fmt.Errorf("segment captcha character %d: %w", index+1, err)
 		}
-		match, best, margin := s.classify(glyph)
 		if best > s.maximumDistance || margin < s.minimumScoreMargin {
 			return "", fmt.Errorf(
 				"captcha character %d is uncertain (distance %.3f, margin %.3f)",
@@ -131,6 +130,49 @@ func (s *EmbeddedOCRSolver) Solve(ctx context.Context, encoded []byte) (string, 
 		answer.WriteByte(match)
 	}
 	return answer.String(), nil
+}
+
+type glyphMatch struct {
+	character byte
+	distance  float64
+	margin    float64
+}
+
+func (s *EmbeddedOCRSolver) classifyCaptchaCharacter(source image.Image, index int) (byte, float64, float64, error) {
+	variants, err := extractCaptchaGlyphVariants(source, index, s.length)
+	if err != nil {
+		return 0, math.Inf(1), 0, err
+	}
+	matches := make([]glyphMatch, 0, len(variants))
+	for _, variant := range variants {
+		character, distance, margin := s.classify(variant)
+		matches = append(matches, glyphMatch{character: character, distance: distance, margin: margin})
+	}
+	best := selectBestGlyphMatch(matches)
+	return best.character, best.distance, best.margin, nil
+}
+
+func selectBestGlyphMatch(matches []glyphMatch) glyphMatch {
+	if len(matches) == 0 {
+		return glyphMatch{distance: math.Inf(1)}
+	}
+	sort.Slice(matches, func(left, right int) bool {
+		if matches[left].distance == matches[right].distance {
+			return matches[left].margin > matches[right].margin
+		}
+		return matches[left].distance < matches[right].distance
+	})
+	best := matches[0]
+	// A second extraction method that prefers another character is evidence
+	// against the winner. A close disagreement must be rejected even when the
+	// winner's own template margin looks healthy.
+	for _, alternative := range matches[1:] {
+		if alternative.character == best.character {
+			continue
+		}
+		best.margin = minFloat(best.margin, alternative.distance-best.distance)
+	}
+	return best
 }
 
 func (s *EmbeddedOCRSolver) classify(glyph binaryGlyph) (byte, float64, float64) {
@@ -211,35 +253,53 @@ func (glyph binaryGlyph) set(x, y int, value bool) {
 	}
 }
 
-func extractCaptchaGlyph(source image.Image, index, length int) (binaryGlyph, error) {
-	component, err := extractCaptchaComponent(source, index, length)
-	if err != nil {
-		return binaryGlyph{}, err
-	}
-	return normalizeGlyph(component, templateWidth, templateHeight), nil
-}
-
-func extractCaptchaComponent(source image.Image, index, length int) (binaryGlyph, error) {
+func extractCaptchaGlyphVariants(source image.Image, index, length int) ([]binaryGlyph, error) {
 	bounds := source.Bounds()
 	left := bounds.Min.X + int(math.Round(float64(index*bounds.Dx())/float64(length))) + 2
 	right := bounds.Min.X + int(math.Round(float64((index+1)*bounds.Dx())/float64(length))) - 2
 	top := bounds.Min.Y + 3
 	bottom := bounds.Max.Y - 3
 	if right-left < 4 || bottom-top < 8 {
-		return binaryGlyph{}, errors.New("invalid captcha cell bounds")
+		return nil, errors.New("invalid captcha cell bounds")
+	}
+	cell := image.Rect(left, top, right, bottom)
+	components := make([]binaryGlyph, 0, 2)
+
+	if component, ok := dominantColorComponent(source, cell); ok && component.foregroundCount() >= 18 {
+		components = append(components, component)
+	}
+	if component, err := grayscaleCaptchaComponent(source, cell); err == nil {
+		components = append(components, component)
+	}
+	if len(components) == 0 {
+		return nil, errors.New("no usable glyph component")
 	}
 
-	width := right - left
-	height := bottom - top
-	if component, ok := dominantColorComponent(source, image.Rect(left, top, right, bottom)); ok && component.foregroundCount() >= 18 {
-		return component, nil
+	variants := make([]binaryGlyph, 0, len(components))
+	for _, component := range components {
+		variant := normalizeGlyph(component, templateWidth, templateHeight)
+		duplicate := false
+		for _, existing := range variants {
+			if equalBinaryGlyph(existing, variant) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			variants = append(variants, variant)
+		}
 	}
+	return variants, nil
+}
 
+func grayscaleCaptchaComponent(source image.Image, bounds image.Rectangle) (binaryGlyph, error) {
+	width := bounds.Dx()
+	height := bounds.Dy()
 	gray := make([]uint8, width*height)
 	histogram := [256]int{}
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
-			red, green, blue, _ := source.At(left+x, top+y).RGBA()
+			red, green, blue, _ := source.At(bounds.Min.X+x, bounds.Min.Y+y).RGBA()
 			value := uint8((299*(red>>8) + 587*(green>>8) + 114*(blue>>8)) / 1000)
 			gray[y*width+x] = value
 			histogram[value]++
@@ -262,6 +322,18 @@ func extractCaptchaComponent(source image.Image, index, length int) (binaryGlyph
 		return binaryGlyph{}, errors.New("no usable glyph component")
 	}
 	return component, nil
+}
+
+func equalBinaryGlyph(left, right binaryGlyph) bool {
+	if left.width != right.width || left.height != right.height || len(left.pixels) != len(right.pixels) {
+		return false
+	}
+	for position := range left.pixels {
+		if left.pixels[position] != right.pixels[position] {
+			return false
+		}
+	}
+	return true
 }
 
 type captchaColorCluster struct {

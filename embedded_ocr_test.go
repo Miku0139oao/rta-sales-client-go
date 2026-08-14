@@ -8,6 +8,7 @@ import (
 	"image/color"
 	"image/jpeg"
 	"image/png"
+	"math"
 	"strings"
 	"testing"
 )
@@ -56,6 +57,26 @@ func TestEmbeddedOCRSolverRejectsUncertainAnswer(t *testing.T) {
 	_, err := solver.Solve(context.Background(), syntheticCaptchaJPEG(t, "0be7f"))
 	if err == nil || !strings.Contains(err.Error(), "uncertain") {
 		t.Fatalf("error=%v, want an uncertainty error", err)
+	}
+}
+
+func TestSelectBestGlyphMatchUsesStrongestExtraction(t *testing.T) {
+	match := selectBestGlyphMatch([]glyphMatch{
+		{character: '5', distance: 0.166, margin: 0.030},
+		{character: '2', distance: 0.093, margin: 0.119},
+	})
+	if match.character != '2' || math.Abs(match.distance-0.093) > 1e-9 || math.Abs(match.margin-0.073) > 1e-9 {
+		t.Fatalf("match=%+v, want character 2 with cross-extraction margin 0.073", match)
+	}
+}
+
+func TestSelectBestGlyphMatchPenalizesCloseDisagreement(t *testing.T) {
+	match := selectBestGlyphMatch([]glyphMatch{
+		{character: 'e', distance: 0.158, margin: 0.040},
+		{character: 'a', distance: 0.162, margin: 0.080},
+	})
+	if match.character != 'e' || match.margin < 0.0039 || match.margin > 0.0041 {
+		t.Fatalf("match=%+v, want character e with cross-extraction margin about 0.004", match)
 	}
 }
 

@@ -172,10 +172,12 @@ Prepare any category-specific `ItemCodes` in the caller. `Category` is metadata 
 
 The recommended order is embedded OCR first and 2Captcha second:
 
-1. `EmbeddedOCRSolver` extracts and classifies the five hexadecimal glyphs locally.
+1. `EmbeddedOCRSolver` independently extracts each glyph with color-component and grayscale paths, then keeps the stronger template match.
 2. If the image is malformed or the score is uncertain, the next solver receives the same image.
 3. If RTA rejects a plausible answer, the next login attempt gets a fresh image and starts with the next solver.
 4. Login performs at most three attempts.
+
+When embedded OCR is the only configured solver, an uncertain image is not submitted. The next login attempt requests a fresh captcha instead. Close disagreements between the two extraction paths are also rejected, so lowering `MinimumScoreMargin` merely to avoid retries is not recommended.
 
 Embedded OCR uses ordinary CPU instructions. Templates are compiled into the package, prepared once per process, and shared across solver instances. It has no background service and requires no GPU, CGO, executable, or external model file.
 

@@ -172,10 +172,12 @@ result, err := client.Sales(ctx, rtasales.SalesQuery{
 
 建議順序為內建 OCR 第一、2Captcha 第二：
 
-1. `EmbeddedOCRSolver` 在本機擷取並辨識五個十六進位字元。
+1. `EmbeddedOCRSolver` 會分別用彩色元件與灰階路徑擷取每個字元，再採用模板距離較佳的結果。
 2. 圖片格式錯誤或辨識信心不足時，下一個 solver 會收到同一張圖片。
 3. 若 RTA 拒絕一個格式合理的答案，下次登入會取得新圖片，並從下一個 solver 開始。
 4. 登入最多嘗試三次。
+
+只設定內建 OCR 時，信心不足的圖片不會送出；下一次登入嘗試會改抓新的驗證碼。兩條擷取路徑若結果不同且分數接近，也會安全拒絕，因此不建議只為了減少重試而降低 `MinimumScoreMargin`。
 
 內建 OCR 只使用一般 CPU 指令。字形模板已編譯進套件，每個程序只會準備一次，並由所有 solver 實例共用。它沒有背景服務，也不需要 GPU、CGO、外部執行檔或模型檔。
 
