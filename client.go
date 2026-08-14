@@ -26,26 +26,28 @@ const (
 )
 
 type endpoints struct {
-	sso   string
-	stock string
-	dsa   string
+	sso string
+	dsa string
 }
 
 var productionEndpoints = endpoints{
-	sso:   "https://mansso.rta-os.com",
-	stock: "https://dmall-goods-stock-man.rta-os.com",
-	dsa:   "https://dsa-api-partner.rta-os.com",
+	sso: "https://mansso.rta-os.com",
+	dsa: "https://dsa-api-partner.rta-os.com",
 }
 
-// Config configures one RTA account. Create separate clients for separate
-// accounts so cookies and authorized-store state cannot leak between them.
+// Config configures one RTA account bound to one business store. The caller
+// must obtain BusinessStoreID from its private account/store mapping. RTA
+// scopes sales by the authenticated account, so the ID is a local scope guard
+// and is never sent as an upstream sales filter.
 type Config struct {
-	Account         string
-	Password        string
-	CaptchaSolvers  []CaptchaSolver
-	CookieFile      string
-	HTTPClient      *http.Client
-	PageConcurrency int
+	Account            string
+	Password           string
+	BusinessStoreID    string
+	BusinessStoreLabel string
+	CaptchaSolvers     []CaptchaSolver
+	CookieFile         string
+	HTTPClient         *http.Client
+	PageConcurrency    int
 	// LoginAttempts is the maximum number of fresh captcha/login attempts.
 	// Non-positive values use four; values above ten are rejected.
 	LoginAttempts int
@@ -55,6 +57,7 @@ type Config struct {
 type Client struct {
 	account         string
 	password        string
+	store           Store
 	captchaSolvers  []CaptchaSolver
 	httpClient      *http.Client
 	saveCookies     func() error
@@ -64,13 +67,9 @@ type Client struct {
 
 	loginMu        sync.Mutex
 	sessionVersion atomic.Uint64
-
-	storesMu    sync.RWMutex
-	stores      []storeRecord
-	storeLoadMu sync.Mutex
 }
 
-// NewClient creates an account-scoped client. It does not perform network I/O;
+// NewClient creates an account/store-scoped client. It does not perform network I/O;
 // the first Stores or Sales request logs in automatically if saved cookies are
 // absent or expired.
 func NewClient(config Config) (*Client, error) {
@@ -80,6 +79,14 @@ func NewClient(config Config) (*Client, error) {
 	}
 	if config.Password == "" {
 		return nil, &InputError{Field: "Password", Message: "is required"}
+	}
+	businessStoreID := strings.TrimSpace(config.BusinessStoreID)
+	if businessStoreID == "" {
+		return nil, &InputError{Field: "BusinessStoreID", Message: "is required"}
+	}
+	businessStoreLabel := strings.TrimSpace(config.BusinessStoreLabel)
+	if businessStoreLabel == "" {
+		businessStoreLabel = businessStoreID
 	}
 	solvers := make([]CaptchaSolver, 0, len(config.CaptchaSolvers))
 	for _, solver := range config.CaptchaSolvers {
@@ -118,8 +125,12 @@ func NewClient(config Config) (*Client, error) {
 		concurrency = defaultPageConcurrency
 	}
 	return &Client{
-		account:         account,
-		password:        config.Password,
+		account:  account,
+		password: config.Password,
+		store: Store{
+			BusinessID: businessStoreID,
+			Label:      businessStoreLabel,
+		},
 		captchaSolvers:  solvers,
 		httpClient:      &httpClient,
 		saveCookies:     saveCookies,

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -64,9 +63,9 @@ type SalesResult struct {
 	Category    string   `json:"category"`
 	ItemCodes   []string `json:"item_codes,omitempty"`
 	TotalAmount float64  `json:"total_amount"`
-	// TotalTransactionCount is populated only when RTA returns one consistent
-	// aggregate value. It is never derived by summing item-level transaction
-	// counts because one transaction may contain multiple items.
+	// TotalTransactionCount comes from countResult.result[0].tp_transaction_count.
+	// It is never derived from item rows because one transaction can contain
+	// multiple items.
 	TotalTransactionCount *float64            `json:"total_transaction_count,omitempty"`
 	GrossQuantity         float64             `json:"gross_quantity"`
 	Items                 []SaleItem          `json:"items"`
@@ -75,19 +74,37 @@ type SalesResult struct {
 }
 
 type salesQueryPayload struct {
-	StoreID             string `json:"store_id"`
-	StoreIDString       string `json:"store_id_str"`
-	DateType            int    `json:"dateType"`
-	TimeQuickType       int    `json:"timeQuickType"`
-	CurrentStartDay     string `json:"currentStartDay"`
-	CurrentEndDay       string `json:"currentEndDay"`
-	CurrentDateRangeStr string `json:"currentDateRangeStr"`
-	CurrentStart        string `json:"currentStart"`
-	CurrentEnd          string `json:"currentEnd"`
-	CurrentDateRange    string `json:"currentDateRange"`
-	CompareDateRange    string `json:"compareDateRange"`
-	Matnr               string `json:"matnr,omitempty"`
-	MatnrString         string `json:"matnr_str,omitempty"`
+	ViewCode               string `json:"viewCode"`
+	StoreClusterCode       string `json:"store_cluster_code"`
+	StoreClusterCodeString string `json:"store_cluster_code_str"`
+	StoreID                string `json:"store_id"`
+	StoreIDString          string `json:"store_id_str"`
+	LargeAreaCode          string `json:"large_area_code"`
+	LargeAreaCodeString    string `json:"large_area_code_str"`
+	TradeFlag              string `json:"trade_flag"`
+	TradeFlagString        string `json:"trade_flag_str"`
+	Category1Code          string `json:"purchase_category1_code"`
+	Category1CodeString    string `json:"purchase_category1_code_str"`
+	Category2Code          string `json:"purchase_category2_code"`
+	Category2CodeString    string `json:"purchase_category2_code_str"`
+	Category3Code          string `json:"purchase_category3_code"`
+	Category3CodeString    string `json:"purchase_category3_code_str"`
+	Category4Code          string `json:"purchase_category4_code"`
+	Category4CodeString    string `json:"purchase_category4_code_str"`
+	Category5Code          string `json:"purchase_category5_code"`
+	Category5CodeString    string `json:"purchase_category5_code_str"`
+	DateType               int    `json:"dateType"`
+	Matnr                  string `json:"matnr,omitempty"`
+	MatnrString            string `json:"matnr_str,omitempty"`
+	TimeQuickType          int    `json:"timeQuickType"`
+	DSACurrencyEnable      string `json:"dsaCurrencyEnable"`
+	CurrentStartDay        string `json:"currentStartDay"`
+	CurrentEndDay          string `json:"currentEndDay"`
+	CurrentDateRangeStr    string `json:"currentDateRangeStr"`
+	CurrentStart           string `json:"currentStart"`
+	CurrentEnd             string `json:"currentEnd"`
+	CurrentDateRange       string `json:"currentDateRange"`
+	CompareDateRange       string `json:"compareDateRange"`
 }
 
 type salesDataEnvelope struct {
@@ -99,9 +116,11 @@ type salesDataEnvelope struct {
 	} `json:"executeResult"`
 }
 
-// Sales resolves an authorized business store, fetches every RTA result page,
-// and returns raw rows plus deterministic aggregates. Any failed page fails
-// the whole query.
+// Sales verifies the requested business store against this client's private
+// account binding, fetches every RTA result page, and returns raw rows plus
+// deterministic aggregates. The business store ID is deliberately not sent
+// to RTA: RTA scopes this report by the authenticated account, and its exposed
+// store-tree identifiers are not valid filters for this query.
 func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, error) {
 	started := time.Now()
 	query, err := validateSalesQuery(query)
@@ -112,8 +131,8 @@ func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, err
 	if err != nil {
 		return nil, err
 	}
-	payload := newSalesPayload(store.upstreamID, query)
-	firstItems, totalPages, err := c.fetchSalesPage(ctx, payload, 1)
+	payload := newSalesPayload(query)
+	firstItems, totalPages, totalTransactionCount, err := c.fetchSalesPage(ctx, payload, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -129,9 +148,8 @@ func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, err
 		items = append(items, page...)
 	}
 	total, quantity, categories := aggregateSales(items)
-	totalTransactionCount := aggregateTransactionCount(items)
 	return &SalesResult{
-		Store:                 store.Store,
+		Store:                 store,
 		StartDate:             query.StartDate.Format("2006-01-02"),
 		EndDate:               query.EndDate.Format("2006-01-02"),
 		Category:              query.Category,
@@ -182,13 +200,11 @@ func validateSalesQuery(query SalesQuery) (SalesQuery, error) {
 	return query, nil
 }
 
-func newSalesPayload(upstreamStoreID string, query SalesQuery) salesQueryPayload {
+func newSalesPayload(query SalesQuery) salesQueryPayload {
 	start := query.StartDate.Format("20060102")
 	end := query.EndDate.Format("20060102")
 	codes := strings.Join(query.ItemCodes, ",")
 	return salesQueryPayload{
-		StoreID:             upstreamStoreID,
-		StoreIDString:       upstreamStoreID,
 		DateType:            1,
 		TimeQuickType:       3,
 		CurrentStartDay:     start,
@@ -203,10 +219,10 @@ func newSalesPayload(upstreamStoreID string, query SalesQuery) salesQueryPayload
 	}
 }
 
-func (c *Client) fetchSalesPage(ctx context.Context, payload salesQueryPayload, page int) ([]SaleItem, int, error) {
+func (c *Client) fetchSalesPage(ctx context.Context, payload salesQueryPayload, page int) ([]SaleItem, int, *float64, error) {
 	queryJSON, err := json.Marshal(payload)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 	form := fixedSalesForm(page)
 	form.Set("queryParam", string(queryJSON))
@@ -216,39 +232,48 @@ func (c *Client) fetchSalesPage(ctx context.Context, payload salesQueryPayload, 
 			setCommonHeaders(request)
 			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			request.Header.Set("Accept", "application/json, text/javascript, */*; q=0.01")
+			request.Header.Set("Accept-Language", "zh-HK,zh;q=0.9,en;q=0.8")
 			request.Header.Set("Origin", "https://partner.rta-os.com")
 			request.Header.Set("Referer", "https://partner.rta-os.com/index/partner/index")
+			request.Header.Set("Connection", "keep-alive")
+			request.Header.Set("Sec-Fetch-Dest", "empty")
+			request.Header.Set("Sec-Fetch-Mode", "cors")
+			request.Header.Set("Sec-Fetch-Site", "same-site")
+			request.Header.Set("Sec-GPC", "1")
 		}
 		return request, err
 	})
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 	envelope, err := decodeSuccessfulEnvelope(body, fmt.Sprintf("fetch sales page %d", page))
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 	var data salesDataEnvelope
 	decoder := json.NewDecoder(bytes.NewReader(envelope.Data))
 	decoder.UseNumber()
 	if err := decoder.Decode(&data); err != nil {
-		return nil, 0, &ProtocolError{Operation: fmt.Sprintf("fetch sales page %d", page), Message: "invalid sales data", Err: err}
+		return nil, 0, nil, &ProtocolError{Operation: fmt.Sprintf("fetch sales page %d", page), Message: "invalid sales data", Err: err}
 	}
 	items := make([]SaleItem, 0, len(data.ExecuteResult.Result))
 	for _, row := range data.ExecuteResult.Result {
 		items = append(items, saleItemFromRow(row))
 	}
 	totalPages := 1
+	var totalTransactionCount *float64
 	if page == 1 && len(data.CountResult.Result) > 0 {
-		count := floatFrom(data.CountResult.Result[0]["counts"])
+		counts := data.CountResult.Result[0]
+		count := floatFrom(counts["counts"])
 		if count == 0 {
-			count = floatFrom(data.CountResult.Result[0]["_counts"])
+			count = floatFrom(counts["_counts"])
 		}
 		if count > 0 {
 			totalPages = (int(count) + salesPageSize - 1) / salesPageSize
 		}
+		totalTransactionCount = optionalFloatFrom(counts["tp_transaction_count"])
 	}
-	return items, totalPages, nil
+	return items, totalPages, totalTransactionCount, nil
 }
 
 func (c *Client) fetchRemainingSalesPages(ctx context.Context, payload salesQueryPayload, pages [][]SaleItem) error {
@@ -267,7 +292,7 @@ func (c *Client) fetchRemainingSalesPages(ctx context.Context, payload salesQuer
 		go func() {
 			defer waitGroup.Done()
 			for page := range jobs {
-				items, _, err := c.fetchSalesPage(workContext, payload, page)
+				items, _, _, err := c.fetchSalesPage(workContext, payload, page)
 				if err != nil {
 					errorOnce.Do(func() {
 						firstError = err
@@ -329,29 +354,6 @@ func saleItemFromRow(row map[string]any) SaleItem {
 		TPGrossSaleAmount:           floatFrom(row["tp_gross_sale_amount"]),
 		Raw:                         raw,
 	}
-}
-
-func aggregateTransactionCount(items []SaleItem) *float64 {
-	if len(items) == 0 {
-		return nil
-	}
-	var aggregate *float64
-	for _, item := range items {
-		if item.TPTransactionCountAgg == nil {
-			return nil
-		}
-		value := *item.TPTransactionCountAgg
-		if aggregate == nil {
-			aggregate = new(float64)
-			*aggregate = value
-			continue
-		}
-		tolerance := math.Max(1, math.Max(math.Abs(*aggregate), math.Abs(value))) * 1e-9
-		if math.Abs(*aggregate-value) > tolerance {
-			return nil
-		}
-	}
-	return aggregate
 }
 
 func aggregateSales(items []SaleItem) (float64, float64, []CategoryAggregate) {

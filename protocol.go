@@ -58,6 +58,21 @@ func envelopeMessage(envelope rtaEnvelope) string {
 	return compactPreview(string(envelope.Result))
 }
 
+func decodeSuccessfulEnvelope(body []byte, operation string) (rtaEnvelope, error) {
+	envelope, err := decodeEnvelope(body, operation)
+	if err != nil {
+		return envelope, err
+	}
+	code := string(envelope.Code)
+	if !successfulCode(code) {
+		return envelope, &ProtocolError{Operation: operation, Message: fmt.Sprintf("RTA code %s: %s", code, envelopeMessage(envelope))}
+	}
+	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
+		return envelope, &ProtocolError{Operation: operation, Message: "response data is empty"}
+	}
+	return envelope, nil
+}
+
 func successfulCode(code string) bool { return code == "0000" || code == "0" }
 
 func compactPreview(value string) string {

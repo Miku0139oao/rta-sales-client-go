@@ -18,10 +18,11 @@ func ExampleClient_Sales() {
 	}
 
 	client, err := rtasales.NewClient(rtasales.Config{
-		Account:        os.Getenv("RTA_ACCOUNT"),
-		Password:       os.Getenv("RTA_PASSWORD"),
-		CookieFile:     "state/rta.cookies.json",
-		CaptchaSolvers: solvers,
+		Account:         os.Getenv("RTA_ACCOUNT"),
+		Password:        os.Getenv("RTA_PASSWORD"),
+		BusinessStoreID: os.Getenv("RTA_BUSINESS_STORE_ID"),
+		CookieFile:      "state/rta.cookies.json",
+		CaptchaSolvers:  solvers,
 	})
 	if err != nil {
 		return

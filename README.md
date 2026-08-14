@@ -6,14 +6,16 @@ English | [繁體中文](README.zh-TW.md)
 
 - automatic SSO login, cookie persistence, and expired-session recovery;
 - built-in, CPU-only captcha OCR with ordered fallbacks;
-- authenticated discovery of the stores available to the account;
-- exact store selection and inclusive date-range sales queries;
+- exact account/store binding from a caller-owned private mapping;
+- inclusive date-range sales queries using the bound account session;
 - optional SKU/ManCode filtering;
 - complete typed rows, raw upstream fields, totals, and category aggregates;
 - safe date-scoped filling of existing Excel workbooks without replacing formulas or styles;
 - bounded concurrent pagination with whole-query error handling.
 
-The module has no database or global process-state dependency and does not require GPU hardware, CGO, Tesseract, or a separate OCR model. Use one `Client` per RTA account so cookies and authorized-store state remain isolated.
+The module has no database or global process-state dependency and does not require GPU hardware, CGO, Tesseract, or a separate OCR model. Use one `Client` per RTA account and business-store binding so cookies and store scope remain isolated.
+
+RTA applies this report's store scope through the authenticated account session. Its store-tree endpoint is a global catalogue, not an authorization list, and its identifiers are not valid values for this report's `store_id` filter. The client therefore sends the expected filter fields empty and uses `BusinessStoreID` only as a strict local routing guard. The caller remains responsible for loading the correct account/store pair from its private mapping.
 
 ## Requirements and installation
 
@@ -62,10 +64,11 @@ func main() {
 	}
 
 	client, err := rtasales.NewClient(rtasales.Config{
-		Account:        os.Getenv("RTA_ACCOUNT"),
-		Password:       os.Getenv("RTA_PASSWORD"),
-		CookieFile:     "state/rta.cookies.json",
-		CaptchaSolvers: solvers,
+		Account:         os.Getenv("RTA_ACCOUNT"),
+		Password:        os.Getenv("RTA_PASSWORD"),
+		BusinessStoreID: os.Getenv("RTA_BUSINESS_STORE_ID"),
+		CookieFile:      "state/rta.cookies.json",
+		CaptchaSolvers:  solvers,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -75,7 +78,7 @@ func main() {
 	defer cancel()
 
 	result, err := client.Sales(ctx, rtasales.SalesQuery{
-		// Use the business-facing ID returned by client.Stores.
+		// Must exactly match the private binding supplied to NewClient.
 		BusinessStoreID: os.Getenv("RTA_BUSINESS_STORE_ID"),
 		StartDate:       time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local),
 		EndDate:         time.Date(2026, 8, 7, 0, 0, 0, 0, time.Local),
@@ -100,15 +103,21 @@ func main() {
 
 | Field | Meaning |
 | --- | --- |
-| `BusinessStoreID` | Required exact business-facing ID returned by `Stores` |
+| `BusinessStoreID` | Required exact ID bound to this `Client` by the caller's private mapping |
 | `StartDate` | Required inclusive start calendar date |
 | `EndDate` | Required inclusive end calendar date; cannot precede `StartDate` |
 | `Category` | Optional caller-owned result label; it does not filter RTA by itself |
 | `ItemCodes` | Optional SKU/ManCode filter; empty queries all products |
 
-### List accessible stores
+### Inspect the configured store binding
 
-Use `Stores` to load the authenticated account's store table. Only the business-facing ID is accepted by `Sales`.
+`BoundStore` returns the single caller-configured binding without network I/O:
+
+```go
+store := client.BoundStore()
+```
+
+`Stores` is retained for callers that expect a slice, but it also returns only that one configured binding:
 
 ```go
 stores, err := client.Stores(ctx)
@@ -120,13 +129,13 @@ for _, store := range stores {
 }
 ```
 
-`Stores` returns a cached defensive copy. Use `RefreshStores` when account access or upstream store metadata may have changed:
+`RefreshStores` is retained for API compatibility and returns the same binding:
 
 ```go
 stores, err := client.RefreshStores(ctx)
 ```
 
-Store metadata is retrieved only after authentication and cached only by that account's `Client`.
+Neither method treats RTA's global store catalogue as account authorization.
 
 ### Query one day
 
@@ -166,9 +175,9 @@ The `xlsxfill` package and `cmd/rta-xlsx-fill` command can populate the two manu
 - column `L`: daily sales amount;
 - column `AB`: daily customer/transaction count.
 
-Rows labeled `Total`, rows without both a store and date, and dates other than the requested date are skipped. Column `C` is passed to `Client.Sales` by default, so the client still resolves it through the authenticated RTA store table. If another project uses different workbook IDs, `-mapping` accepts a private JSON object or a CSV with `sheet_store_id` and `rta_business_store_id` headers. Never commit a populated mapping.
+Rows labeled `Total`, rows without both a store and date, and dates other than the requested date are skipped. Column `C` is passed through the configured `StoreMapper` and then routed to a provider with an exact business-store match. If another project uses different workbook IDs, `-mapping` accepts a private JSON object or a CSV with `sheet_store_id` and `rta_business_store_id` headers. Never commit a populated mapping.
 
-The command loads `RTA_ACCOUNT` and `RTA_PASSWORD` from the environment or an ignored local `.env`. It uses embedded OCR only. Start with a dry run:
+The command is intentionally scoped to one account/store pair. It loads `RTA_ACCOUNT`, `RTA_PASSWORD`, and `RTA_BUSINESS_STORE_ID` from the environment or an ignored local `.env`, and uses embedded OCR only. Start with a dry run:
 
 ```bash
 go run ./cmd/rta-xlsx-fill \
@@ -190,14 +199,16 @@ Important safety defaults:
 
 - the source workbook can never be used as the output path;
 - existing values that differ are not replaced unless `-overwrite` is explicit;
-- any missing mapping, inaccessible store, missing transaction aggregate, or query failure prevents all output unless `-allow-partial` is explicit;
+- any missing mapping, store-binding mismatch, missing transaction aggregate, or query failure prevents all output unless `-allow-partial` is explicit;
 - formula cells in `L` or `AB` are never replaced;
 - successful output is marked for full recalculation when opened in Excel;
 - the JSON report contains row numbers and issue codes, not credentials, store IDs, or returned sales values.
 
-Use `-mapping <private.local.csv>` only when column `C` is not already the business-facing ID returned by `Stores`. The repository ignores `*.local.csv`, `*.local.json`, cookie files, and `*.filled.xlsx`.
+Use `-mapping <private.local.csv>` only when column `C` differs from the business ID in the private account/store binding. The repository ignores `*.local.csv`, `*.local.json`, cookie files, and `*.filled.xlsx`.
 
-For a permission-limited smoke test, add `-row <worksheet-row>` and `-max-queries 1`. This queries at most the single store/date represented by that row and remains a dry run unless `-write` is also explicit.
+For a permission-limited or single-account run, add `-row <worksheet-row>` and `-max-queries 1`. This queries at most the single store/date represented by that row and remains a dry run unless `-write` is also explicit.
+
+For a multi-store integration, create one `Client` for every private account/store binding and pass them through `xlsxfill.NewProviderRouter`. The router performs exact local dispatch; it does not place a store ID into the RTA report filter.
 
 ## Client configuration
 
@@ -205,6 +216,8 @@ For a permission-limited smoke test, add `-row <worksheet-row>` and `-max-querie
 | --- | --- | --- |
 | `Account` | RTA login account; required | none |
 | `Password` | RTA login password; required | none |
+| `BusinessStoreID` | Caller-owned ID bound to this account; required | none |
+| `BusinessStoreLabel` | Optional display label for the binding | `BusinessStoreID` |
 | `CaptchaSolvers` | Solvers attempted in order; at least one required | none |
 | `CookieFile` | Persistent cookie-jar path | in-memory cookies |
 | `HTTPClient` | Optional custom transport, proxy, timeout, or cookie jar | 30-second client |
@@ -266,7 +279,7 @@ Do not configure a paid fallback if local OCR failure should fail the request in
 
 Each `SaleItem` exposes commonly used typed fields and a `Raw` map containing the complete upstream row. Quantities use `float64` so weighted-product sales are not truncated. If any page fails, `Sales` returns an error and no partial `SalesResult`.
 
-`TotalAmount` sums `tp_sale_amount`; `GrossQuantity` sums `tp_gross_sale_qty`. `TotalTransactionCount` is a pointer and is populated only when RTA supplies one consistent `tp_transaction_count_agg` value across the returned rows. It is deliberately not calculated by summing item-level transaction counts because one transaction can contain multiple items.
+`TotalAmount` sums `tp_sale_amount`; `GrossQuantity` sums `tp_gross_sale_qty`. `TotalTransactionCount` is read from `countResult.result[0].tp_transaction_count`. It is deliberately not calculated from item-level `tp_transaction_count` values or `tp_transaction_count_agg`, because one transaction can contain multiple items.
 
 ## Error handling
 
@@ -286,7 +299,7 @@ if err != nil {
 	var upstream *rtasales.UpstreamError
 	switch {
 	case errors.As(err, &missing):
-		// Refresh or correct the business-facing store ID.
+		// Route to the Client bound to this exact business-store ID.
 	case errors.As(err, &upstream) && upstream.Retryable():
 		// Apply a bounded caller-level retry.
 	default:
@@ -303,6 +316,7 @@ _ = result
 - Empty `CookieFile` uses an in-memory jar.
 - A configured file persists expiring cookies and is chmodded to `0600` where supported.
 - Keep credentials and fallback API keys in a secret manager or environment variables.
+- Use a separate cookie path for each account/store binding.
 - Never commit cookie files or `.env` files.
 - Avoid logging complete `Store`, `SaleItem.Raw`, cookies, credentials, or upstream response bodies in production.
 

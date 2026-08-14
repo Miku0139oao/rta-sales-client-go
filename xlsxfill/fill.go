@@ -23,8 +23,9 @@ const (
 	defaultMaxQueries = 25
 )
 
-// SalesProvider is implemented by *rtasales.Client and is intentionally small
-// so callers can test workbook filling without making network requests.
+// SalesProvider is implemented by *rtasales.Client and ProviderRouter. It is
+// intentionally small so callers can test workbook filling without network
+// requests.
 type SalesProvider interface {
 	Sales(context.Context, rtasales.SalesQuery) (*rtasales.SalesResult, error)
 }
@@ -398,7 +399,7 @@ func classifyQueryError(err error) string {
 	var upstream *rtasales.UpstreamError
 	switch {
 	case errors.As(err, &notFound):
-		return "store_not_accessible"
+		return "store_binding_mismatch"
 	case errors.As(err, &auth):
 		return "authentication_failed"
 	case errors.As(err, &captcha):

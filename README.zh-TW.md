@@ -6,14 +6,16 @@
 
 - 自動 SSO 登入、Cookie 保存與登入逾期自動恢復；
 - 純 Go、CPU-only 的內建驗證碼 OCR，以及依序執行的備援 solver；
-- 登入後動態取得帳號可用門店；
-- 使用門店 ID 與日期區間精確查詢銷售資料；
+- 從呼叫端的私有對照取得精確的帳號／門店綁定；
+- 使用綁定帳號的 session 查詢指定日期區間銷售資料；
 - 可選的 SKU／ManCode 篩選；
 - 完整型別化明細、原始欄位、總計與分類彙總；
 - 可按指定日期安全填入既有 Excel，同時保留公式與樣式；
 - 有上限的並行分頁查詢，任一頁失敗時不回傳不完整結果。
 
-本套件不依賴資料庫或全域程序狀態，也不需要 GPU、CGO、Tesseract 或外部 OCR 模型。每個 RTA 帳號應建立各自的 `Client`，避免 Cookie 與門店快取互相混用。
+本套件不依賴資料庫或全域程序狀態，也不需要 GPU、CGO、Tesseract 或外部 OCR 模型。每一組 RTA 帳號與業務門店綁定都應建立各自的 `Client`，避免 Cookie 與門店範圍互相混用。
+
+這份 RTA 報表的門店範圍由登入帳號的 session 決定。RTA 的門店樹是全域目錄，不是該帳號的授權清單，其 ID 也不是這份報表可用的 `store_id` filter。client 會保留上游預期的 filter 欄位但送空值，`BusinessStoreID` 只用於本機端的嚴格路由檢查。呼叫端必須從自己的私有對照載入正確的帳號／門店組合。
 
 ## 環境需求與安裝
 
@@ -62,10 +64,11 @@ func main() {
 	}
 
 	client, err := rtasales.NewClient(rtasales.Config{
-		Account:        os.Getenv("RTA_ACCOUNT"),
-		Password:       os.Getenv("RTA_PASSWORD"),
-		CookieFile:     "state/rta.cookies.json",
-		CaptchaSolvers: solvers,
+		Account:         os.Getenv("RTA_ACCOUNT"),
+		Password:        os.Getenv("RTA_PASSWORD"),
+		BusinessStoreID: os.Getenv("RTA_BUSINESS_STORE_ID"),
+		CookieFile:      "state/rta.cookies.json",
+		CaptchaSolvers:  solvers,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -75,7 +78,7 @@ func main() {
 	defer cancel()
 
 	result, err := client.Sales(ctx, rtasales.SalesQuery{
-		// 使用 client.Stores 回傳的業務門店 ID，不要傳入 RTA 內部 ID。
+		// 必須與 NewClient 使用的私有綁定 ID 完全相同。
 		BusinessStoreID: os.Getenv("RTA_BUSINESS_STORE_ID"),
 		StartDate:       time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local),
 		EndDate:         time.Date(2026, 8, 7, 0, 0, 0, 0, time.Local),
@@ -100,15 +103,21 @@ func main() {
 
 | 欄位 | 說明 |
 | --- | --- |
-| `BusinessStoreID` | 必填，必須是 `Stores` 回傳的完整業務門店 ID |
+| `BusinessStoreID` | 必填，必須與呼叫端私有對照綁定到此 `Client` 的 ID 完全相同 |
 | `StartDate` | 必填，包含在查詢範圍內的開始日期 |
 | `EndDate` | 必填，包含在查詢範圍內，且不可早於 `StartDate` |
 | `Category` | 選用，由呼叫端管理的結果標籤；本身不會篩選 RTA 資料 |
 | `ItemCodes` | 選用的 SKU／ManCode 篩選；空值查詢全部商品 |
 
-### 列出帳號可用門店
+### 檢查目前門店綁定
 
-使用 `Stores` 載入登入帳號可見的門店表。`Sales` 只接受業務門店 ID。
+`BoundStore` 不需連線即可回傳呼叫端設定的唯一門店綁定：
+
+```go
+store := client.BoundStore()
+```
+
+`Stores` 保留給需要 slice 的呼叫端，但同樣只回傳這一筆設定：
 
 ```go
 stores, err := client.Stores(ctx)
@@ -120,13 +129,13 @@ for _, store := range stores {
 }
 ```
 
-`Stores` 會回傳快取的防禦性複本。帳號權限或上游門店資料可能已變更時，使用 `RefreshStores` 強制重新載入：
+`RefreshStores` 為相容既有 API 而保留，也會回傳同一筆綁定：
 
 ```go
 stores, err := client.RefreshStores(ctx)
 ```
 
-門店資料只會在登入後取得，並快取於該帳號的 `Client`。
+這兩個方法都不會把 RTA 的全域門店目錄誤當成帳號授權清單。
 
 ### 查詢單日資料
 
@@ -166,9 +175,9 @@ result, err := client.Sales(ctx, rtasales.SalesQuery{
 - `L` 欄：當日銷售額；
 - `AB` 欄：當日顧客／交易總數。
 
-標示為 `Total` 的列、缺少門店或日期的列，以及非指定日期的列都會略過。預設直接把 `C` 欄交給 `Client.Sales`，client 仍會透過登入後取得的 RTA 門店表解析。如果其他專案的活頁簿使用不同 ID，可用 `-mapping` 指定私有 JSON object，或包含 `sheet_store_id`、`rta_business_store_id` 標題的 CSV；請勿提交任何已填入資料的對照檔。
+標示為 `Total` 的列、缺少門店或日期的列，以及非指定日期的列都會略過。`C` 欄會先通過設定的 `StoreMapper`，再以業務門店 ID 精確路由到相應 provider。如果其他專案的活頁簿使用不同 ID，可用 `-mapping` 指定私有 JSON object，或包含 `sheet_store_id`、`rta_business_store_id` 標題的 CSV；請勿提交任何已填入資料的對照檔。
 
-指令會從環境變數或已被 Git 忽略的本機 `.env` 讀取 `RTA_ACCOUNT`、`RTA_PASSWORD`，且只使用內建 OCR。請先執行 dry-run：
+這個指令刻意只處理一組帳號／門店綁定。它會從環境變數或已被 Git 忽略的本機 `.env` 讀取 `RTA_ACCOUNT`、`RTA_PASSWORD`、`RTA_BUSINESS_STORE_ID`，且只使用內建 OCR。請先執行 dry-run：
 
 ```bash
 go run ./cmd/rta-xlsx-fill \
@@ -190,14 +199,16 @@ go run ./cmd/rta-xlsx-fill \
 
 - 輸出路徑不可與來源檔相同；
 - 原有數值不同時不會覆寫，除非明確加入 `-overwrite`；
-- 對照缺漏、門店無權限、缺少聚合交易總數或查詢失敗時，預設不會產生任何部分結果；只有明確加入 `-allow-partial` 才會另存安全完成的列；
+- 對照缺漏、門店綁定不符、缺少聚合交易總數或查詢失敗時，預設不會產生任何部分結果；只有明確加入 `-allow-partial` 才會另存安全完成的列；
 - `L` 或 `AB` 若是公式儲存格，絕不覆寫；
 - 成功輸出的檔案會設定為使用 Excel 開啟時完整重算；
 - JSON 報告只包含列號與問題代碼，不包含帳密、門店 ID 或實際銷售數值。
 
-只有 `C` 欄不是 `Stores` 回傳的業務門店 ID 時，才需要加入 `-mapping <private.local.csv>`。repository 已忽略 `*.local.csv`、`*.local.json`、Cookie 檔及 `*.filled.xlsx`。
+只有 `C` 欄與私有帳號／門店對照使用的業務 ID 不同時，才需要加入 `-mapping <private.local.csv>`。repository 已忽略 `*.local.csv`、`*.local.json`、Cookie 檔及 `*.filled.xlsx`。
 
-使用權限有限的帳號做 smoke test 時，可加入 `-row <工作表列號>` 與 `-max-queries 1`。這樣最多只會查詢該列所代表的一個門店與日期；除非另外明確加入 `-write`，否則仍是 dry-run。
+使用權限有限或單一門店帳號執行時，可加入 `-row <工作表列號>` 與 `-max-queries 1`。這樣最多只會查詢該列所代表的一個門店與日期；除非另外明確加入 `-write`，否則仍是 dry-run。
+
+多門店整合時，請依私有帳號／門店對照為每間店建立一個 `Client`，再交給 `xlsxfill.NewProviderRouter`。router 只做本機端的精確分流，不會把門店 ID 填進 RTA 報表 filter。
 
 ## Client 設定
 
@@ -205,6 +216,8 @@ go run ./cmd/rta-xlsx-fill \
 | --- | --- | --- |
 | `Account` | RTA 登入帳號，必填 | 無 |
 | `Password` | RTA 登入密碼，必填 | 無 |
+| `BusinessStoreID` | 呼叫端綁定到此帳號的業務門店 ID，必填 | 無 |
+| `BusinessStoreLabel` | 綁定的選用顯示名稱 | `BusinessStoreID` |
 | `CaptchaSolvers` | 依序嘗試的驗證碼 solver，至少需要一個 | 無 |
 | `CookieFile` | Cookie jar 保存路徑 | 僅記憶體 |
 | `HTTPClient` | 自訂 transport、proxy、timeout 或 cookie jar | timeout 30 秒 |
@@ -266,7 +279,7 @@ type CaptchaSolver interface {
 
 每個 `SaleItem` 都提供常用的型別化欄位，以及保留完整上游資料的 `Raw` map。數量使用 `float64`，避免秤重商品被截斷。任何分頁失敗時，`Sales` 會回傳錯誤，不會回傳部分 `SalesResult`。
 
-`TotalAmount` 為 `tp_sale_amount` 加總；`GrossQuantity` 為 `tp_gross_sale_qty` 加總。`TotalTransactionCount` 是 pointer，只有 RTA 在所有回傳列提供一致的 `tp_transaction_count_agg` 時才會有值。它不會把商品層級的交易次數直接相加，因為同一張交易可能包含多個商品。
+`TotalAmount` 為 `tp_sale_amount` 加總；`GrossQuantity` 為 `tp_gross_sale_qty` 加總。`TotalTransactionCount` 直接讀取 `countResult.result[0].tp_transaction_count`。它不會使用商品列的 `tp_transaction_count` 或 `tp_transaction_count_agg` 推算，因為同一張交易可能包含多個商品。
 
 ## 錯誤處理
 
@@ -286,7 +299,7 @@ if err != nil {
 	var upstream *rtasales.UpstreamError
 	switch {
 	case errors.As(err, &missing):
-		// 重新載入門店表，或修正業務門店 ID。
+		// 路由到綁定這個完整業務門店 ID 的 Client。
 	case errors.As(err, &upstream) && upstream.Retryable():
 		// 由呼叫端執行有次數上限的重試。
 	default:
@@ -303,6 +316,7 @@ _ = result
 - `CookieFile` 留空時使用記憶體 Cookie jar。
 - 設定檔案後會保存有效期限內的 Cookie；支援的平台會將權限設為 `0600`。
 - 帳號、密碼與備援 API key 應放在秘密管理服務或環境變數。
+- 每一組帳號／門店綁定使用不同的 Cookie 路徑。
 - 不要提交 Cookie 或 `.env` 檔案。
 - 正式環境避免記錄完整 `Store`、`SaleItem.Raw`、Cookie、登入資料或完整上游回應內容。
 

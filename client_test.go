@@ -26,13 +26,12 @@ type rtaFixture struct {
 	server           *httptest.Server
 	loginSubmissions atomic.Int32
 	captchaRequests  atomic.Int32
-	areaRequests     atomic.Int32
 	salesRequests    atomic.Int32
 	mu               sync.Mutex
 	payloads         []salesQueryPayload
+	rawPayloads      []map[string]any
 	failPage         int
 	expireNextSales  bool
-	areaEmpty        bool
 }
 
 func newRTAFixture(t *testing.T) *rtaFixture {
@@ -67,34 +66,6 @@ func (f *rtaFixture) serveHTTP(response http.ResponseWriter, request *http.Reque
 			Expires: time.Now().Add(24 * time.Hour),
 		})
 		writeJSON(response, map[string]any{"code": "0000"})
-	case "/storeStock/areasAndStores":
-		f.areaRequests.Add(1)
-		if !hasCookie(request, "sid", "valid") {
-			writeJSON(response, map[string]any{"code": "9800", "msg": "用户未登录"})
-			return
-		}
-		f.mu.Lock()
-		areaEmpty := f.areaEmpty
-		f.mu.Unlock()
-		storeTree := []any{map[string]any{"label": "STOREA-Main Store", "storeId": "UPSTREAM-A", "value": "UPSTREAM-A"}}
-		if areaEmpty {
-			storeTree = nil
-		}
-		writeJSON(response, map[string]any{
-			"code": "0000",
-			"data": map[string]any{
-				"storeTree": storeTree,
-			},
-		})
-	case "/storeStock/allStore":
-		if !hasCookie(request, "sid", "valid") {
-			writeJSON(response, map[string]any{"code": "9800", "msg": "用户未登录"})
-			return
-		}
-		writeJSON(response, map[string]any{
-			"code": "0000",
-			"data": []any{map[string]any{"label": "STOREB-Flat Store", "storeId": "UPSTREAM-B", "value": "UPSTREAM-B"}},
-		})
 	case "/open/data/query":
 		f.salesRequests.Add(1)
 		if !hasCookie(request, "sid", "valid") {
@@ -124,8 +95,13 @@ func (f *rtaFixture) serveHTTP(response http.ResponseWriter, request *http.Reque
 		if err := json.Unmarshal([]byte(request.Form.Get("queryParam")), &payload); err != nil {
 			f.testing.Errorf("decode sales query: %v", err)
 		}
+		var rawPayload map[string]any
+		if err := json.Unmarshal([]byte(request.Form.Get("queryParam")), &rawPayload); err != nil {
+			f.testing.Errorf("decode raw sales query: %v", err)
+		}
 		f.mu.Lock()
 		f.payloads = append(f.payloads, payload)
+		f.rawPayloads = append(f.rawPayloads, rawPayload)
 		f.mu.Unlock()
 		row := map[string]any{
 			"purchase_category4_name":  "HEALTH",
@@ -133,14 +109,14 @@ func (f *rtaFixture) serveHTTP(response http.ResponseWriter, request *http.Reque
 			"matnr":                    fmt.Sprintf("SKU-%d", page),
 			"article_name":             fmt.Sprintf("Item %d", page),
 			"tp_transaction_count":     page * 3,
-			"tp_transaction_count_agg": "431",
+			"tp_transaction_count_agg": "999",
 			"tp_sale_amount":           fmt.Sprintf("%d.5", page*10),
 			"tp_gross_sale_qty":        page,
 		}
 		writeJSON(response, map[string]any{
 			"code": "0000",
 			"data": map[string]any{
-				"countResult":   map[string]any{"result": []any{map[string]any{"counts": 1001}}},
+				"countResult":   map[string]any{"result": []any{map[string]any{"counts": 1001, "tp_transaction_count": "431"}}},
 				"executeResult": map[string]any{"result": []any{row}},
 			},
 		})
@@ -154,9 +130,11 @@ func (f *rtaFixture) client(t *testing.T, cookieFile string) (*Client, *atomic.I
 	var ocrCalls atomic.Int32
 	var fallbackCalls atomic.Int32
 	client, err := NewClient(Config{
-		Account:    "account",
-		Password:   "secret",
-		CookieFile: cookieFile,
+		Account:            "account",
+		Password:           "secret",
+		BusinessStoreID:    "STOREA",
+		BusinessStoreLabel: "STOREA-Main Store",
+		CookieFile:         cookieFile,
 		CaptchaSolvers: []CaptchaSolver{
 			solverFunc(func(context.Context, []byte) (string, error) {
 				ocrCalls.Add(1)
@@ -172,7 +150,7 @@ func (f *rtaFixture) client(t *testing.T, cookieFile string) (*Client, *atomic.I
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.endpoints = endpoints{sso: f.server.URL, stock: f.server.URL, dsa: f.server.URL}
+	client.endpoints = endpoints{sso: f.server.URL, dsa: f.server.URL}
 	return client, &ocrCalls, &fallbackCalls
 }
 
@@ -222,45 +200,18 @@ func TestSalesResolvesStorePaginatesAndAggregates(t *testing.T) {
 	if len(fixture.payloads) != 2 {
 		t.Fatalf("payload count=%d, want 2", len(fixture.payloads))
 	}
-	for _, payload := range fixture.payloads {
-		if payload.StoreID != "UPSTREAM-A" || payload.StoreIDString != "UPSTREAM-A" {
-			t.Fatalf("sales payload did not use resolved store: %+v", payload)
+	for index, payload := range fixture.payloads {
+		if payload.StoreID != "" || payload.StoreIDString != "" {
+			t.Fatalf("sales payload unexpectedly filtered by store: %+v", payload)
 		}
 		if payload.Matnr != "SKU-A,SKU-B" || payload.MatnrString != "SKU-A,SKU-B" {
 			t.Fatalf("unexpected item code filter: %+v", payload)
 		}
-	}
-}
-
-func TestAggregateTransactionCountRejectsInconsistentValues(t *testing.T) {
-	first := 10.0
-	second := 11.0
-	if got := aggregateTransactionCount([]SaleItem{
-		{TPTransactionCount: 2, TPTransactionCountAgg: &first},
-		{TPTransactionCount: 3, TPTransactionCountAgg: &second},
-	}); got != nil {
-		t.Fatalf("aggregate=%v, want nil for inconsistent upstream values", *got)
-	}
-}
-
-func TestAggregateTransactionCountDoesNotSumItemCounts(t *testing.T) {
-	aggregate := 7.0
-	got := aggregateTransactionCount([]SaleItem{
-		{TPTransactionCount: 5, TPTransactionCountAgg: &aggregate},
-		{TPTransactionCount: 6, TPTransactionCountAgg: &aggregate},
-	})
-	if got == nil || *got != 7 {
-		t.Fatalf("aggregate=%v, want repeated upstream total 7", got)
-	}
-}
-
-func TestAggregateTransactionCountRequiresValueOnEveryRow(t *testing.T) {
-	aggregate := 7.0
-	if got := aggregateTransactionCount([]SaleItem{
-		{TPTransactionCount: 5, TPTransactionCountAgg: &aggregate},
-		{TPTransactionCount: 6},
-	}); got != nil {
-		t.Fatalf("aggregate=%v, want nil when one upstream row omits the aggregate", *got)
+		for _, key := range []string{"store_id", "store_id_str", "store_cluster_code", "large_area_code"} {
+			if value, exists := fixture.rawPayloads[index][key]; !exists || value != "" {
+				t.Fatalf("query field %q=%v exists=%t, want present and empty", key, value, exists)
+			}
+		}
 	}
 }
 
@@ -268,8 +219,9 @@ func TestEmbeddedOCRFailureUsesConfiguredFallback(t *testing.T) {
 	fixture := newRTAFixture(t)
 	var fallbackCalls atomic.Int32
 	client, err := NewClient(Config{
-		Account:  "account",
-		Password: "secret",
+		Account:         "account",
+		Password:        "secret",
+		BusinessStoreID: "STOREA",
 		CaptchaSolvers: []CaptchaSolver{
 			NewEmbeddedOCRSolver(EmbeddedOCRConfig{}),
 			solverFunc(func(context.Context, []byte) (string, error) {
@@ -281,13 +233,17 @@ func TestEmbeddedOCRFailureUsesConfiguredFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.endpoints = endpoints{sso: fixture.server.URL, stock: fixture.server.URL, dsa: fixture.server.URL}
-	stores, err := client.Stores(context.Background())
+	client.endpoints = endpoints{sso: fixture.server.URL, dsa: fixture.server.URL}
+	result, err := client.Sales(context.Background(), SalesQuery{
+		BusinessStoreID: "STOREA",
+		StartDate:       time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC),
+		EndDate:         time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stores) != 1 || fallbackCalls.Load() != 1 || fixture.loginSubmissions.Load() != 1 {
-		t.Fatalf("stores=%d fallback calls=%d login submissions=%d, want 1/1/1", len(stores), fallbackCalls.Load(), fixture.loginSubmissions.Load())
+	if len(result.Items) == 0 || fallbackCalls.Load() != 1 || fixture.loginSubmissions.Load() != 1 {
+		t.Fatalf("items=%d fallback calls=%d login submissions=%d, want nonzero/1/1", len(result.Items), fallbackCalls.Load(), fixture.loginSubmissions.Load())
 	}
 }
 
@@ -305,9 +261,10 @@ func TestLoginAttemptsRequestFreshCaptchas(t *testing.T) {
 			fixture := newRTAFixture(t)
 			var solverCalls atomic.Int32
 			client, err := NewClient(Config{
-				Account:       "account",
-				Password:      "secret",
-				LoginAttempts: test.configured,
+				Account:         "account",
+				Password:        "secret",
+				BusinessStoreID: "STOREA",
+				LoginAttempts:   test.configured,
 				CaptchaSolvers: []CaptchaSolver{solverFunc(func(context.Context, []byte) (string, error) {
 					solverCalls.Add(1)
 					return "", errors.New("uncertain captcha")
@@ -316,7 +273,7 @@ func TestLoginAttemptsRequestFreshCaptchas(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			client.endpoints = endpoints{sso: fixture.server.URL, stock: fixture.server.URL, dsa: fixture.server.URL}
+			client.endpoints = endpoints{sso: fixture.server.URL, dsa: fixture.server.URL}
 			err = client.login(context.Background())
 			var captchaError *CaptchaError
 			if !errors.As(err, &captchaError) {
@@ -336,6 +293,7 @@ func TestNewClientRejectsExcessiveLoginAttempts(t *testing.T) {
 	_, err := NewClient(Config{
 		Account:         "account",
 		Password:        "secret",
+		BusinessStoreID: "STOREA",
 		LoginAttempts:   maximumLoginAttempts + 1,
 		CaptchaSolvers:  []CaptchaSolver{solverFunc(func(context.Context, []byte) (string, error) { return "RIGHT", nil })},
 		PageConcurrency: 1,
@@ -346,16 +304,33 @@ func TestNewClientRejectsExcessiveLoginAttempts(t *testing.T) {
 	}
 }
 
+func TestNewClientRequiresBusinessStoreBinding(t *testing.T) {
+	_, err := NewClient(Config{
+		Account:        "account",
+		Password:       "secret",
+		CaptchaSolvers: []CaptchaSolver{solverFunc(func(context.Context, []byte) (string, error) { return "RIGHT", nil })},
+	})
+	var input *InputError
+	if !errors.As(err, &input) || input.Field != "BusinessStoreID" {
+		t.Fatalf("error=%T %v, want BusinessStoreID InputError", err, err)
+	}
+}
+
 func TestSavedCookiesAvoidAnotherLogin(t *testing.T) {
 	fixture := newRTAFixture(t)
 	cookieFile := filepath.Join(t.TempDir(), "rta.cookies.json")
 	first, _, _ := fixture.client(t, cookieFile)
-	if _, err := first.Stores(context.Background()); err != nil {
+	query := SalesQuery{
+		BusinessStoreID: "STOREA",
+		StartDate:       time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC),
+		EndDate:         time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC),
+	}
+	if _, err := first.Sales(context.Background(), query); err != nil {
 		t.Fatal(err)
 	}
 	loginCount := fixture.loginSubmissions.Load()
 	second, _, _ := fixture.client(t, cookieFile)
-	if _, err := second.Stores(context.Background()); err != nil {
+	if _, err := second.Sales(context.Background(), query); err != nil {
 		t.Fatal(err)
 	}
 	if fixture.loginSubmissions.Load() != loginCount {
@@ -366,18 +341,19 @@ func TestSavedCookiesAvoidAnotherLogin(t *testing.T) {
 func TestExpiredSalesSessionAutomaticallyRelogs(t *testing.T) {
 	fixture := newRTAFixture(t)
 	client, _, _ := fixture.client(t, "")
-	if _, err := client.Stores(context.Background()); err != nil {
+	query := SalesQuery{
+		BusinessStoreID: "STOREA",
+		StartDate:       time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC),
+		EndDate:         time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC),
+	}
+	if _, err := client.Sales(context.Background(), query); err != nil {
 		t.Fatal(err)
 	}
 	fixture.mu.Lock()
 	fixture.expireNextSales = true
 	fixture.mu.Unlock()
 	before := fixture.loginSubmissions.Load()
-	_, err := client.Sales(context.Background(), SalesQuery{
-		BusinessStoreID: "STOREA",
-		StartDate:       time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC),
-		EndDate:         time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC),
-	})
+	_, err := client.Sales(context.Background(), query)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,9 +382,10 @@ func TestSalesFailsInsteadOfReturningPartialPages(t *testing.T) {
 
 func TestSalesValidatesDateBeforeNetwork(t *testing.T) {
 	client, err := NewClient(Config{
-		Account:        "account",
-		Password:       "secret",
-		CaptchaSolvers: []CaptchaSolver{solverFunc(func(context.Context, []byte) (string, error) { return "RIGHT", nil })},
+		Account:         "account",
+		Password:        "secret",
+		BusinessStoreID: "STOREA",
+		CaptchaSolvers:  []CaptchaSolver{solverFunc(func(context.Context, []byte) (string, error) { return "RIGHT", nil })},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -424,61 +401,24 @@ func TestSalesValidatesDateBeforeNetwork(t *testing.T) {
 	}
 }
 
-func TestValidateStoreRecordsRejectsConflictingBusinessIDs(t *testing.T) {
-	_, err := validateStoreRecords([]storeRecord{
-		{Store: Store{BusinessID: "STOREA"}, upstreamID: "UPSTREAM-A"},
-		{Store: Store{BusinessID: "STOREA"}, upstreamID: "UPSTREAM-B"},
-	})
-	var protocol *ProtocolError
-	if !errors.As(err, &protocol) {
-		t.Fatalf("unexpected error: %T %v", err, err)
-	}
-}
-
-func TestAppendNodesIgnoresIdentifiedContainerNodes(t *testing.T) {
-	var stores []storeRecord
-	appendNodes(&stores, []storeNode{
-		{
-			Label: "DC-First Area",
-			Value: "AREA-A",
-			Children: []storeNode{{
-				Label:   "STOREA-Main Store",
-				StoreID: "UPSTREAM-A",
-			}},
-		},
-		{
-			Label: "DC-Second Area",
-			Value: "AREA-B",
-			Stores: []storeNode{{
-				Label: "STOREB-Second Store",
-				Value: "UPSTREAM-B",
-			}},
-		},
-	})
-	if len(stores) != 2 || stores[0].BusinessID != "STOREA" || stores[1].BusinessID != "STOREB" {
-		t.Fatalf("unexpected stores: %+v", stores)
-	}
-}
-
-func TestStoresFallsBackToFlatList(t *testing.T) {
+func TestStoresReturnsOnlyConfiguredBindingWithoutNetwork(t *testing.T) {
 	fixture := newRTAFixture(t)
-	fixture.areaEmpty = true
 	client, _, _ := fixture.client(t, "")
 	stores, err := client.Stores(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stores) != 1 || stores[0].BusinessID != "STOREB" || stores[0].Label != "STOREB-Flat Store" {
-		t.Fatalf("unexpected fallback stores: %+v", stores)
+	if len(stores) != 1 || stores[0].BusinessID != "STOREA" || stores[0].Label != "STOREA-Main Store" {
+		t.Fatalf("unexpected bound stores: %+v", stores)
+	}
+	if fixture.loginSubmissions.Load() != 0 || fixture.salesRequests.Load() != 0 {
+		t.Fatal("reading the local store binding unexpectedly performed network I/O")
 	}
 }
 
 func TestStoreLookupIsExact(t *testing.T) {
 	fixture := newRTAFixture(t)
 	client, _, _ := fixture.client(t, "")
-	if _, err := client.Stores(context.Background()); err != nil {
-		t.Fatal(err)
-	}
 	_, err := client.Sales(context.Background(), SalesQuery{
 		BusinessStoreID: "STORE",
 		StartDate:       time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC),
@@ -490,7 +430,7 @@ func TestStoreLookupIsExact(t *testing.T) {
 	}
 }
 
-func TestConcurrentStoresShareInitialLoadAndLogin(t *testing.T) {
+func TestConcurrentStoresReturnsConfiguredBinding(t *testing.T) {
 	fixture := newRTAFixture(t)
 	client, _, _ := fixture.client(t, "")
 	const callers = 12
@@ -514,11 +454,8 @@ func TestConcurrentStoresShareInitialLoadAndLogin(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if fixture.areaRequests.Load() != 2 {
-		t.Fatalf("area requests=%d, want one unauthenticated request plus one retry", fixture.areaRequests.Load())
-	}
-	if fixture.loginSubmissions.Load() != 2 {
-		t.Fatalf("login submissions=%d, want one OCR rejection plus one fallback", fixture.loginSubmissions.Load())
+	if fixture.loginSubmissions.Load() != 0 || fixture.salesRequests.Load() != 0 {
+		t.Fatal("concurrent local binding reads unexpectedly performed network I/O")
 	}
 }
 
