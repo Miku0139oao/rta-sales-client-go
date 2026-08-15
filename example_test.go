@@ -29,8 +29,12 @@ func ExampleClient_Sales() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	stores, err := client.Stores(ctx)
+	if err != nil || len(stores) == 0 {
+		return
+	}
 	_, _ = client.Sales(ctx, rtasales.SalesQuery{
-		BusinessStoreID: os.Getenv("RTA_BUSINESS_STORE_ID"),
+		BusinessStoreID: stores[0].BusinessID,
 		StartDate:       time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local),
 		EndDate:         time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local),
 		Category:        "HA",

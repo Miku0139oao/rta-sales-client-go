@@ -10,6 +10,7 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"math"
+	"math/bits"
 	"sort"
 	"strings"
 	"sync"
@@ -47,6 +48,7 @@ type EmbeddedOCRSolver struct {
 	maximumDistance    float64
 	minimumScoreMargin float64
 	templates          map[byte][]preparedGlyph
+	fittedTemplates    map[byte][]preparedGlyph
 }
 
 // NewEmbeddedOCRSolver creates the built-in RTA captcha solver.
@@ -61,36 +63,47 @@ func NewEmbeddedOCRSolver(config EmbeddedOCRConfig) *EmbeddedOCRSolver {
 	}
 	maximumDistance := config.MaximumDistance
 	if maximumDistance <= 0 {
-		maximumDistance = 0.30
+		maximumDistance = 0.20
 	}
 	minimumMargin := config.MinimumScoreMargin
 	if minimumMargin <= 0 {
-		minimumMargin = 0.01
+		minimumMargin = 0.02
 	}
+	templates, fittedTemplates := preparedLearnedTemplates(alphabet)
 	return &EmbeddedOCRSolver{
 		length:             length,
 		alphabet:           alphabet,
 		maximumDistance:    maximumDistance,
 		minimumScoreMargin: minimumMargin,
-		templates:          preparedLearnedTemplates(alphabet),
+		templates:          templates,
+		fittedTemplates:    fittedTemplates,
 	}
 }
 
 var (
-	learnedTemplatesOnce sync.Once
-	learnedTemplates     map[byte][]preparedGlyph
+	learnedTemplatesOnce   sync.Once
+	learnedTemplates       map[byte][]preparedGlyph
+	learnedFittedTemplates map[byte][]preparedGlyph
 )
 
-func preparedLearnedTemplates(alphabet string) map[byte][]preparedGlyph {
+func preparedLearnedTemplates(alphabet string) (map[byte][]preparedGlyph, map[byte][]preparedGlyph) {
 	learnedTemplatesOnce.Do(func() {
-		learnedTemplates = prepareGlyphTemplates(decodedLearnedTemplates(defaultOCRAlphabet))
+		stretched := decodedLearnedTemplates(defaultOCRAlphabet)
+		supplemental := decodedGlyphTemplates(supplementalGlyphTemplates, defaultOCRAlphabet)
+		for _, character := range []byte(defaultOCRAlphabet) {
+			stretched[character] = append(stretched[character], supplemental[character]...)
+		}
+		learnedTemplates = prepareGlyphTemplates(stretched)
+		learnedFittedTemplates = prepareGlyphTemplates(decodedGlyphTemplates(fittedGlyphTemplates, defaultOCRAlphabet))
 	})
 	selected := make(map[byte][]preparedGlyph, len(alphabet))
+	selectedFitted := make(map[byte][]preparedGlyph, len(alphabet))
 	for index := 0; index < len(alphabet); index++ {
 		character := alphabet[index]
 		selected[character] = learnedTemplates[character]
+		selectedFitted[character] = learnedFittedTemplates[character]
 	}
-	return selected
+	return selected, selectedFitted
 }
 
 func (s *EmbeddedOCRSolver) Solve(ctx context.Context, encoded []byte) (string, error) {
@@ -115,11 +128,10 @@ func (s *EmbeddedOCRSolver) Solve(ctx context.Context, encoded []byte) (string, 
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		glyph, err := extractCaptchaGlyph(decoded, index, s.length)
+		match, best, margin, err := s.classifyCaptchaCharacter(decoded, index)
 		if err != nil {
 			return "", fmt.Errorf("segment captcha character %d: %w", index+1, err)
 		}
-		match, best, margin := s.classify(glyph)
 		if best > s.maximumDistance || margin < s.minimumScoreMargin {
 			return "", fmt.Errorf(
 				"captcha character %d is uncertain (distance %.3f, margin %.3f)",
@@ -133,7 +145,172 @@ func (s *EmbeddedOCRSolver) Solve(ctx context.Context, encoded []byte) (string, 
 	return answer.String(), nil
 }
 
+type glyphMatch struct {
+	character byte
+	distance  float64
+	margin    float64
+}
+
+func (s *EmbeddedOCRSolver) classifyCaptchaCharacter(source image.Image, index int) (byte, float64, float64, error) {
+	baselineCharacter, baselineDistance, baselineMargin, err := s.classifyCaptchaCharacterBaseline(source, index)
+	if err != nil {
+		return 0, math.Inf(1), 0, err
+	}
+	// Strong agreement from the original two-path classifier is both reliable
+	// and much cheaper than the multi-tolerance review. Borderline matches are
+	// reviewed because thin, similarly colored noise can close an otherwise
+	// open glyph and turn c/e/3/9 into 0/8-like shapes.
+	if baselineDistance <= minFloat(0.15, s.maximumDistance) &&
+		baselineMargin >= maxFloat(0.05, s.minimumScoreMargin) {
+		return baselineCharacter, baselineDistance, baselineMargin, nil
+	}
+	components, err := extractCaptchaGlyphEnsembleComponents(source, index, s.length)
+	if err != nil {
+		return baselineCharacter, baselineDistance, baselineMargin, nil
+	}
+	winner, runnerVotes := s.classifyGlyphEnsemble(components)
+	if winner.character == 0 || winner.modelMask != 3 || winner.votes-runnerVotes < 1 {
+		return baselineCharacter, baselineDistance, baselineMargin, nil
+	}
+	distance := maxFloat(winner.bestDistance[0], winner.bestDistance[1])
+	margin := minFloat(winner.bestMargin[0], winner.bestMargin[1])
+	if distance > s.maximumDistance || margin < s.minimumScoreMargin {
+		return baselineCharacter, baselineDistance, baselineMargin, nil
+	}
+	return winner.character, distance, margin, nil
+}
+
+func (s *EmbeddedOCRSolver) classifyCaptchaCharacterBaseline(source image.Image, index int) (byte, float64, float64, error) {
+	components, err := extractCaptchaGlyphComponents(source, index, s.length, 0)
+	if err != nil {
+		return 0, math.Inf(1), 0, err
+	}
+	stretchedMatches := make([]glyphMatch, 0, len(components))
+	fittedMatches := make([]glyphMatch, 0, len(components))
+	for _, component := range components {
+		stretched := normalizeGlyph(component, templateWidth, templateHeight)
+		character, distance, margin := s.classify(stretched)
+		stretchedMatches = append(stretchedMatches, glyphMatch{character: character, distance: distance, margin: margin})
+
+		fitted := normalizeGlyphPreservingAspect(component, templateWidth, templateHeight)
+		character, distance, margin = s.classifyWithTemplates(fitted, s.fittedTemplates)
+		fittedMatches = append(fittedMatches, glyphMatch{character: character, distance: distance, margin: margin})
+	}
+	stretched := selectBestGlyphMatch(stretchedMatches)
+	fitted := selectBestGlyphMatch(fittedMatches)
+	if stretched.character != fitted.character {
+		// The two models deliberately preserve different shape information. A
+		// disagreement is safer to retry with a fresh challenge than to guess.
+		return stretched.character, maxFloat(stretched.distance, fitted.distance), -1, nil
+	}
+	return stretched.character,
+		maxFloat(stretched.distance, fitted.distance),
+		minFloat(stretched.margin, fitted.margin),
+		nil
+}
+
+type glyphVote struct {
+	character byte
+	distance  float64
+	margin    float64
+	model     int
+}
+
+type glyphVoteScore struct {
+	character    byte
+	votes        int
+	modelMask    int
+	quality      float64
+	bestDistance [2]float64
+	bestMargin   [2]float64
+}
+
+func (s *EmbeddedOCRSolver) classifyGlyphEnsemble(components []binaryGlyph) (glyphVoteScore, int) {
+	votes := make([]glyphVote, 0, len(components)*2)
+	for _, component := range components {
+		character, distance, margin := s.classify(normalizeGlyph(component, templateWidth, templateHeight))
+		votes = append(votes, glyphVote{character: character, distance: distance, margin: margin, model: 0})
+
+		character, distance, margin = s.classifyWithTemplates(
+			normalizeGlyphPreservingAspect(component, templateWidth, templateHeight),
+			s.fittedTemplates,
+		)
+		votes = append(votes, glyphVote{character: character, distance: distance, margin: margin, model: 1})
+	}
+
+	byCharacter := make(map[byte]*glyphVoteScore, len(s.alphabet))
+	for _, vote := range votes {
+		score := byCharacter[vote.character]
+		if score == nil {
+			score = &glyphVoteScore{
+				character:    vote.character,
+				bestDistance: [2]float64{math.Inf(1), math.Inf(1)},
+			}
+			byCharacter[vote.character] = score
+		}
+		score.votes++
+		score.modelMask |= 1 << vote.model
+		score.quality += maxFloat(0, vote.margin) + maxFloat(0, 0.25-vote.distance)
+		if vote.distance < score.bestDistance[vote.model] {
+			score.bestDistance[vote.model] = vote.distance
+			score.bestMargin[vote.model] = vote.margin
+		}
+	}
+
+	scores := make([]glyphVoteScore, 0, len(byCharacter))
+	for _, score := range byCharacter {
+		scores = append(scores, *score)
+	}
+	sort.Slice(scores, func(left, right int) bool {
+		if scores[left].votes != scores[right].votes {
+			return scores[left].votes > scores[right].votes
+		}
+		if scores[left].modelMask != scores[right].modelMask {
+			return scores[left].modelMask > scores[right].modelMask
+		}
+		if scores[left].quality != scores[right].quality {
+			return scores[left].quality > scores[right].quality
+		}
+		return scores[left].character < scores[right].character
+	})
+	if len(scores) == 0 {
+		return glyphVoteScore{}, 0
+	}
+	runnerVotes := 0
+	if len(scores) > 1 {
+		runnerVotes = scores[1].votes
+	}
+	return scores[0], runnerVotes
+}
+
+func selectBestGlyphMatch(matches []glyphMatch) glyphMatch {
+	if len(matches) == 0 {
+		return glyphMatch{distance: math.Inf(1)}
+	}
+	sort.Slice(matches, func(left, right int) bool {
+		if matches[left].distance == matches[right].distance {
+			return matches[left].margin > matches[right].margin
+		}
+		return matches[left].distance < matches[right].distance
+	})
+	best := matches[0]
+	// A second extraction method that prefers another character is evidence
+	// against the winner. A close disagreement must be rejected even when the
+	// winner's own template margin looks healthy.
+	for _, alternative := range matches[1:] {
+		if alternative.character == best.character {
+			continue
+		}
+		best.margin = minFloat(best.margin, alternative.distance-best.distance)
+	}
+	return best
+}
+
 func (s *EmbeddedOCRSolver) classify(glyph binaryGlyph) (byte, float64, float64) {
+	return s.classifyWithTemplates(glyph, s.templates)
+}
+
+func (s *EmbeddedOCRSolver) classifyWithTemplates(glyph binaryGlyph, templates map[byte][]preparedGlyph) (byte, float64, float64) {
 	type candidate struct {
 		character byte
 		distance  float64
@@ -143,7 +320,7 @@ func (s *EmbeddedOCRSolver) classify(glyph binaryGlyph) (byte, float64, float64)
 	for index := 0; index < len(s.alphabet); index++ {
 		character := s.alphabet[index]
 		nearest := [3]float64{math.Inf(1), math.Inf(1), math.Inf(1)}
-		for _, template := range s.templates[character] {
+		for _, template := range templates[character] {
 			distance := glyphDistance(prepared, template)
 			for neighbor := range nearest {
 				if distance >= nearest[neighbor] {
@@ -194,6 +371,7 @@ type binaryGlyph struct {
 type preparedGlyph struct {
 	binaryGlyph
 	foreground []int
+	rows       []uint64
 	holes      int
 }
 
@@ -211,35 +389,95 @@ func (glyph binaryGlyph) set(x, y int, value bool) {
 	}
 }
 
-func extractCaptchaGlyph(source image.Image, index, length int) (binaryGlyph, error) {
-	component, err := extractCaptchaComponent(source, index, length)
+func extractCaptchaGlyphVariants(source image.Image, index, length int) ([]binaryGlyph, error) {
+	components, err := extractCaptchaGlyphComponents(source, index, length, 0)
 	if err != nil {
-		return binaryGlyph{}, err
+		return nil, err
 	}
-	return normalizeGlyph(component, templateWidth, templateHeight), nil
+	variants := make([]binaryGlyph, 0, len(components))
+	for _, component := range components {
+		variant := normalizeGlyph(component, templateWidth, templateHeight)
+		duplicate := false
+		for _, existing := range variants {
+			if equalBinaryGlyph(existing, variant) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			variants = append(variants, variant)
+		}
+	}
+	return variants, nil
 }
 
-func extractCaptchaComponent(source image.Image, index, length int) (binaryGlyph, error) {
+func extractCaptchaGlyphComponents(source image.Image, index, length, horizontalInset int) ([]binaryGlyph, error) {
 	bounds := source.Bounds()
-	left := bounds.Min.X + int(math.Round(float64(index*bounds.Dx())/float64(length))) + 2
-	right := bounds.Min.X + int(math.Round(float64((index+1)*bounds.Dx())/float64(length))) - 2
+	left := bounds.Min.X + int(math.Round(float64(index*bounds.Dx())/float64(length))) + horizontalInset
+	right := bounds.Min.X + int(math.Round(float64((index+1)*bounds.Dx())/float64(length))) - horizontalInset
 	top := bounds.Min.Y + 3
 	bottom := bounds.Max.Y - 3
 	if right-left < 4 || bottom-top < 8 {
-		return binaryGlyph{}, errors.New("invalid captcha cell bounds")
+		return nil, errors.New("invalid captcha cell bounds")
 	}
-
-	width := right - left
-	height := bottom - top
-	if component, ok := dominantColorComponent(source, image.Rect(left, top, right, bottom)); ok && component.foregroundCount() >= 18 {
-		return component, nil
+	cell := image.Rect(left, top, right, bottom)
+	components := make([]binaryGlyph, 0, 2)
+	if component, ok := dominantColorComponent(source, cell); ok && component.foregroundCount() >= 18 {
+		components = append(components, component)
 	}
+	if component, err := grayscaleCaptchaComponent(source, cell); err == nil {
+		components = append(components, component)
+	}
+	if len(components) == 0 {
+		return nil, errors.New("no usable glyph component")
+	}
+	return components, nil
+}
 
+func extractCaptchaGlyphEnsembleComponents(source image.Image, index, length int) ([]binaryGlyph, error) {
+	bounds := source.Bounds()
+	left := bounds.Min.X + int(math.Round(float64(index*bounds.Dx())/float64(length)))
+	right := bounds.Min.X + int(math.Round(float64((index+1)*bounds.Dx())/float64(length)))
+	top := bounds.Min.Y + 3
+	bottom := bounds.Max.Y - 3
+	if right-left < 4 || bottom-top < 8 {
+		return nil, errors.New("invalid captcha cell bounds")
+	}
+	cell := image.Rect(left, top, right, bottom)
+	components := make([]binaryGlyph, 0, 6)
+	for _, tolerance := range [...]float64{0.035, 0.05, 0.07, 0.09, 0.11} {
+		component, ok := dominantColorComponentWithTolerance(source, cell, tolerance)
+		if !ok || component.foregroundCount() < 18 {
+			continue
+		}
+		components = appendUniqueGlyphComponent(components, component)
+	}
+	if component, err := grayscaleCaptchaComponent(source, cell); err == nil {
+		components = appendUniqueGlyphComponent(components, component)
+	}
+	if len(components) == 0 {
+		return nil, errors.New("no usable glyph component")
+	}
+	return components, nil
+}
+
+func appendUniqueGlyphComponent(components []binaryGlyph, candidate binaryGlyph) []binaryGlyph {
+	for _, existing := range components {
+		if equalBinaryGlyph(existing, candidate) {
+			return components
+		}
+	}
+	return append(components, candidate)
+}
+
+func grayscaleCaptchaComponent(source image.Image, bounds image.Rectangle) (binaryGlyph, error) {
+	width := bounds.Dx()
+	height := bounds.Dy()
 	gray := make([]uint8, width*height)
 	histogram := [256]int{}
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
-			red, green, blue, _ := source.At(left+x, top+y).RGBA()
+			red, green, blue, _ := source.At(bounds.Min.X+x, bounds.Min.Y+y).RGBA()
 			value := uint8((299*(red>>8) + 587*(green>>8) + 114*(blue>>8)) / 1000)
 			gray[y*width+x] = value
 			histogram[value]++
@@ -264,6 +502,18 @@ func extractCaptchaComponent(source image.Image, index, length int) (binaryGlyph
 	return component, nil
 }
 
+func equalBinaryGlyph(left, right binaryGlyph) bool {
+	if left.width != right.width || left.height != right.height || len(left.pixels) != len(right.pixels) {
+		return false
+	}
+	for position := range left.pixels {
+		if left.pixels[position] != right.pixels[position] {
+			return false
+		}
+	}
+	return true
+}
+
 type captchaColorCluster struct {
 	red    float64
 	green  float64
@@ -277,6 +527,10 @@ type captchaColorCluster struct {
 // a glyph color toward white, so clustering uses the direction from white
 // instead of comparing raw RGB values.
 func dominantColorComponent(source image.Image, bounds image.Rectangle) (binaryGlyph, bool) {
+	return dominantColorComponentWithTolerance(source, bounds, 0.11)
+}
+
+func dominantColorComponentWithTolerance(source image.Image, bounds image.Rectangle, colorTolerance float64) (binaryGlyph, bool) {
 	width, height := bounds.Dx(), bounds.Dy()
 	if width <= 0 || height <= 0 {
 		return binaryGlyph{}, false
@@ -352,7 +606,7 @@ func dominantColorComponent(source image.Image, bounds image.Rectangle) (binaryG
 				green /= total
 				blue /= total
 				difference := math.Abs(red-candidate.red) + math.Abs(green-candidate.green) + math.Abs(blue-candidate.blue)
-				if difference <= 0.11 {
+				if difference <= colorTolerance {
 					mask.set(x, y, true)
 				}
 			}
@@ -545,6 +799,27 @@ func normalizeGlyph(source binaryGlyph, width, height int) binaryGlyph {
 	return result
 }
 
+func normalizeGlyphPreservingAspect(source binaryGlyph, width, height int) binaryGlyph {
+	result := newBinaryGlyph(width, height)
+	if source.width <= 0 || source.height <= 0 || width <= 0 || height <= 0 {
+		return result
+	}
+	scale := minFloat(float64(width)/float64(source.width), float64(height)/float64(source.height))
+	fittedWidth := min(width, max(1, int(math.Round(float64(source.width)*scale))))
+	fittedHeight := min(height, max(1, int(math.Round(float64(source.height)*scale))))
+	fitted := normalizeGlyph(source, fittedWidth, fittedHeight)
+	offsetX := (width - fittedWidth) / 2
+	offsetY := (height - fittedHeight) / 2
+	for y := 0; y < fittedHeight; y++ {
+		for x := 0; x < fittedWidth; x++ {
+			if fitted.at(x, y) {
+				result.set(offsetX+x, offsetY+y, true)
+			}
+		}
+	}
+	return result
+}
+
 func (glyph binaryGlyph) foregroundCount() int {
 	count := 0
 	for _, foreground := range glyph.pixels {
@@ -572,9 +847,15 @@ func prepareGlyph(glyph binaryGlyph) preparedGlyph {
 		binaryGlyph: glyph,
 		holes:       countGlyphHoles(glyph),
 	}
+	if glyph.width <= 64 {
+		prepared.rows = make([]uint64, glyph.height)
+	}
 	for position, foreground := range glyph.pixels {
 		if foreground {
 			prepared.foreground = append(prepared.foreground, position)
+			if prepared.rows != nil {
+				prepared.rows[position/glyph.width] |= uint64(1) << uint(position%glyph.width)
+			}
 		}
 	}
 	return prepared
@@ -600,11 +881,26 @@ func alignedGlyphOverlapDistance(left, right preparedGlyph) float64 {
 	for offsetY := -2; offsetY <= 2; offsetY++ {
 		for offsetX := -2; offsetX <= 2; offsetX++ {
 			intersection := 0
-			for _, position := range left.foreground {
-				x := position%left.width + offsetX
-				y := position/left.width + offsetY
-				if right.at(x, y) {
-					intersection++
+			if left.rows != nil && right.rows != nil {
+				for leftY, row := range left.rows {
+					rightY := leftY + offsetY
+					if rightY < 0 || rightY >= len(right.rows) {
+						continue
+					}
+					if offsetX < 0 {
+						row >>= uint(-offsetX)
+					} else {
+						row <<= uint(offsetX)
+					}
+					intersection += bits.OnesCount64(row & right.rows[rightY])
+				}
+			} else {
+				for _, position := range left.foreground {
+					x := position%left.width + offsetX
+					y := position/left.width + offsetY
+					if right.at(x, y) {
+						intersection++
+					}
 				}
 			}
 			distance := 1 - 2*float64(intersection)/float64(len(left.foreground)+len(right.foreground))

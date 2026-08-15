@@ -1,220 +1,52 @@
 package rtasales
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 )
 
-// Store identifies one business-facing store visible to the authenticated
-// account. Upstream identifiers remain private to Client.
+// Store is an RTA-authorized store expressed only in business-facing values.
+// BusinessID is the exact identifier callers use in SalesQuery.
 type Store struct {
 	BusinessID string `json:"business_id"`
 	Label      string `json:"label"`
 }
 
+// storeRecord keeps RTA's query-only values private. They must not be exposed
+// through Store or persisted as an application-owned mapping.
 type storeRecord struct {
 	Store
 	upstreamID string
+	filterText string
 }
 
-type storeNode struct {
-	Label    string         `json:"label"`
-	StoreID  flexibleString `json:"storeId"`
-	Value    flexibleString `json:"value"`
-	Children []storeNode    `json:"children"`
-	Stores   []storeNode    `json:"stores"`
+type authorizedStoreOption struct {
+	Key   flexibleString `json:"key"`
+	Value string         `json:"value"`
 }
 
-type storeTreeData struct {
-	StoreTree []storeNode `json:"storeTree"`
-	Areas     []storeNode `json:"areas"`
-}
-
-// Stores returns the business-facing stores available to the authenticated
-// account. Results are cached and returned as a defensive copy.
+// Stores returns the authenticated account's authorized stores. Results are
+// cached for the life of the Client; call RefreshStores to reload them.
 func (c *Client) Stores(ctx context.Context) ([]Store, error) {
-	c.storesMu.RLock()
-	if len(c.stores) > 0 {
-		stores := publicStores(c.stores)
-		c.storesMu.RUnlock()
-		return stores, nil
+	records, err := c.loadStores(ctx, false)
+	if err != nil {
+		return nil, err
 	}
-	c.storesMu.RUnlock()
-
-	c.storeLoadMu.Lock()
-	defer c.storeLoadMu.Unlock()
-	// Another caller may have populated the cache while this caller waited.
-	c.storesMu.RLock()
-	if len(c.stores) > 0 {
-		stores := publicStores(c.stores)
-		c.storesMu.RUnlock()
-		return stores, nil
-	}
-	c.storesMu.RUnlock()
-	return c.refreshStoresLocked(ctx)
+	return publicStores(records), nil
 }
 
-// RefreshStores reloads the stores available to the account. Concurrent
-// callers share the refresh lock so the cache is replaced atomically.
+// RefreshStores reloads the authenticated account's authorized stores from
+// RTA and replaces the cache only after a complete, valid response.
 func (c *Client) RefreshStores(ctx context.Context) ([]Store, error) {
-	c.storeLoadMu.Lock()
-	defer c.storeLoadMu.Unlock()
-	return c.refreshStoresLocked(ctx)
-}
-
-func (c *Client) refreshStoresLocked(ctx context.Context) ([]Store, error) {
-	stores, treeError := c.loadStoreTree(ctx)
-	if treeError != nil || len(stores) == 0 {
-		flatStores, flatError := c.loadFlatStores(ctx)
-		if flatError != nil {
-			if treeError != nil {
-				return nil, errors.Join(treeError, flatError)
-			}
-			return nil, flatError
-		}
-		stores = flatStores
-	}
-	if len(stores) == 0 {
-		return nil, &ProtocolError{Operation: "load stores", Message: "RTA returned no stores"}
-	}
-	stores, err := validateStoreRecords(stores)
+	records, err := c.loadStores(ctx, true)
 	if err != nil {
 		return nil, err
 	}
-	c.storesMu.Lock()
-	c.stores = cloneStoreRecords(stores)
-	c.storesMu.Unlock()
-	return publicStores(stores), nil
-}
-
-func (c *Client) loadStoreTree(ctx context.Context) ([]storeRecord, error) {
-	body, err := c.doAuthenticated(ctx, "load store tree", func(ctx context.Context) (*http.Request, error) {
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoints.stock+"/storeStock/areasAndStores", nil)
-		if err == nil {
-			setStoreHeaders(request)
-		}
-		return request, err
-	})
-	if err != nil {
-		return nil, err
-	}
-	envelope, err := decodeSuccessfulEnvelope(body, "load store tree")
-	if err != nil {
-		return nil, err
-	}
-	var data storeTreeData
-	if err := json.Unmarshal(envelope.Data, &data); err != nil {
-		return nil, &ProtocolError{Operation: "load store tree", Message: "invalid store tree data", Err: err}
-	}
-	stores := make([]storeRecord, 0)
-	appendNodes(&stores, data.StoreTree)
-	appendNodes(&stores, data.Areas)
-	return stores, nil
-}
-
-func (c *Client) loadFlatStores(ctx context.Context) ([]storeRecord, error) {
-	body, err := c.doAuthenticated(ctx, "load flat stores", func(ctx context.Context) (*http.Request, error) {
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoints.stock+"/storeStock/allStore", nil)
-		if err == nil {
-			setStoreHeaders(request)
-		}
-		return request, err
-	})
-	if err != nil {
-		return nil, err
-	}
-	envelope, err := decodeSuccessfulEnvelope(body, "load flat stores")
-	if err != nil {
-		return nil, err
-	}
-	var nodes []storeNode
-	if err := json.Unmarshal(envelope.Data, &nodes); err != nil {
-		return nil, &ProtocolError{Operation: "load flat stores", Message: "invalid flat store data", Err: err}
-	}
-	stores := make([]storeRecord, 0, len(nodes))
-	appendNodes(&stores, nodes)
-	return stores, nil
-}
-
-func decodeSuccessfulEnvelope(body []byte, operation string) (rtaEnvelope, error) {
-	envelope, err := decodeEnvelope(body, operation)
-	if err != nil {
-		return envelope, err
-	}
-	code := string(envelope.Code)
-	if !successfulCode(code) {
-		return envelope, &ProtocolError{Operation: operation, Message: fmt.Sprintf("RTA code %s: %s", code, envelopeMessage(envelope))}
-	}
-	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
-		return envelope, &ProtocolError{Operation: operation, Message: "response data is empty"}
-	}
-	return envelope, nil
-}
-
-func appendNodes(stores *[]storeRecord, nodes []storeNode) {
-	for _, node := range nodes {
-		upstreamID := strings.TrimSpace(string(node.Value))
-		if upstreamID == "" {
-			upstreamID = strings.TrimSpace(string(node.StoreID))
-		}
-		label := strings.TrimSpace(node.Label)
-		businessID := businessIDFromLabel(label)
-		if upstreamID != "" && businessID != "" {
-			*stores = append(*stores, storeRecord{
-				Store: Store{
-					BusinessID: businessID,
-					Label:      label,
-				},
-				upstreamID: upstreamID,
-			})
-		}
-		appendNodes(stores, node.Stores)
-		appendNodes(stores, node.Children)
-	}
-}
-
-func businessIDFromLabel(label string) string {
-	parts := strings.FieldsFunc(strings.TrimSpace(label), func(character rune) bool {
-		switch character {
-		case '-', '－', '_', ' ', '\t', '(', '（':
-			return true
-		default:
-			return false
-		}
-	})
-	if len(parts) == 0 {
-		return ""
-	}
-	return strings.TrimSpace(parts[0])
-}
-
-func validateStoreRecords(input []storeRecord) ([]storeRecord, error) {
-	seen := make(map[string]storeRecord, len(input))
-	output := make([]storeRecord, 0, len(input))
-	for _, record := range input {
-		record.BusinessID = strings.TrimSpace(record.BusinessID)
-		record.Label = strings.TrimSpace(record.Label)
-		record.upstreamID = strings.TrimSpace(record.upstreamID)
-		if record.BusinessID == "" || record.upstreamID == "" {
-			continue
-		}
-		if existing, ok := seen[record.BusinessID]; ok {
-			if existing.upstreamID != record.upstreamID {
-				return nil, &ProtocolError{
-					Operation: "load stores",
-					Message:   fmt.Sprintf("business store %q has conflicting upstream records", record.BusinessID),
-				}
-			}
-			continue
-		}
-		seen[record.BusinessID] = record
-		output = append(output, record)
-	}
-	return output, nil
+	return publicStores(records), nil
 }
 
 func (c *Client) resolveStore(ctx context.Context, businessID string) (storeRecord, error) {
@@ -222,46 +54,120 @@ func (c *Client) resolveStore(ctx context.Context, businessID string) (storeReco
 	if businessID == "" {
 		return storeRecord{}, &InputError{Field: "BusinessStoreID", Message: "is required"}
 	}
-	c.storesMu.RLock()
-	hadCache := len(c.stores) > 0
-	cached := cloneStoreRecords(c.stores)
-	c.storesMu.RUnlock()
-	if !hadCache {
-		if _, err := c.RefreshStores(ctx); err != nil {
-			return storeRecord{}, err
-		}
-		c.storesMu.RLock()
-		cached = cloneStoreRecords(c.stores)
-		c.storesMu.RUnlock()
+	records, err := c.loadStores(ctx, false)
+	if err != nil {
+		return storeRecord{}, err
 	}
-	if store, ok := findBusinessStore(cached, businessID); ok {
-		return store, nil
-	}
-	if hadCache {
-		if _, err := c.RefreshStores(ctx); err != nil {
-			return storeRecord{}, err
-		}
-		c.storesMu.RLock()
-		refreshed := cloneStoreRecords(c.stores)
-		c.storesMu.RUnlock()
-		if store, ok := findBusinessStore(refreshed, businessID); ok {
-			return store, nil
+	for _, record := range records {
+		if record.BusinessID == businessID {
+			return record, nil
 		}
 	}
 	return storeRecord{}, &StoreNotFoundError{BusinessStoreID: businessID}
 }
 
-func findBusinessStore(stores []storeRecord, wanted string) (storeRecord, bool) {
-	for _, store := range stores {
-		if store.BusinessID == wanted {
-			return store, true
+func (c *Client) loadStores(ctx context.Context, refresh bool) ([]storeRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !refresh {
+		if records, ok := c.cachedStores(); ok {
+			return records, nil
 		}
 	}
-	return storeRecord{}, false
+
+	c.storeLoadMu.Lock()
+	defer c.storeLoadMu.Unlock()
+	if !refresh {
+		if records, ok := c.cachedStores(); ok {
+			return records, nil
+		}
+	}
+
+	records, err := c.fetchAuthorizedStores(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c.storesMu.Lock()
+	c.stores = append([]storeRecord(nil), records...)
+	c.storesLoaded = true
+	c.storesMu.Unlock()
+	return append([]storeRecord(nil), records...), nil
 }
 
-func cloneStoreRecords(stores []storeRecord) []storeRecord {
-	return append([]storeRecord(nil), stores...)
+func (c *Client) cachedStores() ([]storeRecord, bool) {
+	c.storesMu.RLock()
+	defer c.storesMu.RUnlock()
+	if !c.storesLoaded {
+		return nil, false
+	}
+	return append([]storeRecord(nil), c.stores...), true
+}
+
+func (c *Client) fetchAuthorizedStores(ctx context.Context) ([]storeRecord, error) {
+	const operation = "load authorized stores"
+	body, err := c.doAuthenticated(ctx, operation, func(ctx context.Context) (*http.Request, error) {
+		request, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoints.authStores+"/appQuery/listStore", nil)
+		if requestErr == nil {
+			setCommonHeaders(request)
+			request.Header.Set("Accept", "application/json")
+			request.Header.Set("Origin", "https://partner.rta-os.com")
+			request.Header.Set("Referer", "https://partner.rta-os.com/")
+		}
+		return request, requestErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := decodeSuccessfulEnvelope(body, operation)
+	if err != nil {
+		return nil, err
+	}
+	var upstream []authorizedStoreOption
+	decoder := json.NewDecoder(bytes.NewReader(envelope.Data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&upstream); err != nil {
+		return nil, &ProtocolError{Operation: operation, Message: "invalid authorized-store data", Err: err}
+	}
+
+	records := make([]storeRecord, 0, len(upstream))
+	byBusinessID := make(map[string]storeRecord, len(upstream))
+	for _, option := range upstream {
+		businessID, label, validValue := splitAuthorizedStoreValue(option.Value)
+		record := storeRecord{
+			Store: Store{
+				BusinessID: businessID,
+				Label:      label,
+			},
+			upstreamID: strings.TrimSpace(string(option.Key)),
+			filterText: label,
+		}
+		if !validValue || record.upstreamID == "" {
+			continue
+		}
+		if existing, exists := byBusinessID[record.BusinessID]; exists {
+			if existing.upstreamID != record.upstreamID || existing.filterText != record.filterText {
+				return nil, &ProtocolError{Operation: operation, Message: "authorized-store data contains an ambiguous business ID"}
+			}
+			continue
+		}
+		byBusinessID[record.BusinessID] = record
+		records = append(records, record)
+	}
+	if len(records) == 0 {
+		return nil, &ProtocolError{Operation: operation, Message: "authorized-store data contains no usable stores"}
+	}
+	sort.Slice(records, func(left, right int) bool {
+		return records[left].BusinessID < records[right].BusinessID
+	})
+	return records, nil
+}
+
+func splitAuthorizedStoreValue(value string) (businessID, label string, ok bool) {
+	label = strings.TrimSpace(value)
+	businessID, storeName, found := strings.Cut(label, "-")
+	businessID = strings.TrimSpace(businessID)
+	return businessID, label, found && businessID != "" && strings.TrimSpace(storeName) != ""
 }
 
 func publicStores(records []storeRecord) []Store {
@@ -270,11 +176,4 @@ func publicStores(records []storeRecord) []Store {
 		stores[index] = record.Store
 	}
 	return stores
-}
-
-func setStoreHeaders(request *http.Request) {
-	setCommonHeaders(request)
-	request.Header.Set("Accept", "application/json, text/javascript, */*; q=0.01")
-	request.Header.Set("Origin", "https://partner.rta-os.com")
-	request.Header.Set("Referer", "https://partner.rta-os.com/")
 }

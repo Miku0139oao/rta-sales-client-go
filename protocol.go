@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -57,7 +58,22 @@ func envelopeMessage(envelope rtaEnvelope) string {
 	return compactPreview(string(envelope.Result))
 }
 
-func successfulCode(code string) bool { return code == "0000" || code == "0" }
+func decodeSuccessfulEnvelope(body []byte, operation string) (rtaEnvelope, error) {
+	envelope, err := decodeEnvelope(body, operation)
+	if err != nil {
+		return envelope, err
+	}
+	code := string(envelope.Code)
+	if !successfulCode(code) {
+		return envelope, &ProtocolError{Operation: operation, Message: fmt.Sprintf("RTA code %s: %s", code, envelopeMessage(envelope))}
+	}
+	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
+		return envelope, &ProtocolError{Operation: operation, Message: "response data is empty"}
+	}
+	return envelope, nil
+}
+
+func successfulCode(code string) bool { return code == "0000" || code == "0" || code == "success" }
 
 func compactPreview(value string) string {
 	value = strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ").Replace(value))
@@ -110,4 +126,19 @@ func floatFrom(value any) float64 {
 	default:
 		return 0
 	}
+}
+
+func optionalFloatFrom(value any) *float64 {
+	if value == nil {
+		return nil
+	}
+	text := strings.TrimSpace(stringFrom(value))
+	if text == "" {
+		return nil
+	}
+	parsed, err := strconv.ParseFloat(text, 64)
+	if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return nil
+	}
+	return &parsed
 }

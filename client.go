@@ -19,31 +19,41 @@ import (
 
 const (
 	defaultPageConcurrency = 4
+	defaultLoginAttempts   = 4
+	maximumLoginAttempts   = 10
 	maxResponseBytes       = 64 << 20
 	userAgent              = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36 Edg/118.0.1264.123"
 )
 
 type endpoints struct {
-	sso   string
-	stock string
-	dsa   string
+	sso        string
+	dsa        string
+	cockpit    string
+	authStores string
 }
 
 var productionEndpoints = endpoints{
-	sso:   "https://mansso.rta-os.com",
-	stock: "https://dmall-goods-stock-man.rta-os.com",
-	dsa:   "https://dsa-api-partner.rta-os.com",
+	sso:        "https://mansso.rta-os.com",
+	dsa:        "https://dsa-api-partner.rta-os.com",
+	cockpit:    "https://cockpit-report-gateway.rta-os.com",
+	authStores: "https://manrdprequisition-partner.rta-os.com",
 }
 
-// Config configures one RTA account. Create separate clients for separate
-// accounts so cookies and authorized-store state cannot leak between them.
+// Config configures one RTA account. The client retrieves that account's
+// authorized business-store mapping directly from RTA.
 type Config struct {
-	Account         string
-	Password        string
-	CaptchaSolvers  []CaptchaSolver
-	CookieFile      string
+	Account        string
+	Password       string
+	CaptchaSolvers []CaptchaSolver
+	CookieFile     string
+	// CookieStore persists the session without exposing cookie bytes to a
+	// plaintext file. It is mutually exclusive with CookieFile.
+	CookieStore     CookieStore
 	HTTPClient      *http.Client
 	PageConcurrency int
+	// LoginAttempts is the maximum number of fresh captcha/login attempts.
+	// Non-positive values use four; values above ten are rejected.
+	LoginAttempts int
 }
 
 // Client is safe for concurrent use.
@@ -54,14 +64,16 @@ type Client struct {
 	httpClient      *http.Client
 	saveCookies     func() error
 	pageConcurrency int
+	loginAttempts   int
 	endpoints       endpoints
 
 	loginMu        sync.Mutex
 	sessionVersion atomic.Uint64
 
-	storesMu    sync.RWMutex
-	stores      []storeRecord
-	storeLoadMu sync.Mutex
+	storesMu     sync.RWMutex
+	stores       []storeRecord
+	storesLoaded bool
+	storeLoadMu  sync.Mutex
 }
 
 // NewClient creates an account-scoped client. It does not perform network I/O;
@@ -83,6 +95,13 @@ func NewClient(config Config) (*Client, error) {
 	}
 	if len(solvers) == 0 {
 		return nil, &InputError{Field: "CaptchaSolvers", Message: "at least one solver is required"}
+	}
+	loginAttempts := config.LoginAttempts
+	if loginAttempts <= 0 {
+		loginAttempts = defaultLoginAttempts
+	}
+	if loginAttempts > maximumLoginAttempts {
+		return nil, &InputError{Field: "LoginAttempts", Message: "must not exceed 10"}
 	}
 
 	jar, saveCookies, err := clientCookieJar(config)
@@ -111,11 +130,21 @@ func NewClient(config Config) (*Client, error) {
 		httpClient:      &httpClient,
 		saveCookies:     saveCookies,
 		pageConcurrency: concurrency,
+		loginAttempts:   loginAttempts,
 		endpoints:       productionEndpoints,
 	}, nil
 }
 
 func clientCookieJar(config Config) (http.CookieJar, func() error, error) {
+	if config.CookieStore != nil {
+		if nilCookieStore(config.CookieStore) {
+			return nil, nil, &InputError{Field: "CookieStore", Message: "must not be nil"}
+		}
+		if strings.TrimSpace(config.CookieFile) != "" {
+			return nil, nil, &InputError{Field: "CookieStore", Message: "must not be used together with CookieFile"}
+		}
+		return cookieJarFromStore(config.CookieStore)
+	}
 	filename := strings.TrimSpace(config.CookieFile)
 	if filename != "" {
 		if parent := filepath.Dir(filename); parent != "." {

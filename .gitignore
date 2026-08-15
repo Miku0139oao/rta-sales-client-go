@@ -3,6 +3,11 @@ cookies
 cookies.json
 *.cookies.json
 
+# Private runtime mappings and generated workbooks
+*.local.csv
+*.local.json
+*.filled.xlsx
+
 # Local credentials and environment
 .env
 .env.*
@@ -10,9 +15,17 @@ cookies.json
 
 # Build and test output
 bin/
+release/
 coverage.out
 *.test
 *.exe
+desktop/frontend/node_modules/
+desktop/frontend/coverage/
+desktop/frontend/dist/*
+!desktop/frontend/dist/.gitkeep
+desktop/frontend/src/lib/wails/
+desktop/frontend/package.json.md5
+cmd/rta-excel-filler/build/bin/
 
 # Editors and operating systems
 .idea/
