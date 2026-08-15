@@ -88,8 +88,15 @@ func TestEmbeddedOCRSolverReviewsConfidentColorNoiseMistake(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if baseline != '0' || distance > solver.maximumDistance || margin < solver.minimumScoreMargin {
-		t.Fatalf("baseline=%q distance=%.3f margin=%.3f, want a confident false-positive 0", baseline, distance, margin)
+	if baseline == '0' && distance <= solver.maximumDistance && margin >= solver.minimumScoreMargin {
+		t.Fatalf("baseline still treats a noise-closed c as a submittable 0 (distance=%.3f margin=%.3f)", distance, margin)
+	}
+	final, _, _, err := solver.classifyCaptchaCharacter(decoded, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final != 'c' {
+		t.Fatalf("reviewed character=%q, want c (baseline=%q)", final, baseline)
 	}
 	answer, err := solver.Solve(context.Background(), encoded)
 	if err != nil {
@@ -97,6 +104,31 @@ func TestEmbeddedOCRSolverReviewsConfidentColorNoiseMistake(t *testing.T) {
 	}
 	if answer != "e2c63" {
 		t.Fatalf("answer=%q, want e2c63", answer)
+	}
+}
+
+func TestInspectGlyphTopologySeparatesOpenAndClosedLoops(t *testing.T) {
+	templates := decodedLearnedTemplates("0c3")
+	if len(templates['0']) == 0 || len(templates['c']) == 0 || len(templates['3']) == 0 {
+		t.Fatal("missing templates")
+	}
+	zero := inspectGlyphTopology(templates['0'][0])
+	if zero.holes == 0 {
+		t.Fatalf("0 topology=%+v, want at least one hole", zero)
+	}
+	cee := inspectGlyphTopology(templates['c'][0])
+	if !cee.rightOpening && cee.holes != 0 {
+		t.Fatalf("c topology=%+v, want a right opening or no hole", cee)
+	}
+	three := inspectGlyphTopology(templates['3'][0])
+	if !three.leftOpening && three.holes != 0 {
+		t.Fatalf("3 topology=%+v, want a left opening or no hole", three)
+	}
+	if topologyAgrees('0', cee) {
+		t.Fatalf("open c should not agree with 0 topology %+v", cee)
+	}
+	if !topologyAgrees('c', cee) {
+		t.Fatalf("c should agree with its own topology %+v", cee)
 	}
 }
 
