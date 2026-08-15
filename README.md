@@ -70,8 +70,9 @@ removes its saved credentials and encrypted cookies.
    date/store jobs.
 3. Select **Analyze**. Each unique date/store pair is queried once, and every
    RTA request covers exactly one calendar day.
-4. Review the proposed values: column `L` is Article View daily sales, and
-   column `AB` is Trend View daily transaction count.
+4. Review the proposed values: column `L` is Trend View daily gross sales
+   (sales less returns), and column `AB` is the same Trend View day's
+   transaction count.
 5. If work was cancelled after a workbook plan was created, or a temporary job
    still failed after the built-in retries, select **Retry failed/pending**. If
    cancellation happened while signing in or loading authorized stores, run
@@ -196,7 +197,7 @@ RTA returns the authorized stores as a `data` array. For each entry, the client 
 | `Category` | Optional caller-owned result label; it does not filter RTA by itself |
 | `ItemCodes` | Optional SKU/ManCode filter; empty queries all products |
 
-Blank and duplicate `ItemCodes` are removed before the request. `TotalTransactionCount` is read directly from the matching daily rows in RTA Trend View (`group_sales_ticket_num`) and summed over the requested inclusive date range. It is not derived from Article View item rows.
+Blank and duplicate `ItemCodes` are removed before the request. `TrendGrossSaleAmount` and `TotalTransactionCount` are read directly from matching daily rows in RTA Trend View (`gross_sales_gross_sale_untaxed_amt` and `group_sales_ticket_num`) and summed over the requested inclusive date range. They are whole-store values and are not derived from Article View item rows. `TotalAmount` remains the item-filterable Article View aggregate.
 
 ## Fill an existing Excel workbook
 
@@ -204,7 +205,7 @@ Blank and duplicate `ItemCodes` are removed before the request. `TotalTransactio
 
 - column `C`: business-facing store ID;
 - column `F`: calendar date;
-- column `L`: daily sales amount;
+- column `L`: the matching date's Trend View gross sales amount (sales less returns);
 - column `AB`: the matching date's Trend View transaction count.
 
 The command logs in first, loads the account's `data[]` authorized-store list, and then compares every row for the requested date. Column `C` is resolved against the string prefix of each store `value`; the private `key` is used only by Article View, while Trend View uses that prefix. Rows belonging to stores outside the signed-in account are skipped without being queried. No row number, local store mapping, or extra store environment variable is needed.
@@ -347,7 +348,7 @@ type CaptchaSolver interface {
 
 ## Results and errors
 
-`SalesResult` contains the selected `Store`, date range, normalized item codes, every item page in deterministic order, `TotalAmount`, Trend View `TotalTransactionCount`, `GrossQuantity`, category aggregates, and query duration. Each `SaleItem` also retains the complete upstream row in `Raw`.
+`SalesResult` contains the selected `Store`, date range, normalized item codes, every item page in deterministic order, Article View `TotalAmount`, Trend View `TrendGrossSaleAmount` and `TotalTransactionCount`, `GrossQuantity`, category aggregates, and query duration. Each `SaleItem` also retains the complete upstream row in `Raw`.
 
 Typed errors support `errors.As`:
 

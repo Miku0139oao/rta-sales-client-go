@@ -93,8 +93,8 @@ type CurrentValues struct {
 	TransactionCountFormula string
 }
 
-// ProposedValues records the Article View daily sales and Trend View daily
-// transaction aggregate returned for a row. Nil means no safe proposal exists.
+// ProposedValues records the Trend View daily gross sales and transaction
+// aggregates returned for a row. Nil means no safe proposal exists.
 type ProposedValues struct {
 	DailySales       *float64
 	TransactionCount *float64
@@ -842,7 +842,8 @@ func validateSalesResult(result *rtasales.SalesResult) string {
 	if result == nil || len(result.Items) == 0 {
 		return "no_data"
 	}
-	if math.IsNaN(result.TotalAmount) || math.IsInf(result.TotalAmount, 0) {
+	sales := workbookSalesAmount(result)
+	if math.IsNaN(sales) || math.IsInf(sales, 0) {
 		return "invalid_sales_total"
 	}
 	if result.TotalTransactionCount == nil || math.IsNaN(*result.TotalTransactionCount) || math.IsInf(*result.TotalTransactionCount, 0) {
@@ -856,7 +857,7 @@ func validateSalesResult(result *rtasales.SalesResult) string {
 }
 
 func (state *batchPlanState) populateSuccessfulRowLocked(row *batchRow, result *rtasales.SalesResult) {
-	sales := result.TotalAmount
+	sales := workbookSalesAmount(result)
 	transactions := math.Round(*result.TotalTransactionCount)
 	row.proposed = ProposedValues{DailySales: floatPointer(sales), TransactionCount: floatPointer(transactions)}
 	row.status = RowStatusReady
@@ -893,6 +894,15 @@ func (state *batchPlanState) populateSuccessfulRowLocked(row *batchRow, result *
 	if len(row.updates) == 0 {
 		row.status = RowStatusUnchanged
 	}
+}
+
+func workbookSalesAmount(result *rtasales.SalesResult) float64 {
+	if result.TrendGrossSaleAmount != nil {
+		return *result.TrendGrossSaleAmount
+	}
+	// Preserve compatibility with custom SalesProvider implementations that
+	// predate the Trend View aggregate field.
+	return result.TotalAmount
 }
 
 func (state *batchPlanState) rebuildReportLocked() {

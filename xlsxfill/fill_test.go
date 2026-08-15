@@ -34,9 +34,11 @@ func TestFillWritesOnlyManualInputsAndPreservesFormulasAndStyles(t *testing.T) {
 	wantLStyle, wantABStyle := createTestWorkbook(t, input, targetDate)
 	countA := 431.0
 	countB := 10.0
+	trendSalesA := 52000.25
 	provider := &fakeSalesProvider{results: map[string]*rtasales.SalesResult{
 		"RTA_A": {
 			TotalAmount:           52374,
+			TrendGrossSaleAmount:  &trendSalesA,
 			TotalTransactionCount: &countA,
 			Items:                 []rtasales.SaleItem{{Matnr: "ITEM_A"}},
 		},
@@ -67,7 +69,7 @@ func TestFillWritesOnlyManualInputsAndPreservesFormulasAndStyles(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = book.Close() }()
-	assertCellValue(t, book, "L2", "52374")
+	assertCellValue(t, book, "L2", "52000.25")
 	assertCellValue(t, book, "AB2", "431")
 	assertCellValue(t, book, "L3", "999")
 	assertCellValue(t, book, "AB3", "99")
@@ -224,8 +226,9 @@ func TestFillRejectsNonFiniteSalesTotal(t *testing.T) {
 	targetDate := time.Date(2026, time.August, 13, 0, 0, 0, 0, time.Local)
 	createTestWorkbook(t, input, targetDate)
 	count := 431.0
+	invalidTrendSales := math.NaN()
 	provider := &fakeSalesProvider{results: map[string]*rtasales.SalesResult{
-		"RTA_A": {TotalAmount: math.NaN(), TotalTransactionCount: &count, Items: []rtasales.SaleItem{{Matnr: "ITEM_A"}}},
+		"RTA_A": {TotalAmount: 52374, TrendGrossSaleAmount: &invalidTrendSales, TotalTransactionCount: &count, Items: []rtasales.SaleItem{{Matnr: "ITEM_A"}}},
 	}}
 	report, err := Fill(context.Background(), provider, Request{
 		InputPath:  input,

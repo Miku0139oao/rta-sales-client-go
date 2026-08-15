@@ -51,7 +51,7 @@ Get-Content .\SHA256SUMS.txt
 1. 開啟 `.xlsx`，選擇工作表與包含起訖日的日期範圍。
 2. 檢查掃描摘要；預設安全上限是 `2,000` 個不重複的日期／門店 jobs。
 3. 執行「分析」。每個日期／門店組合只查一次，而且每筆 RTA 請求都只涵蓋一個日曆日。
-4. 檢查預覽：`L` 欄是 Article View 當日銷售額，`AB` 欄是 Trend View 當日交易次數。
+4. 檢查預覽：`L` 欄是 Trend View 當日總銷售金額（銷售扣除退貨），`AB` 欄是同一個 Trend View 日期列的交易次數。
 5. 若在活頁簿 plan 建立後取消，或暫時性 job 在內建重試後仍失敗，可執行「重試失敗／未排程項目」。若在登入或載入授權門店時取消，因尚未建立可重試的 plan，必須重新執行「分析」。取消後的不完整 plan 絕不可寫入。
 6. 另存新活頁簿。嚴格模式要求 plan 已完整結束且沒有問題。只有分析完整結束後才能選擇部分輸出；所有問題列會整列維持原值，且必須明確確認。
 
@@ -165,7 +165,7 @@ RTA 會以 `data` array 回傳授權門店。套件逐筆處理：`key` 只保�
 | `Category` | 選用的呼叫端結果標籤，本身不會篩選 RTA 資料 |
 | `ItemCodes` | 選用的 SKU／ManCode 篩選；空值查詢全部商品 |
 
-送出前會移除空白與重複的 `ItemCodes`。`TotalTransactionCount` 直接讀取 RTA Trend View 同門店、同日期的 `group_sales_ticket_num`，日期範圍超過一天時會加總範圍內的每日列；不會由 Article View 商品明細推算。
+送出前會移除空白與重複的 `ItemCodes`。`TrendGrossSaleAmount` 與 `TotalTransactionCount` 直接讀取 RTA Trend View 同門店、同日期的 `gross_sales_gross_sale_untaxed_amt` 與 `group_sales_ticket_num`，日期範圍超過一天時會加總範圍內的每日列。兩者皆為全店口徑，不會由 Article View 商品明細推算；`TotalAmount` 則維持可依商品篩選的 Article View 加總。
 
 ## 填入既有 Excel 活頁簿
 
@@ -173,7 +173,7 @@ RTA 會以 `data` array 回傳授權門店。套件逐筆處理：`key` 只保�
 
 - `C` 欄：業務門店編號；
 - `F` 欄：日曆日期；
-- `L` 欄：當日銷售額；
+- `L` 欄：相同日期的 Trend View 總銷售金額（銷售扣除退貨）；
 - `AB` 欄：相同日期的 Trend View 交易次數。
 
 指令會先登入並取得此帳號的 `data[]` 授權門店，再自動比對指定日期的所有列。程式以每筆 `value` 第一個 `-` 前的字串與 `C` 欄精確比對；私有 `key` 只供 Article View 使用，Trend View 使用該字串前綴。屬於其他帳號的門店列會在查詢前略過。不需要手動提供列號、本機門店對照或額外門店環境變數。
@@ -303,7 +303,7 @@ type CaptchaSolver interface {
 
 ## 回傳結果與錯誤
 
-`SalesResult` 包含所選 `Store`、日期範圍、正規化商品編號、依分頁順序排列的所有明細、`TotalAmount`、Trend View 的 `TotalTransactionCount`、`GrossQuantity`、分類彙總與查詢時間。每個 `SaleItem` 的 `Raw` 亦保留完整上游列。
+`SalesResult` 包含所選 `Store`、日期範圍、正規化商品編號、依分頁順序排列的所有明細、Article View 的 `TotalAmount`、Trend View 的 `TrendGrossSaleAmount` 與 `TotalTransactionCount`、`GrossQuantity`、分類彙總與查詢時間。每個 `SaleItem` 的 `Raw` 亦保留完整上游列。
 
 可使用 `errors.As` 判斷：
 

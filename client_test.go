@@ -154,11 +154,12 @@ func (f *rtaFixture) serveHTTP(response http.ResponseWriter, request *http.Reque
 		writeJSON(response, map[string]any{
 			"code": 0,
 			"data": map[string]any{
-				"count": 3,
+				"count": 4,
 				"data": []any{
-					map[string]any{"show_date": "25-06-2026", "group_sales_ticket_num": "120"},
-					map[string]any{"show_date": "26-06-2026", "group_sales_ticket_num": 311},
-					map[string]any{"show_date": "27-06-2026", "group_sales_ticket_num": "4000"},
+					map[string]any{"show_date": "25-06-2026", "group_sales_ticket_num": "120", "gross_sales_gross_sale_untaxed_amt": "100.25"},
+					map[string]any{"show_date": "26-06-2026", "group_sales_ticket_num": 311, "gross_sales_gross_sale_untaxed_amt": 200.5},
+					map[string]any{"show_date": "27-06-2026", "group_sales_ticket_num": "4000", "gross_sales_gross_sale_untaxed_amt": 5000},
+					map[string]any{"show_date": "", "group_sales_ticket_num": 431, "gross_sales_gross_sale_untaxed_amt": 300.75},
 				},
 			},
 		})
@@ -248,6 +249,9 @@ func TestSalesResolvesStorePaginatesAndAggregates(t *testing.T) {
 	if result.TotalAmount != 31 || result.GrossQuantity != 3 {
 		t.Fatalf("aggregate total=%v quantity=%v, want 31/3", result.TotalAmount, result.GrossQuantity)
 	}
+	if result.TrendGrossSaleAmount == nil || *result.TrendGrossSaleAmount != 300.75 {
+		t.Fatalf("Trend View gross sales total=%v, want 300.75", result.TrendGrossSaleAmount)
+	}
 	if result.TotalTransactionCount == nil || *result.TotalTransactionCount != 431 {
 		t.Fatalf("Trend View transaction total=%v, want 431", result.TotalTransactionCount)
 	}
@@ -301,8 +305,8 @@ func TestSalesResolvesStorePaginatesAndAggregates(t *testing.T) {
 	if err := json.Unmarshal([]byte(transactionForm.Get("showColumns")), &columns); err != nil {
 		t.Fatalf("decode Trend View columns: %v", err)
 	}
-	if !containsString(columns, "show_date") || !containsString(columns, "group_sales_ticket_num") {
-		t.Fatalf("Trend View columns omit date or transaction fields: %v", columns)
+	if !containsString(columns, "show_date") || !containsString(columns, "group_sales_ticket_num") || !containsString(columns, "gross_sales_gross_sale_untaxed_amt") {
+		t.Fatalf("Trend View columns omit date, transaction, or gross sales fields: %v", columns)
 	}
 }
 

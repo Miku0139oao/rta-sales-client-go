@@ -78,6 +78,10 @@ type SalesResult struct {
 	Category    string   `json:"category"`
 	ItemCodes   []string `json:"item_codes,omitempty"`
 	TotalAmount float64  `json:"total_amount"`
+	// TrendGrossSaleAmount is the whole-store Trend View gross sales amount
+	// (sales less returns) for the selected calendar-date range. It is kept
+	// separate from the item-filterable Article View TotalAmount.
+	TrendGrossSaleAmount *float64 `json:"trend_gross_sale_amount,omitempty"`
 	// TotalTransactionCount is the Trend View transaction total for the
 	// selected calendar-date range. It is never derived from item rows because
 	// one transaction can contain multiple items.
@@ -158,6 +162,11 @@ type trendTransactionDataEnvelope struct {
 	Data  []map[string]any `json:"data"`
 }
 
+type trendTotals struct {
+	grossSaleAmount  *float64
+	transactionCount *float64
+}
+
 // Sales resolves the requested business store through RTA's authenticated
 // authorized-store list, fetches every result page, and returns raw rows plus
 // deterministic aggregates. RTA's query-only store values remain private.
@@ -189,7 +198,7 @@ func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, err
 	for _, page := range pages {
 		items = append(items, page...)
 	}
-	totalTransactionCount, err := c.fetchTrendTransactionCount(ctx, query, store)
+	trend, err := c.fetchTrendTotals(ctx, query, store)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +210,8 @@ func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, err
 		Category:              query.Category,
 		ItemCodes:             append([]string(nil), query.ItemCodes...),
 		TotalAmount:           total,
-		TotalTransactionCount: totalTransactionCount,
+		TrendGrossSaleAmount:  trend.grossSaleAmount,
+		TotalTransactionCount: trend.transactionCount,
 		GrossQuantity:         quantity,
 		Items:                 items,
 		Categories:            categories,
@@ -209,7 +219,7 @@ func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, err
 	}, nil
 }
 
-func (c *Client) fetchTrendTransactionCount(ctx context.Context, query SalesQuery, store storeRecord) (*float64, error) {
+func (c *Client) fetchTrendTotals(ctx context.Context, query SalesQuery, store storeRecord) (trendTotals, error) {
 	payload := trendTransactionQueryPayload{
 		SiteCode:     store.BusinessID,
 		DateType:     "1",
@@ -219,20 +229,21 @@ func (c *Client) fetchTrendTransactionCount(ctx context.Context, query SalesQuer
 	}
 	queryJSON, err := json.Marshal(payload)
 	if err != nil {
-		return nil, err
+		return trendTotals{}, err
 	}
 	columnsJSON, err := json.Marshal(trendTransactionColumns)
 	if err != nil {
-		return nil, err
+		return trendTotals{}, err
 	}
-	total := 0.0
+	transactionTotal := 0.0
+	grossSaleTotal := 0.0
 	found := false
 	startKey := query.StartDate.Format("20060102")
 	endKey := query.EndDate.Format("20060102")
 	for page := 1; ; page++ {
 		rows, count, err := c.fetchTrendTransactionPage(ctx, queryJSON, columnsJSON, page)
 		if err != nil {
-			return nil, err
+			return trendTotals{}, err
 		}
 		for _, row := range rows {
 			dateText := strings.TrimSpace(stringFrom(row["show_date"]))
@@ -241,16 +252,21 @@ func (c *Client) fetchTrendTransactionCount(ctx context.Context, query SalesQuer
 			}
 			dateKey, err := trendDateKey(dateText)
 			if err != nil {
-				return nil, &ProtocolError{Operation: "fetch Trend View transaction count", Message: "a Trend View row has an invalid date", Err: err}
+				return trendTotals{}, &ProtocolError{Operation: "fetch Trend View totals", Message: "a Trend View row has an invalid date", Err: err}
 			}
 			if dateKey < startKey || dateKey > endKey {
 				continue
 			}
-			value := optionalFloatFrom(row["group_sales_ticket_num"])
-			if value == nil {
-				return nil, &ProtocolError{Operation: "fetch Trend View transaction count", Message: "a dated Trend View row has no valid transaction count"}
+			transactionCount := optionalFloatFrom(row["group_sales_ticket_num"])
+			if transactionCount == nil {
+				return trendTotals{}, &ProtocolError{Operation: "fetch Trend View totals", Message: "a dated Trend View row has no valid transaction count"}
 			}
-			total += *value
+			grossSaleAmount := optionalFloatFrom(row["gross_sales_gross_sale_untaxed_amt"])
+			if grossSaleAmount == nil {
+				return trendTotals{}, &ProtocolError{Operation: "fetch Trend View totals", Message: "a dated Trend View row has no valid gross sales amount"}
+			}
+			transactionTotal += *transactionCount
+			grossSaleTotal += *grossSaleAmount
 			found = true
 		}
 		if page*trendTransactionPageSize >= count || len(rows) == 0 {
@@ -258,9 +274,9 @@ func (c *Client) fetchTrendTransactionCount(ctx context.Context, query SalesQuer
 		}
 	}
 	if !found {
-		return nil, nil
+		return trendTotals{}, nil
 	}
-	return &total, nil
+	return trendTotals{grossSaleAmount: &grossSaleTotal, transactionCount: &transactionTotal}, nil
 }
 
 func trendDateKey(value string) (string, error) {
@@ -274,7 +290,7 @@ func trendDateKey(value string) (string, error) {
 }
 
 func (c *Client) fetchTrendTransactionPage(ctx context.Context, queryJSON, columnsJSON []byte, page int) ([]map[string]any, int, error) {
-	const operation = "fetch Trend View transaction count"
+	const operation = "fetch Trend View totals"
 	form := url.Values{
 		"pageCode":    {"storeRealTimeSalesMannings"},
 		"moduleCode":  {"trendTable"},
