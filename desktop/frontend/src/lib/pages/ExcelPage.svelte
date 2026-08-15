@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { backend } from '../backend';
+  import { defaultWorkbookEndDate, initialPreviewFilter } from '../excelWorkflow';
   import { errorMessage, type Translator } from '../i18n';
   import { modal } from '../modal';
   import type {
@@ -163,7 +164,7 @@
       scan = next;
       sheetName = requestedSheet || next.sheetName || next.sheets[0]?.name || '';
       fromDate = next.dateMin || next.dates[0] || '';
-      toDate = next.dateMax || next.dates.at(-1) || fromDate;
+      toDate = defaultWorkbookEndDate(fromDate, next.dateMax || next.dates.at(-1) || fromDate);
     } catch (error) {
       if (requestGeneration === generation) {
         scan = undefined;
@@ -215,7 +216,9 @@
         mappingPath: settings.useLocalMapping ? settings.mappingPath : '',
       });
       if (requestGeneration !== generation || inputPath !== requestedInput) return;
-      analysis = normalizeAnalysis(result);
+      const normalized = normalizeAnalysis(result);
+      analysis = normalized;
+      filter = initialPreviewFilter(normalized);
       progress = { operationId: result.operationId, stage: 'preview', current: stages.length, total: stages.length };
     } catch (error) {
       if (requestGeneration === generation && (error as { code?: string })?.code !== 'cancelled') {
@@ -516,7 +519,6 @@
           <div><dt><span class="material-symbols-rounded" aria-hidden="true">date_range</span>{t('excel.summaryDates')}</dt><dd>{scan.dates.length}</dd></div>
           <div><dt><span class="material-symbols-rounded" aria-hidden="true">view_list</span>{t('excel.summaryRows')}</dt><dd>{scan.rows}</dd></div>
           <div><dt><span class="material-symbols-rounded" aria-hidden="true">store</span>{t('excel.summaryStores')}</dt><dd>{scan.stores}</dd></div>
-          <div><dt><span class="material-symbols-rounded" aria-hidden="true">work_history</span>{t('excel.summaryJobs')}</dt><dd>{scan.jobs}</dd></div>
           <div><dt><span class="material-symbols-rounded" aria-hidden="true">manage_accounts</span>{t('excel.summaryAccounts')}</dt><dd>{scan.accounts}</dd></div>
         </dl>
 
@@ -591,6 +593,34 @@
           </div>
         {/if}
 
+        <section class="write-options surface-card" aria-label={t('excel.saveAs')}>
+          <div class="write-option">
+            <strong>{t('excel.overwriteLabel')}</strong>
+            <div class="policy-selection">
+              <span class="state-pill" class:profile-enabled={overwrite}>{overwrite ? t('common.on') : t('common.off')}</span>
+            </div>
+          </div>
+          <div class="divider"></div>
+          <div class="write-option">
+            <strong>{t('excel.partialLabel')}</strong>
+            <md-switch
+              aria-label={t('excel.partialLabel')}
+              selected={allowPartial}
+              disabled={workflowBusy || !analysisComplete || !hasWritableChanges || aggregateProblemCount > 0}
+              onclick={togglePartial}
+            ></md-switch>
+          </div>
+          {#if !analysisComplete}
+            <div class="inline-blocker" role="status"><span class="material-symbols-rounded" aria-hidden="true">pending_actions</span>{t('excel.incompleteBlock')}</div>
+          {:else if aggregateProblemCount > 0}
+            <div class="inline-blocker" role="status"><span class="material-symbols-rounded" aria-hidden="true">block</span>{t('excel.aggregateBlock', { count: aggregateProblemCount })}</div>
+          {:else if !hasWritableChanges}
+            <div class="inline-blocker" role="status"><span class="material-symbols-rounded" aria-hidden="true">info</span>{t('excel.noChanges')}</div>
+          {:else if issueCount > 0 && !(allowPartial && keepIssueOriginal)}
+            <div class="inline-blocker" role="status"><span class="material-symbols-rounded" aria-hidden="true">block</span>{t('excel.issueBlock', { count: issueCount })}</div>
+          {/if}
+        </section>
+
         <div class="filter-bar" role="group" aria-label={t('excel.filterLabel')}>
           {#each filters as target}
             <button type="button" class="filter-chip" class:active={filter === target} aria-pressed={filter === target} onclick={() => (filter = target)}>
@@ -623,33 +653,6 @@
           </div>
         </div>
 
-        <section class="write-options surface-card" aria-label={t('excel.saveAs')}>
-          <div class="write-option">
-            <strong>{t('excel.overwriteLabel')}</strong>
-            <div class="policy-selection">
-              <span class="state-pill" class:profile-enabled={overwrite}>{overwrite ? t('common.on') : t('common.off')}</span>
-            </div>
-          </div>
-          <div class="divider"></div>
-          <div class="write-option">
-            <strong>{t('excel.partialLabel')}</strong>
-            <md-switch
-              aria-label={t('excel.partialLabel')}
-              selected={allowPartial}
-              disabled={workflowBusy || !analysisComplete || !hasWritableChanges || aggregateProblemCount > 0}
-              onclick={togglePartial}
-            ></md-switch>
-          </div>
-          {#if !analysisComplete}
-            <div class="inline-blocker" role="status"><span class="material-symbols-rounded" aria-hidden="true">pending_actions</span>{t('excel.incompleteBlock')}</div>
-          {:else if aggregateProblemCount > 0}
-            <div class="inline-blocker" role="status"><span class="material-symbols-rounded" aria-hidden="true">block</span>{t('excel.aggregateBlock', { count: aggregateProblemCount })}</div>
-          {:else if !hasWritableChanges}
-            <div class="inline-blocker" role="status"><span class="material-symbols-rounded" aria-hidden="true">info</span>{t('excel.noChanges')}</div>
-          {:else if issueCount > 0 && !(allowPartial && keepIssueOriginal)}
-            <div class="inline-blocker" role="status"><span class="material-symbols-rounded" aria-hidden="true">block</span>{t('excel.issueBlock', { count: issueCount })}</div>
-          {/if}
-        </section>
       </section>
     {/if}
 

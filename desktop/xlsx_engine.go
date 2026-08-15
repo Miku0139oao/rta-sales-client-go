@@ -122,11 +122,11 @@ func desktopPlan(plan xlsxfill.Plan, planID string) *enginePlan {
 			continue
 		}
 		status := desktopRowStatus(row)
-		currentL := row.Current.DailySales
+		currentL := formatCellNumber(row.Current.DailySales)
 		if currentL == "" && row.Current.DailySalesFormula != "" {
 			currentL = displayFormula(row.Current.DailySalesFormula)
 		}
-		currentAB := row.Current.TransactionCount
+		currentAB := formatCellNumber(row.Current.TransactionCount)
 		if currentAB == "" && row.Current.TransactionCountFormula != "" {
 			currentAB = displayFormula(row.Current.TransactionCountFormula)
 		}
@@ -180,7 +180,20 @@ func formatNumber(value *float64) string {
 	if value == nil {
 		return ""
 	}
-	return strconv.FormatFloat(*value, 'f', -1, 64)
+	formatted := strconv.FormatFloat(*value, 'f', 2, 64)
+	return strings.TrimRight(strings.TrimRight(formatted, "0"), ".")
+}
+
+func formatCellNumber(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	number, err := strconv.ParseFloat(trimmed, 64)
+	if err != nil {
+		return value
+	}
+	return formatNumber(&number)
 }
 
 func displayFormula(formula string) string {

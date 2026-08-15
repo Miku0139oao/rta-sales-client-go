@@ -28,3 +28,19 @@ func TestDisplayFormulaAddsExactlyOnePrefix(t *testing.T) {
 		}
 	}
 }
+
+func TestPreviewNumbersAreHumanReadable(t *testing.T) {
+	value := 112734.18999999968
+	if got := formatNumber(&value); got != "112734.19" {
+		t.Fatalf("formatNumber() = %q, want %q", got, "112734.19")
+	}
+	for input, want := range map[string]string{
+		"519.0000000001":       "519",
+		" 80262.929999999993 ": "80262.93",
+		"=SUM(A1:A2)":          "=SUM(A1:A2)",
+	} {
+		if got := formatCellNumber(input); got != want {
+			t.Fatalf("formatCellNumber(%q) = %q, want %q", input, got, want)
+		}
+	}
+}

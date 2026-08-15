@@ -140,6 +140,14 @@
     try {
       const result = await backend.testProfile(profile.id);
       testResults = new Map(testResults).set(profile.id, result);
+      if (result.success && !profile.enabled) {
+        try {
+          const updated = await backend.setProfileEnabled(profile.id, true);
+          profiles = profiles.map((candidate) => candidate.id === updated.id ? updated : candidate);
+        } catch (caught) {
+          error = errorMessage(locale, caught);
+        }
+      }
     } catch (caught) {
       if (!cancellingTest) {
         testResults = new Map(testResults).set(profile.id, { success: false });
@@ -383,7 +391,7 @@
               disabled={accountBusy || !profile.hasCredentials}
               title={!profile.hasCredentials ? t('accounts.testMissingCredentials') : ''}
             >
-              {testingId === profile.id ? t('common.testing') : t('common.test')}
+              {testingId === profile.id ? t('common.testing') : profile.enabled ? t('common.test') : t('accounts.testAndEnable')}
             </md-outlined-button>
             {#if testingId === profile.id}
               <md-text-button onclick={cancelTest} disabled={!testOperationId || cancellingTest}>{t('accounts.cancelTest')}</md-text-button>

@@ -53,9 +53,11 @@ describe('account safety workflow', () => {
   it('clears a successful test and disables the profile after credentials change', async () => {
     const save = vi.fn(async (_request: unknown) => ({ ...profile, displayName: 'Primary' }));
     const testProfile = vi.fn(async (_request: unknown): Promise<ProfileTestResult> => ({ success: true }));
+    const enable = vi.fn(async () => ({ ...profile, enabled: true }));
     configureBackend({ methods: {
       ListProfiles: vi.fn(async () => [profile]),
       TestProfile: testProfile,
+      Enable: enable,
       CreateOrUpdateProfile: save,
     } });
     const { container } = render(AccountsPage, {
@@ -65,6 +67,8 @@ describe('account safety workflow', () => {
     await fireEvent.click(container.querySelector('.profile-actions md-outlined-button')!);
     await waitFor(() => expect(testProfile).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByText('連線測試成功')).toBeInTheDocument());
+    expect(enable).toHaveBeenCalledWith({ profileId: profile.id, enabled: true });
+    expect(screen.getByText('已啟用')).toBeInTheDocument();
     await fireEvent.click(container.querySelector('[aria-label="編輯 Primary"]')!);
     await fireEvent.input(screen.getByLabelText('新帳號（留空表示不變）'), { target: { value: 'replacement' } });
     await fireEvent.input(screen.getByLabelText('新密碼（留空表示不變）'), { target: { value: 'new-password' } });
@@ -77,6 +81,10 @@ describe('account safety workflow', () => {
 
   it('keeps edit and test available after adding a credentialed profile', async () => {
     const testProfile = vi.fn(async (): Promise<ProfileTestResult> => ({ success: true }));
+    const enable = vi.fn(async (input: unknown) => ({
+      id: (input as { profileId: string }).profileId,
+      displayName: 'Renamed profile', enabled: true, priority: 1, hasCredentials: true,
+    } satisfies Profile));
     const save = vi.fn(async (input: unknown) => {
       const request = input as ProfileUpsertRequest;
       return {
@@ -91,6 +99,7 @@ describe('account safety workflow', () => {
       ListProfiles: vi.fn(async () => []),
       CreateOrUpdateProfile: save,
       TestProfile: testProfile,
+      Enable: enable,
     } });
     const { container } = render(AccountsPage, {
       props: { t: translator('zh-TW'), locale: 'zh-TW' },
@@ -118,8 +127,12 @@ describe('account safety workflow', () => {
     }));
 
     const renamedCard = screen.getByText('Renamed profile').closest('.profile-card')!;
-    await fireEvent.click([...renamedCard.querySelectorAll('md-outlined-button')].find((element) => element.textContent?.includes('測試'))!);
+    const testAndEnable = [...renamedCard.querySelectorAll('md-outlined-button')].find((element) => element.textContent?.includes('測試並啟用'))!;
+    expect(testAndEnable).toBeTruthy();
+    await fireEvent.click(testAndEnable);
     await waitFor(() => expect(testProfile).toHaveBeenCalledWith({ profileId: 'profile-added' }));
+    await waitFor(() => expect(enable).toHaveBeenCalledWith({ profileId: 'profile-added', enabled: true }));
+    expect(screen.getByText('已啟用')).toBeInTheDocument();
   });
 
   it('disables testing only when the profile has no stored credentials', async () => {
