@@ -41,7 +41,7 @@ describe('desktop application shell', () => {
     await fireEvent.click(accountsNav);
     await waitFor(() => expect(screen.getByText('主要帳號')).toBeInTheDocument());
 
-    const editButton = container.querySelector('md-icon-button[aria-label^="編輯"]');
+    const editButton = container.querySelector('[aria-label^="編輯"]');
     expect(editButton).not.toBeNull();
     await fireEvent.click(editButton!);
 

@@ -35,6 +35,7 @@
   }
 
   $: accountBusy = Boolean(testingId || saving);
+  $: activationLocked = !editing || !editing.hasCredentials || Boolean(form.account.trim() || form.password);
   $: onBusyChange(accountBusy);
 
   onMount(() => {
@@ -83,8 +84,10 @@
     if (!form.displayName.trim()) formErrors.displayName = t('common.required');
     if (!editing && !form.account.trim()) formErrors.account = t('common.required');
     if (!editing && !form.password) formErrors.password = t('common.required');
-    if (editing && form.account && !form.password) formErrors.password = t('common.required');
-    if (editing && form.password && !form.account) formErrors.account = t('common.required');
+    if (editing && !editing.hasCredentials && (form.account.trim() || form.password)) {
+      if (!form.account.trim()) formErrors.account = t('common.required');
+      if (!form.password) formErrors.password = t('common.required');
+    }
     return Object.keys(formErrors).length === 0;
   }
 
@@ -117,7 +120,7 @@
   }
 
   async function test(profile: Profile) {
-    if (accountBusy) return;
+    if (accountBusy || !profile.hasCredentials) return;
     testingId = profile.id;
     testOperationId = '';
     cancellingTest = false;
@@ -286,14 +289,25 @@
             </md-icon-button>
           </div>
           <div class="profile-actions">
-            <md-switch aria-label={`${profile.displayName}: ${profile.enabled ? t('common.enabled') : t('common.disabled')}`} selected={profile.enabled} disabled={accountBusy} onclick={() => toggleEnabled(profile)}></md-switch>
-            <md-outlined-button onclick={() => test(profile)} disabled={Boolean(testingId)}>
+            <md-switch
+              aria-label={`${profile.displayName}: ${profile.enabled ? t('common.enabled') : t('common.disabled')}`}
+              selected={profile.enabled}
+              disabled={accountBusy || (!profile.hasCredentials && !profile.enabled)}
+              onclick={() => toggleEnabled(profile)}
+            ></md-switch>
+            <md-outlined-button
+              onclick={() => test(profile)}
+              disabled={accountBusy || !profile.hasCredentials}
+              title={!profile.hasCredentials ? t('accounts.testMissingCredentials') : ''}
+            >
               {testingId === profile.id ? t('common.testing') : t('common.test')}
             </md-outlined-button>
             {#if testingId === profile.id}
               <md-text-button onclick={cancelTest} disabled={!testOperationId || cancellingTest}>{t('accounts.cancelTest')}</md-text-button>
             {/if}
-            <md-icon-button aria-label={`${t('common.edit')} ${profile.displayName}`} disabled={accountBusy} onclick={() => openEdit(profile)}><span class="material-symbols-rounded">edit</span></md-icon-button>
+            <md-outlined-button aria-label={`${t('common.edit')} ${profile.displayName}`} disabled={accountBusy} onclick={() => openEdit(profile)}>
+              <span class="material-symbols-rounded" slot="icon">edit</span>{t('common.edit')}
+            </md-outlined-button>
             <md-icon-button class="danger-action" aria-label={`${t('common.delete')} ${profile.displayName}`} disabled={accountBusy} onclick={() => (deleting = profile)}><span class="material-symbols-rounded">delete</span></md-icon-button>
           </div>
         </li>
@@ -318,7 +332,7 @@
           {#if formErrors.displayName}<small class="field-error" id="profile-name-error">{formErrors.displayName}</small>{/if}
         </div>
         <div class="field-group">
-          <label for="profile-account">{t('accounts.account')}</label>
+          <label for="profile-account">{editing ? t('accounts.accountEdit') : t('accounts.account')}</label>
           <input id="profile-account" bind:value={form.account} disabled={saving} autocomplete="username" aria-invalid={Boolean(formErrors.account)} aria-describedby={formErrors.account ? 'profile-account-error' : undefined} />
           {#if formErrors.account}<small class="field-error" id="profile-account-error">{formErrors.account}</small>{/if}
         </div>
@@ -329,7 +343,12 @@
         </div>
         <div class="setting-row dialog-setting-row">
           <strong>{t('common.enabled')}</strong>
-          <md-switch aria-label={t('common.enabled')} selected={form.enabled} disabled={saving} onclick={() => (form = { ...form, enabled: !form.enabled })}></md-switch>
+          <md-switch
+            aria-label={t('common.enabled')}
+            selected={activationLocked ? false : form.enabled}
+            disabled={saving || activationLocked}
+            onclick={() => { if (!activationLocked) form = { ...form, enabled: !form.enabled }; }}
+          ></md-switch>
         </div>
         <div class="dialog-actions">
           <md-text-button type="button" onclick={closeEditor} disabled={saving}>{t('common.cancel')}</md-text-button>

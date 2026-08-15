@@ -326,23 +326,18 @@ func TestProfileMetadataExcludesCredentials(t *testing.T) {
 	if err != nil || string(preservedCookie) != "existing authenticated session" {
 		t.Fatalf("metadata-only edit changed the saved session: %q, %v", preservedCookie, err)
 	}
-	if _, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{
-		ID: created.ID, DisplayName: "Renamed", Account: "account-two", Enabled: false,
-	}); err == nil {
-		t.Fatal("expected partial credential edit rejection")
-	}
-	credential, err = app.credentials.Get(created.ID)
-	if err != nil || credential.Account != "account-one" || credential.Password != "password-one" {
-		t.Fatalf("rejected edit changed the saved credential: %#v, %v", credential, err)
-	}
-	if _, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{
-		ID: created.ID, DisplayName: "Second account", Account: "account-two", Password: "password-two", Enabled: true,
-	}); err != nil {
+	accountUpdated, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{
+		ID: created.ID, DisplayName: "Second account", Account: "account-two", Enabled: false,
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	credential, err = app.credentials.Get(created.ID)
-	if err != nil || credential.Account != "account-two" || credential.Password != "password-two" {
-		t.Fatalf("credential update failed: %#v, %v", credential, err)
+	if err != nil || credential.Account != "account-two" || credential.Password != "password-one" {
+		t.Fatalf("account-only update did not preserve the password: %#v, %v", credential, err)
+	}
+	if accountUpdated.DisplayName != "Second account" || !accountUpdated.HasCredentials {
+		t.Fatalf("unexpected account-only update result: %#v", accountUpdated)
 	}
 	replacedCookieStore, err := app.cookies.CookieStore(created.ID)
 	if err != nil {
@@ -350,7 +345,61 @@ func TestProfileMetadataExcludesCredentials(t *testing.T) {
 	}
 	replacedCookie, err := replacedCookieStore.Load()
 	if err != nil || len(replacedCookie) != 0 {
-		t.Fatalf("credential change retained the previous authenticated session: bytes=%d err=%v", len(replacedCookie), err)
+		t.Fatalf("account-only update retained the previous authenticated session: bytes=%d err=%v", len(replacedCookie), err)
+	}
+	if err := replacedCookieStore.Save([]byte("authenticated after account update")); err != nil {
+		t.Fatal(err)
+	}
+	passwordUpdated, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{
+		ID: created.ID, DisplayName: "Second account", Password: "password-two", Enabled: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err = app.credentials.Get(created.ID)
+	if err != nil || credential.Account != "account-two" || credential.Password != "password-two" {
+		t.Fatalf("password-only update did not preserve the account: %#v, %v", credential, err)
+	}
+	if passwordUpdated.DisplayName != "Second account" || !passwordUpdated.HasCredentials {
+		t.Fatalf("unexpected password-only update result: %#v", passwordUpdated)
+	}
+	passwordCookieStore, err := app.cookies.CookieStore(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacedCookie, err = passwordCookieStore.Load()
+	if err != nil || len(replacedCookie) != 0 {
+		t.Fatalf("password-only update retained the previous authenticated session: bytes=%d err=%v", len(replacedCookie), err)
+	}
+	if err := app.credentials.Delete(created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{
+		ID: created.ID, DisplayName: "Missing credentials", Account: "account-three", Enabled: false,
+	}); err == nil {
+		t.Fatal("expected a partial credential update to fail when no saved credential exists")
+	}
+	if _, err := app.Enable(EnableProfileRequest{ProfileID: created.ID, Enabled: true}); err == nil {
+		t.Fatal("expected enabling a profile without saved credentials to fail")
+	}
+	profiles, err := app.ListProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 1 || profiles[0].Enabled || profiles[0].HasCredentials {
+		t.Fatalf("failed enable changed profile metadata: %#v", profiles)
+	}
+	if _, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{
+		ID: created.ID, DisplayName: "Must remain disabled", Enabled: true,
+	}); err == nil {
+		t.Fatal("expected metadata update to reject enabling a profile without saved credentials")
+	}
+	profiles, err = app.ListProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 1 || profiles[0].DisplayName != "Second account" || profiles[0].Enabled || profiles[0].HasCredentials {
+		t.Fatalf("rejected metadata update changed the profile: %#v", profiles)
 	}
 }
 

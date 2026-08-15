@@ -206,7 +206,7 @@ export const backend: BackendApi = {
         priority: current?.priority ?? mockProfiles.length + 1,
         hasCredentials: Boolean(request.account && request.password) || current?.hasCredentials === true,
         accountHint: request.account ? `${request.account.slice(0, 2)}••••${request.account.slice(-2)}` : current?.accountHint,
-        lastTestStatus: request.account && request.password ? 'untested' : current?.lastTestStatus ?? 'untested',
+        lastTestStatus: request.account || request.password ? 'untested' : current?.lastTestStatus ?? 'untested',
       };
       mockProfiles = current
         ? mockProfiles.map((profile) => profile.id === saved.id ? saved : profile)

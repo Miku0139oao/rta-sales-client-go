@@ -269,12 +269,11 @@ func (a *App) CreateOrUpdateProfile(request ProfileUpsertRequest) (Profile, erro
 	} else if index < 0 || !validProfileID(request.ID) {
 		return Profile{}, errors.New("profile does not exist")
 	}
-	accountProvided := strings.TrimSpace(request.Account) != "" || request.Password != ""
-	if isNew && !accountProvided {
+	accountInput := strings.TrimSpace(request.Account)
+	passwordInput := request.Password
+	credentialUpdateRequested := accountInput != "" || passwordInput != ""
+	if isNew && (accountInput == "" || passwordInput == "") {
 		return Profile{}, errors.New("account and password are required for a new profile")
-	}
-	if accountProvided && (strings.TrimSpace(request.Account) == "" || request.Password == "") {
-		return Profile{}, errors.New("account and password must be provided together")
 	}
 	var previous securestore.Credential
 	previousExists := false
@@ -283,8 +282,21 @@ func (a *App) CreateOrUpdateProfile(request ProfileUpsertRequest) (Profile, erro
 	} else if !errors.Is(getErr, securestore.ErrNotFound) {
 		return Profile{}, getErr
 	}
-	if accountProvided {
-		nextCredential := securestore.Credential{Account: strings.TrimSpace(request.Account), Password: request.Password}
+	hasCredentials := credentialUpdateRequested || previousExists
+	if request.Enabled && !hasCredentials {
+		return Profile{}, errors.New("credentials are required before enabling a profile")
+	}
+	if credentialUpdateRequested {
+		nextCredential := previous
+		if accountInput != "" {
+			nextCredential.Account = accountInput
+		}
+		if passwordInput != "" {
+			nextCredential.Password = passwordInput
+		}
+		if strings.TrimSpace(nextCredential.Account) == "" || nextCredential.Password == "" {
+			return Profile{}, errors.New("account and password are required when no saved credentials exist")
+		}
 		credentialChanged := !previousExists || previous.Account != nextCredential.Account || previous.Password != nextCredential.Password
 		if credentialChanged {
 			// A cookie session is authenticated independently of the supplied
@@ -302,7 +314,7 @@ func (a *App) CreateOrUpdateProfile(request ProfileUpsertRequest) (Profile, erro
 	records[index].DisplayName = displayName
 	records[index].Enabled = request.Enabled
 	if err := a.profiles.Replace(records); err != nil {
-		if accountProvided {
+		if credentialUpdateRequested {
 			var rollbackErr error
 			if previousExists {
 				rollbackErr = a.credentials.Put(request.ID, previous)
@@ -315,7 +327,7 @@ func (a *App) CreateOrUpdateProfile(request ProfileUpsertRequest) (Profile, erro
 		}
 		return Profile{}, err
 	}
-	return profileFromRecord(records[index], accountProvided || previousExists), nil
+	return profileFromRecord(records[index], hasCredentials), nil
 }
 
 func (a *App) TestProfile(request TestProfileRequest) (ProfileTestResult, error) {
@@ -502,15 +514,19 @@ func (a *App) Enable(request EnableProfileRequest) (Profile, error) {
 	if !ok {
 		return Profile{}, errors.New("profile does not exist")
 	}
+	_, credentialErr := a.credentials.Get(request.ProfileID)
+	hasCredentials := credentialErr == nil
+	if credentialErr != nil && !errors.Is(credentialErr, securestore.ErrNotFound) {
+		return Profile{}, credentialErr
+	}
+	if request.Enabled && !hasCredentials {
+		return Profile{}, errors.New("credentials are required before enabling a profile")
+	}
 	records[index].Enabled = request.Enabled
 	if err := a.profiles.Replace(records); err != nil {
 		return Profile{}, err
 	}
-	_, credentialErr := a.credentials.Get(request.ProfileID)
-	if credentialErr != nil && !errors.Is(credentialErr, securestore.ErrNotFound) {
-		return Profile{}, credentialErr
-	}
-	return profileFromRecord(records[index], credentialErr == nil), nil
+	return profileFromRecord(records[index], hasCredentials), nil
 }
 
 func (a *App) Analyze(request AnalyzeRequest) (AnalysisResult, error) {
