@@ -1,0 +1,25 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "version": "2",
+  "name": "RTA-Excel-Filler",
+  "outputfilename": "RTA-Excel-Filler",
+  "frontend:dir": "../../desktop/frontend",
+  "wailsjsdir": "../../desktop/frontend/src/lib/wails",
+  "frontend:install": "bun install --frozen-lockfile",
+  "frontend:build": "bun run build",
+  "frontend:dev:watcher": "bun run dev",
+  "frontend:dev:serverUrl": "auto",
+  "build:dir": "build",
+  "nsisType": "single",
+  "author": {
+    "name": "Miku0139oao",
+    "email": ""
+  },
+  "info": {
+    "companyName": "Miku0139oao",
+    "productName": "RTA Excel Filler",
+    "productVersion": "0.1.0",
+    "copyright": "Copyright (c) 2026 Miku0139oao",
+    "comments": "Windows desktop workbook filler built with Wails v2.14.0"
+  }
+}

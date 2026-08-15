@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +19,15 @@ import (
 const (
 	DefaultSheetName  = "Dairly"
 	defaultMaxQueries = 25
+	// DefaultMaxJobs bounds a normal multi-day analysis while still allowing a
+	// full workbook month to be processed without per-run tuning.
+	DefaultMaxJobs = 2000
+	// DefaultConcurrency is the number of account profiles queried at once.
+	// Queries belonging to the same account remain serialized.
+	DefaultConcurrency = 2
+	// MaximumConcurrency is deliberately small because a Sales call may itself
+	// issue multiple concurrent RTA page requests.
+	MaximumConcurrency = 4
 )
 
 // SalesProvider is implemented by *rtasales.Client and ProviderRouter. It is
@@ -67,15 +74,20 @@ type Issue struct {
 // sales figures. StagedCells is the number of cells that would be written.
 type Report struct {
 	Date             string  `json:"date"`
+	From             string  `json:"from,omitempty"`
+	To               string  `json:"to,omitempty"`
 	Sheet            string  `json:"sheet"`
 	MatchedRows      int     `json:"matched_rows"`
 	SelectedRows     int     `json:"selected_rows"`
 	SkippedStoreRows int     `json:"skipped_store_rows"`
 	UniqueQueries    int     `json:"unique_queries"`
+	CompletedJobs    int     `json:"completed_jobs,omitempty"`
+	FailedJobs       int     `json:"failed_jobs,omitempty"`
 	StagedCells      int     `json:"staged_cells"`
 	UnchangedCells   int     `json:"unchanged_cells"`
 	SkippedDataRows  int     `json:"skipped_data_rows"`
 	Issues           []Issue `json:"issues,omitempty"`
+	Complete         bool    `json:"complete"`
 	WroteWorkbook    bool    `json:"wrote_workbook"`
 }
 
@@ -89,10 +101,6 @@ func (e *ValidationError) Error() string {
 	return fmt.Sprintf("workbook fill has %d unresolved issue(s)", e.IssueCount)
 }
 
-type rowTarget struct {
-	row int
-}
-
 type cellUpdate struct {
 	cell  string
 	value float64
@@ -103,19 +111,14 @@ type cellUpdate struct {
 // (daily customer/transaction count). Total rows, blank rows, formulas, and
 // unrelated cells are never modified.
 func Fill(ctx context.Context, provider SalesProvider, request Request) (Report, error) {
-	report := Report{Date: request.Date.Format("2006-01-02")}
-	if provider == nil {
+	report := Report{Date: request.Date.Format("2006-01-02"), Sheet: request.SheetName}
+	if request.SheetName == "" {
+		report.Sheet = DefaultSheetName
+	}
+	if nilSalesProvider(provider) {
 		return report, &rtasales.InputError{Field: "provider", Message: "is required"}
 	}
-	if request.Mapper == nil {
-		request.Mapper = IdentityStoreMap{}
-	}
-	allowedStores, err := normalizeAllowedStoreIDs(request.AllowedBusinessStoreIDs)
-	if err != nil {
-		return report, err
-	}
-	request.InputPath = strings.TrimSpace(request.InputPath)
-	if request.InputPath == "" {
+	if strings.TrimSpace(request.InputPath) == "" {
 		return report, &rtasales.InputError{Field: "InputPath", Message: "is required"}
 	}
 	if request.Date.IsZero() {
@@ -124,189 +127,59 @@ func Fill(ctx context.Context, provider SalesProvider, request Request) (Report,
 	if request.OnlyRow < 0 || request.OnlyRow == 1 {
 		return report, &rtasales.InputError{Field: "OnlyRow", Message: "must be zero or a data row greater than one"}
 	}
-	if request.SheetName == "" {
-		request.SheetName = DefaultSheetName
-	}
-	report.Sheet = request.SheetName
-	if request.MaxQueries <= 0 {
-		request.MaxQueries = defaultMaxQueries
-	}
 	if request.Write {
-		request.OutputPath = strings.TrimSpace(request.OutputPath)
-		if request.OutputPath == "" {
-			return report, &rtasales.InputError{Field: "OutputPath", Message: "is required when Write is true"}
-		}
-		inputAbs, err := filepath.Abs(request.InputPath)
-		if err != nil {
-			return report, fmt.Errorf("resolve input path: %w", err)
-		}
-		outputAbs, err := filepath.Abs(request.OutputPath)
-		if err != nil {
-			return report, fmt.Errorf("resolve output path: %w", err)
-		}
-		if strings.EqualFold(filepath.Clean(inputAbs), filepath.Clean(outputAbs)) {
-			return report, &rtasales.InputError{Field: "OutputPath", Message: "must differ from InputPath"}
+		if _, err := validateDistinctOutput(request.InputPath, request.OutputPath); err != nil {
+			return report, err
 		}
 	}
-
-	book, err := excelize.OpenFile(request.InputPath, excelize.Options{RawCellValue: true})
+	maxJobs := request.MaxQueries
+	if maxJobs <= 0 {
+		maxJobs = defaultMaxQueries
+	}
+	plan, err := Analyze(ctx, provider, BatchRequest{
+		InputPath: request.InputPath, SheetName: request.SheetName,
+		From: request.Date, To: request.Date, Mapper: request.Mapper,
+		AllowedBusinessStoreIDs: request.AllowedBusinessStoreIDs,
+		Overwrite:               request.Overwrite, MaxJobs: maxJobs, Concurrency: 1,
+		OnlyRow: request.OnlyRow,
+	})
 	if err != nil {
-		return report, fmt.Errorf("open workbook: %w", err)
-	}
-	defer func() { _ = book.Close() }()
-	if index, err := book.GetSheetIndex(request.SheetName); err != nil || index == -1 {
-		if err != nil {
-			return report, fmt.Errorf("inspect worksheet: %w", err)
+		if plan.state != nil {
+			return plan.Report, err
 		}
-		return report, &rtasales.InputError{Field: "SheetName", Message: "worksheet does not exist"}
-	}
-	maxRow, err := usedRangeLastRow(book, request.SheetName)
-	if err != nil {
+		var inputError *rtasales.InputError
+		if errors.As(err, &inputError) && inputError.Field == "MaxJobs" {
+			return report, &rtasales.InputError{Field: "MaxQueries", Message: inputError.Message}
+		}
 		return report, err
 	}
-	props, err := book.GetWorkbookProps()
-	if err != nil {
-		return report, fmt.Errorf("read workbook properties: %w", err)
-	}
-	use1904 := props.Date1904 != nil && *props.Date1904
-
-	targetsByStore := make(map[string][]rowTarget)
-	issues := make(map[string][]int)
-	skippedStoreRows := make([]int, 0)
-	for row := 2; row <= maxRow; row++ {
-		if request.OnlyRow > 0 && row != request.OnlyRow {
-			continue
-		}
-		storeID, err := rawCell(book, request.SheetName, "C", row)
-		if err != nil {
-			return report, err
-		}
-		dateRaw, err := rawCell(book, request.SheetName, "F", row)
-		if err != nil {
-			return report, err
-		}
-		label, err := rawCell(book, request.SheetName, "E", row)
-		if err != nil {
-			return report, err
-		}
-		if strings.EqualFold(strings.TrimSpace(label), "Total") || strings.TrimSpace(storeID) == "" || strings.TrimSpace(dateRaw) == "" {
-			report.SkippedDataRows++
-			continue
-		}
-		rowDate, err := parseWorkbookDate(book, request.SheetName, row, dateRaw, use1904)
-		if err != nil {
-			issues["invalid_date"] = append(issues["invalid_date"], row)
-			continue
-		}
-		if !sameCalendarDate(rowDate, request.Date) {
-			continue
-		}
-		report.MatchedRows++
-		businessStoreID, ok := request.Mapper.ResolveStore(strings.TrimSpace(storeID))
-		if !ok || strings.TrimSpace(businessStoreID) == "" {
-			issues["missing_mapping"] = append(issues["missing_mapping"], row)
-			continue
-		}
-		businessStoreID = strings.TrimSpace(businessStoreID)
-		if len(allowedStores) > 0 {
-			if _, allowed := allowedStores[businessStoreID]; !allowed {
-				report.SkippedStoreRows++
-				skippedStoreRows = append(skippedStoreRows, row)
-				continue
-			}
-		}
-		report.SelectedRows++
-		targetsByStore[businessStoreID] = append(targetsByStore[businessStoreID], rowTarget{row: row})
-	}
-	if len(allowedStores) > 0 && report.SelectedRows == 0 && len(skippedStoreRows) > 0 {
-		issues["no_authorized_store_match"] = append(issues["no_authorized_store_match"], skippedStoreRows...)
-	}
-	report.UniqueQueries = len(targetsByStore)
-	if report.UniqueQueries > request.MaxQueries {
-		return report, &rtasales.InputError{Field: "MaxQueries", Message: fmt.Sprintf("matched %d stores, limit is %d", report.UniqueQueries, request.MaxQueries)}
-	}
-
-	storeIDs := make([]string, 0, len(targetsByStore))
-	for storeID := range targetsByStore {
-		storeIDs = append(storeIDs, storeID)
-	}
-	sort.Slice(storeIDs, func(i, j int) bool {
-		return targetsByStore[storeIDs[i]][0].row < targetsByStore[storeIDs[j]][0].row
-	})
-	updates := make([]cellUpdate, 0, report.MatchedRows*2)
-	for _, storeID := range storeIDs {
-		rows := targetsByStore[storeID]
-		result, queryErr := provider.Sales(ctx, rtasales.SalesQuery{
-			BusinessStoreID: storeID,
-			StartDate:       request.Date,
-			EndDate:         request.Date,
-		})
-		if queryErr != nil {
-			code := classifyQueryError(queryErr)
-			issues[code] = appendRows(issues[code], rows)
-			continue
-		}
-		if result == nil || len(result.Items) == 0 {
-			issues["no_data"] = appendRows(issues["no_data"], rows)
-			continue
-		}
-		if math.IsNaN(result.TotalAmount) || math.IsInf(result.TotalAmount, 0) {
-			issues["invalid_sales_total"] = appendRows(issues["invalid_sales_total"], rows)
-			continue
-		}
-		if result.TotalTransactionCount == nil || math.IsNaN(*result.TotalTransactionCount) || math.IsInf(*result.TotalTransactionCount, 0) {
-			issues["transaction_total_unavailable"] = appendRows(issues["transaction_total_unavailable"], rows)
-			continue
-		}
-		transactionCount := *result.TotalTransactionCount
-		if math.Abs(transactionCount-math.Round(transactionCount)) > 1e-9 || transactionCount < 0 {
-			issues["invalid_transaction_total"] = appendRows(issues["invalid_transaction_total"], rows)
-			continue
-		}
-		for _, target := range rows {
-			rowUpdates, rowIssues, unchanged, err := stageRow(book, request.SheetName, target.row, result.TotalAmount, math.Round(transactionCount), request.Overwrite)
-			if err != nil {
-				return report, err
-			}
-			updates = append(updates, rowUpdates...)
-			report.UnchangedCells += unchanged
-			for _, code := range rowIssues {
-				issues[code] = append(issues[code], target.row)
-			}
-		}
-	}
-
-	report.StagedCells = len(updates)
-	report.Issues = sortedIssues(issues)
+	plan = legacyCellPartialPlan(plan)
+	report = plan.Report
 	if len(report.Issues) > 0 && !request.AllowPartial {
 		return report, &ValidationError{IssueCount: len(report.Issues)}
 	}
 	if !request.Write {
 		return report, nil
 	}
-	for _, update := range updates {
-		if err := book.SetCellValue(request.SheetName, update.cell, update.value); err != nil {
-			return report, fmt.Errorf("write worksheet cell: %w", err)
+	return Apply(ctx, plan, ApplyRequest{
+		OutputPath: request.OutputPath, AllowPartial: request.AllowPartial, ForceRecalculate: true,
+	})
+}
+
+func legacyCellPartialPlan(plan Plan) Plan {
+	state := plan.state
+	if state == nil {
+		return plan
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	for index := range state.rows {
+		row := &state.rows[index]
+		if row.status == RowStatusIssue && len(row.static) == 0 && row.queryIssue == "" && len(row.cellIssues) > 0 && len(row.updates) > 0 {
+			row.status = RowStatusReady
 		}
 	}
-	auto := "auto"
-	yes := true
-	if err := book.SetCalcProps(&excelize.CalcPropsOptions{
-		CalcMode:       &auto,
-		FullCalcOnLoad: &yes,
-		ForceFullCalc:  &yes,
-		CalcOnSave:     &yes,
-	}); err != nil {
-		return report, fmt.Errorf("set workbook calculation mode: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(request.OutputPath), 0o755); err != nil && filepath.Dir(request.OutputPath) != "." {
-		return report, fmt.Errorf("create output directory: %w", err)
-	}
-	if err := book.SaveAs(request.OutputPath); err != nil {
-		return report, fmt.Errorf("save output workbook: %w", err)
-	}
-	report.WroteWorkbook = true
-	return report, nil
+	return state.snapshotLocked()
 }
 
 func normalizeAllowedStoreIDs(values []string) (map[string]struct{}, error) {
@@ -375,53 +248,6 @@ func sameCalendarDate(left, right time.Time) bool {
 	ly, lm, ld := left.Date()
 	ry, rm, rd := right.Date()
 	return ly == ry && lm == rm && ld == rd
-}
-
-func appendRows(existing []int, targets []rowTarget) []int {
-	for _, target := range targets {
-		existing = append(existing, target.row)
-	}
-	return existing
-}
-
-func stageRow(book *excelize.File, sheet string, row int, salesAmount, transactionCount float64, overwrite bool) ([]cellUpdate, []string, int, error) {
-	updates := make([]cellUpdate, 0, 2)
-	issues := make([]string, 0, 2)
-	unchanged := 0
-	for _, target := range []struct {
-		column string
-		value  float64
-	}{
-		{column: "L", value: salesAmount},
-		{column: "AB", value: transactionCount},
-	} {
-		cell := target.column + strconv.Itoa(row)
-		formula, err := book.GetCellFormula(sheet, cell)
-		if err != nil {
-			return nil, nil, 0, fmt.Errorf("inspect target formula: %w", err)
-		}
-		if strings.TrimSpace(formula) != "" {
-			issues = append(issues, "target_contains_formula")
-			continue
-		}
-		existing, err := book.GetCellValue(sheet, cell, excelize.Options{RawCellValue: true})
-		if err != nil {
-			return nil, nil, 0, fmt.Errorf("read target value: %w", err)
-		}
-		existing = strings.TrimSpace(existing)
-		if existing != "" {
-			if current, parseErr := strconv.ParseFloat(existing, 64); parseErr == nil && nearlyEqual(current, target.value) {
-				unchanged++
-				continue
-			}
-			if !overwrite {
-				issues = append(issues, "existing_value_differs")
-				continue
-			}
-		}
-		updates = append(updates, cellUpdate{cell: cell, value: target.value})
-	}
-	return updates, issues, unchanged, nil
 }
 
 func nearlyEqual(left, right float64) bool {

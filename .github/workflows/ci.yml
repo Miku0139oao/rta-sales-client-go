@@ -15,8 +15,8 @@ jobs:
       matrix:
         go-version: ["1.25.12", "1.26.6"]
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: ${{ matrix.go-version }}
           cache: true
@@ -27,9 +27,71 @@ jobs:
   vulnerability-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: "1.26.6"
           cache: true
-      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+
+  desktop-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.26.6"
+          cache: true
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.3.14"
+      - name: Verify Go packages
+        run: |
+          go test ./...
+          go vet ./...
+          go build ./...
+      - name: Verify Svelte frontend
+        working-directory: desktop/frontend
+        run: |
+          bun install --frozen-lockfile
+          bun run verify
+      - name: Install pinned Wails CLI
+        shell: pwsh
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.14.0
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          choco install nsis --version 3.12.0 --no-progress --yes
+          "${env:ProgramFiles(x86)}\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Build portable executable
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Push-Location cmd/rta-excel-filler
+          & (Join-Path (go env GOPATH) 'bin\wails.exe') build -clean -trimpath -platform windows/amd64 -webview2 error -o RTA-Excel-Filler.exe
+          Pop-Location
+          Copy-Item -LiteralPath cmd/rta-excel-filler/build/bin/RTA-Excel-Filler.exe -Destination release/RTA-Excel-Filler-portable.exe
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          Push-Location cmd/rta-excel-filler
+          & (Join-Path (go env GOPATH) 'bin\wails.exe') build -clean -trimpath -platform windows/amd64 -webview2 download -nsis -installscope user -o RTA-Excel-Filler.exe
+          Pop-Location
+          $installer = Get-ChildItem -LiteralPath cmd/rta-excel-filler/build/bin -Filter '*-installer.exe' | Select-Object -First 1
+          if ($null -eq $installer) { throw 'Wails did not produce an NSIS installer' }
+          Copy-Item -LiteralPath $installer.FullName -Destination release/RTA-Excel-Filler-setup.exe
+      - name: Write SHA-256 checksums
+        shell: pwsh
+        run: |
+          $lines = Get-ChildItem -LiteralPath release -Filter '*.exe' |
+            Sort-Object Name |
+            ForEach-Object {
+              $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName
+              "$($hash.Hash.ToLowerInvariant())  $($_.Name)"
+            }
+          $lines | Set-Content -LiteralPath release/SHA256SUMS.txt -Encoding ascii
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: RTA-Excel-Filler-windows-amd64
+          path: release/*
+          if-no-files-found: error

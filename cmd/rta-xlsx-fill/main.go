@@ -30,16 +30,20 @@ func run() error {
 	input := flag.String("input", "", "source .xlsx workbook")
 	output := flag.String("output", "", "new output .xlsx workbook (required with -write)")
 	mappingPath := flag.String("mapping", "", "optional private .json or .csv store mapping")
-	dateText := flag.String("date", "", "date to fill in YYYY-MM-DD format")
+	dateText := flag.String("date", "", "single date in YYYY-MM-DD format (mutually exclusive with -from/-to)")
+	fromText := flag.String("from", "", "inclusive first date in YYYY-MM-DD format")
+	toText := flag.String("to", "", "inclusive last date in YYYY-MM-DD format")
 	sheet := flag.String("sheet", xlsxfill.DefaultSheetName, "worksheet name")
 	write := flag.Bool("write", false, "save a new workbook; the default is dry-run")
 	overwrite := flag.Bool("overwrite", false, "replace existing L/AB values that differ")
 	allowPartial := flag.Bool("allow-partial", false, "write safe rows even when other rows have issues")
-	maxQueries := flag.Int("max-queries", 25, "maximum unique store queries for this run")
-	onlyRow := flag.Int("row", 0, "optional diagnostic row limit; zero auto-matches authorized stores for the date")
+	maxJobs := flag.Int("max-jobs", xlsxfill.DefaultMaxJobs, "maximum unique date/store jobs for this run")
+	maxQueries := flag.Int("max-queries", 0, "deprecated alias for -max-jobs")
+	onlyRow := flag.Int("row", 0, "optional diagnostic row; zero scans all rows in the date range")
+	concurrency := flag.Int("concurrency", xlsxfill.DefaultConcurrency, "concurrent account profiles (1-4; each account remains serial)")
 	pageConcurrency := flag.Int("page-concurrency", 1, "maximum concurrent RTA page requests after page one")
 	loginAttempts := flag.Int("login-attempts", 4, "maximum fresh captcha/login attempts")
-	timeout := flag.Duration("timeout", 5*time.Minute, "whole-operation timeout")
+	timeout := flag.Duration("timeout", 0, "optional whole-operation timeout; zero disables it")
 	flag.Parse()
 
 	if strings.TrimSpace(*input) == "" {
@@ -48,12 +52,29 @@ func run() error {
 	if *write && strings.TrimSpace(*output) == "" {
 		return errors.New("-output is required with -write")
 	}
+	if *write {
+		if err := xlsxfill.ValidateOutputPath(*input, *output); err != nil {
+			return err
+		}
+	}
+	if *write && *onlyRow > 0 {
+		return errors.New("-row is diagnostic-only and cannot be combined with -write")
+	}
 	if *onlyRow < 0 || *onlyRow == 1 {
 		return errors.New("-row must be zero or a data row greater than one")
 	}
-	date, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(*dateText), time.Local)
+	if *timeout < 0 {
+		return errors.New("-timeout must not be negative")
+	}
+	from, to, err := commandDateRange(*dateText, *fromText, *toText)
 	if err != nil {
-		return errors.New("-date must use YYYY-MM-DD")
+		return err
+	}
+	if *maxQueries != 0 {
+		if *maxJobs != xlsxfill.DefaultMaxJobs && *maxJobs != *maxQueries {
+			return errors.New("-max-jobs and -max-queries must not conflict")
+		}
+		*maxJobs = *maxQueries
 	}
 	var mapping xlsxfill.StoreMapper = xlsxfill.IdentityStoreMap{}
 	if strings.TrimSpace(*mappingPath) != "" {
@@ -82,7 +103,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	ctx := context.Background()
+	cancel := func() {}
+	if *timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, *timeout)
+	}
 	defer cancel()
 	stores, err := client.Stores(ctx)
 	if err != nil {
@@ -92,25 +117,66 @@ func run() error {
 	for index, store := range stores {
 		allowedStoreIDs[index] = store.BusinessID
 	}
-	report, fillErr := xlsxfill.Fill(ctx, client, xlsxfill.Request{
+	plan, analyzeErr := xlsxfill.Analyze(ctx, client, xlsxfill.BatchRequest{
 		InputPath:               *input,
-		OutputPath:              *output,
 		SheetName:               *sheet,
-		Date:                    date,
+		From:                    from,
+		To:                      to,
 		Mapper:                  mapping,
 		AllowedBusinessStoreIDs: allowedStoreIDs,
-		Write:                   *write,
 		Overwrite:               *overwrite,
-		AllowPartial:            *allowPartial,
-		MaxQueries:              *maxQueries,
+		MaxJobs:                 *maxJobs,
 		OnlyRow:                 *onlyRow,
+		Concurrency:             *concurrency,
 	})
+	report := plan.Report
+	operationErr := analyzeErr
+	if analyzeErr == nil {
+		if *write {
+			report, operationErr = xlsxfill.Apply(ctx, plan, xlsxfill.ApplyRequest{
+				OutputPath: *output, AllowPartial: *allowPartial, ForceRecalculate: true,
+			})
+		} else if len(report.Issues) > 0 && !*allowPartial {
+			operationErr = &xlsxfill.ValidationError{IssueCount: len(report.Issues)}
+		}
+	}
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(report); err != nil {
 		return fmt.Errorf("encode fill report: %w", err)
 	}
-	return fillErr
+	return operationErr
+}
+
+func commandDateRange(dateText, fromText, toText string) (time.Time, time.Time, error) {
+	dateText = strings.TrimSpace(dateText)
+	fromText = strings.TrimSpace(fromText)
+	toText = strings.TrimSpace(toText)
+	if dateText != "" {
+		if fromText != "" || toText != "" {
+			return time.Time{}, time.Time{}, errors.New("-date is mutually exclusive with -from/-to")
+		}
+		date, err := time.ParseInLocation("2006-01-02", dateText, time.Local)
+		if err != nil {
+			return time.Time{}, time.Time{}, errors.New("-date must use YYYY-MM-DD")
+		}
+		return date, date, nil
+	}
+	if fromText == "" || toText == "" {
+		return time.Time{}, time.Time{}, errors.New("use either -date or both -from and -to")
+	}
+	from, err := time.ParseInLocation("2006-01-02", fromText, time.Local)
+	if err != nil {
+		return time.Time{}, time.Time{}, errors.New("-from must use YYYY-MM-DD")
+	}
+	to, err := time.ParseInLocation("2006-01-02", toText, time.Local)
+	if err != nil {
+		return time.Time{}, time.Time{}, errors.New("-to must use YYYY-MM-DD")
+	}
+	if to.Before(from) {
+		return time.Time{}, time.Time{}, errors.New("-to must not precede -from")
+	}
+	return from, to, nil
 }
 
 func loadDotEnv(path string) error {

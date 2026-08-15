@@ -23,6 +23,42 @@ client 會直接向 RTA 取得該帳號專屬的門店關係。呼叫端只需�
 go get github.com/Miku0139oao/rta-sales-client-go@latest
 ```
 
+## Windows 桌面版
+
+RTA Excel Filler 是免用命令列的 Windows 桌面程式，可處理單日或包含起訖日的日期範圍。CI 會在 `RTA-Excel-Filler-windows-amd64` artifact 產生三個檔案：
+
+- `RTA-Excel-Filler-setup.exe`：目前使用者範圍的 NSIS 安裝程式；缺少 WebView2 時會下載安裝；
+- `RTA-Excel-Filler-portable.exe`：可攜版；電腦必須已安裝 Microsoft Edge WebView2 Runtime；
+- `SHA256SUMS.txt`：上述兩個執行檔的 SHA-256。
+
+解除安裝只會移除程式與捷徑，會刻意保留目前使用者的設定檔、加密 Cookie 狀態與 Windows Credential Manager 項目，供日後重新安裝沿用。若也要清除已儲存的 RTA 帳號資料，請在解除安裝前先於程式內逐一刪除設定檔。
+
+執行前可先核對下載檔案：
+
+```powershell
+(Get-FileHash -Algorithm SHA256 .\RTA-Excel-Filler-setup.exe).Hash.ToLowerInvariant()
+Get-Content .\SHA256SUMS.txt
+```
+
+### 帳號與私密資料
+
+進入「帳號」，填入顯示名稱、RTA 帳號與密碼，先執行「測試」再啟用。帳號設定檔的排列順序也是門店歸屬優先順序；兩個帳號都可存取同一門店時，由第一個已啟用的設定檔負責。同一 RTA 帳號的查詢永遠串行；不同帳號依「設定」的併發上限執行（預設 `2`，最高 `4`）。
+
+密碼保存在 Windows Credential Manager。每個設定檔的 Cookie 都會先用 Windows DPAPI 加密，再存到目前使用者的應用程式資料目錄；`profiles.json` 只含顯示用 metadata。活頁簿預覽、銷售數值、門店路由與分析 plan 只存在程式記憶體，不會寫入設定或 log。刪除設定檔時，也會移除其帳密與加密 Cookie。
+
+### 多日活頁簿流程
+
+1. 開啟 `.xlsx`，選擇工作表與包含起訖日的日期範圍。
+2. 檢查掃描摘要；預設安全上限是 `2,000` 個不重複的日期／門店 jobs。
+3. 執行「分析」。每個日期／門店組合只查一次，而且每筆 RTA 請求都只涵蓋一個日曆日。
+4. 檢查預覽：`L` 欄是 Article View 當日銷售額，`AB` 欄是 Trend View 當日交易次數。
+5. 若在活頁簿 plan 建立後取消，或暫時性 job 在內建重試後仍失敗，可執行「重試失敗／未排程項目」。若在登入或載入授權門店時取消，因尚未建立可重試的 plan，必須重新執行「分析」。取消後的不完整 plan 絕不可寫入。
+6. 另存新活頁簿。嚴格模式要求 plan 已完整結束且沒有問題。只有分析完整結束後才能選擇部分輸出；所有問題列會整列維持原值，且必須明確確認。
+
+程式絕不覆寫來源檔。套用前會重新核對來源的 SHA-256、大小與修改時間；檔案若已改變就拒絕寫入。現有值不同時必須啟用「覆寫現有值」，`L` 或 `AB` 的公式則永遠不會被取代。
+
+若活頁簿 `C` 欄不是 RTA 業務門店編號，可在「設定」啟用私有 JSON／CSV 對照檔。含正式資料的對照檔請保持在版本控制之外。
+
 帳密應由環境變數或秘密管理服務提供：
 
 ```dotenv
@@ -166,6 +202,15 @@ go run ./cmd/rta-xlsx-fill \
   -date 2026-08-13
 ```
 
+跨日處理須同時使用 `-from` 與 `-to`（包含起訖日），而且不可與 `-date` 並用：
+
+```powershell
+go run ./cmd/rta-xlsx-fill `
+  -input "C:\path\來源.xlsx" `
+  -from 2026-08-01 `
+  -to 2026-08-31
+```
+
 確認 dry-run 成功後，再另存新檔：
 
 ```powershell
@@ -176,7 +221,7 @@ go run ./cmd/rta-xlsx-fill `
   -write
 ```
 
-正常使用不要加入 `-row`。這個參數只保留作選用的診斷限制；`-max-queries` 則是在自動選店後獨立生效的查詢數量上限。
+正常使用不要加入 `-row`；它只供診斷，而且不可與 `-write` 並用。`-max-jobs` 是自動選店後的安全上限（預設 `2,000`）；`-max-queries` 只保留作 deprecated alias。`-concurrency` 最高為 `4`，同帳號的 jobs 仍維持串行。預設沒有整體 timeout；需要時才明確加入例如 `-timeout 20m`。
 
 JSON 報告會分開顯示比對階段：`matched_rows` 是符合日期的列數，`selected_rows` 是此帳號有權限的列數，`skipped_store_rows` 是屬於其他帳號而略過的列數。若該日期沒有任何授權門店相符，指令會明確失敗，不會靜默產生沒有變更的活頁簿。
 
@@ -194,6 +239,33 @@ JSON 報告會分開顯示比對階段：`matched_rows` 是符合日期的列數
 
 直接使用 `xlsxfill.Fill` 的 library 呼叫端，可將 `Client.Stores` 回傳的 ID 放入 `Request.AllowedBusinessStoreIDs`，取得相同的自動選列行為。
 
+### 兩階段批次 API
+
+新整合建議使用兩階段 API。`Analyze` 絕不修改活頁簿；`RetryFailed` 可接續暫時性失敗與取消後尚未執行的 jobs；`Apply` 只會寫入完整、且來源指紋仍相同的 plan：
+
+```go
+plan, err := xlsxfill.Analyze(ctx, provider, xlsxfill.BatchRequest{
+	InputPath:               `C:\reports\august.xlsx`,
+	From:                    from,
+	To:                      to,
+	AllowedBusinessStoreIDs: allowedStoreIDs,
+	MaxJobs:                 2000,
+	Concurrency:             2,
+})
+if errors.Is(err, context.Canceled) {
+	plan, err = xlsxfill.RetryFailed(context.Background(), plan)
+}
+if err != nil {
+	return err
+}
+
+report, err := xlsxfill.Apply(ctx, plan, xlsxfill.ApplyRequest{
+	OutputPath: `C:\reports\august.filled.xlsx`,
+})
+```
+
+傳輸錯誤與 HTTP 408／429／5xx 會在 `1s`、`3s` 後重試兩次。無資料、權限、門店對照與活頁簿格式問題不會重試。只有已完整結束但仍有問題的 plan 才能設定 `AllowPartial`；每一個問題列都會維持原樣。原有單日 `xlsxfill.Fill` 與 CLI `-date` 用法仍相容。
+
 ## Client 設定
 
 | 欄位 | 用途 | 預設值 |
@@ -202,6 +274,7 @@ JSON 報告會分開顯示比對階段：`matched_rows` 是符合日期的列數
 | `Password` | RTA 登入密碼，必填 | 無 |
 | `CaptchaSolvers` | 依序嘗試的驗證碼 solver，至少需要一個 | 無 |
 | `CookieFile` | Cookie jar 保存路徑 | 僅記憶體 |
+| `CookieStore` | 可替換的 Cookie 保存介面，不可與 `CookieFile` 並用 | 無 |
 | `HTTPClient` | 自訂 transport、proxy、timeout 或 cookie jar | timeout 30 秒 |
 | `PageConcurrency` | 第一頁之後的最大並行查詢數 | `4` |
 | `LoginAttempts` | 重新取得驗證碼並登入的次數，可設為 `1`–`10` | `4` |
@@ -255,6 +328,15 @@ go test ./...
 go test -race ./...
 go vet ./...
 go build ./...
+
+cd desktop/frontend
+bun install --frozen-lockfile
+bun run verify
+
+cd ../../cmd/rta-excel-filler
+wails build -platform windows/amd64
 ```
+
+桌面版固定使用 Wails CLI `v2.14.0`、Bun 與 NSIS 3。可用 `go install github.com/wailsapp/wails/v2/cmd/wails@v2.14.0` 安裝固定版本 CLI。
 
 repository 內的測試只使用合成圖片與本機 HTTP fixture，不會連線 RTA 或外部驗證碼服務，也不包含正式門店資料。

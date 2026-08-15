@@ -1,0 +1,16 @@
+{
+  "fixed": {
+    "file_version": "0.1.0.0",
+    "product_version": "0.1.0.0"
+  },
+  "info": {
+    "0409": {
+      "ProductVersion": "0.1.0",
+      "CompanyName": "Miku0139oao",
+      "FileDescription": "RTA Excel Filler",
+      "LegalCopyright": "Copyright (c) 2026 Miku0139oao",
+      "ProductName": "RTA Excel Filler",
+      "Comments": "Windows desktop workbook filler"
+    }
+  }
+}

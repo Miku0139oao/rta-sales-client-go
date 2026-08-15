@@ -42,10 +42,13 @@ var productionEndpoints = endpoints{
 // Config configures one RTA account. The client retrieves that account's
 // authorized business-store mapping directly from RTA.
 type Config struct {
-	Account         string
-	Password        string
-	CaptchaSolvers  []CaptchaSolver
-	CookieFile      string
+	Account        string
+	Password       string
+	CaptchaSolvers []CaptchaSolver
+	CookieFile     string
+	// CookieStore persists the session without exposing cookie bytes to a
+	// plaintext file. It is mutually exclusive with CookieFile.
+	CookieStore     CookieStore
 	HTTPClient      *http.Client
 	PageConcurrency int
 	// LoginAttempts is the maximum number of fresh captcha/login attempts.
@@ -133,6 +136,15 @@ func NewClient(config Config) (*Client, error) {
 }
 
 func clientCookieJar(config Config) (http.CookieJar, func() error, error) {
+	if config.CookieStore != nil {
+		if nilCookieStore(config.CookieStore) {
+			return nil, nil, &InputError{Field: "CookieStore", Message: "must not be nil"}
+		}
+		if strings.TrimSpace(config.CookieFile) != "" {
+			return nil, nil, &InputError{Field: "CookieStore", Message: "must not be used together with CookieFile"}
+		}
+		return cookieJarFromStore(config.CookieStore)
+	}
 	filename := strings.TrimSpace(config.CookieFile)
 	if filename != "" {
 		if parent := filepath.Dir(filename); parent != "." {

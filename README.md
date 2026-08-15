@@ -23,6 +23,73 @@ The client obtains the account-specific store relationship from RTA itself. Call
 go get github.com/Miku0139oao/rta-sales-client-go@latest
 ```
 
+## Windows desktop app
+
+RTA Excel Filler is the Windows desktop client for processing one day or an
+inclusive date range without using the command line. CI publishes three files
+in the `RTA-Excel-Filler-windows-amd64` artifact:
+
+- `RTA-Excel-Filler-setup.exe`: per-user NSIS installer; it downloads WebView2
+  when the runtime is missing;
+- `RTA-Excel-Filler-portable.exe`: portable application; Microsoft Edge
+  WebView2 Runtime must already be installed;
+- `SHA256SUMS.txt`: SHA-256 hashes for both executables.
+
+Uninstalling removes the application and shortcuts but intentionally preserves
+per-user profiles, encrypted cookie state, and Windows Credential Manager
+entries for a later reinstall. To remove saved RTA account data as well, delete
+each profile in the application before uninstalling it.
+
+Verify a downloaded file before running it:
+
+```powershell
+(Get-FileHash -Algorithm SHA256 .\RTA-Excel-Filler-setup.exe).Hash.ToLowerInvariant()
+Get-Content .\SHA256SUMS.txt
+```
+
+### Accounts and private data
+
+Open **Accounts**, add a display name and the RTA account/password, then use
+**Test** before enabling the profile for analysis. Profile order is also store
+ownership priority: if two profiles can access the same store, the first
+enabled profile wins. Queries for one account are always serialized; different
+accounts use the concurrency limit from **Settings** (default `2`, maximum
+`4`).
+
+Passwords are kept in Windows Credential Manager. Each profile's cookies are
+encrypted with Windows DPAPI before being saved under the current user's
+application-data directory. `profiles.json` contains only display metadata.
+Workbook previews, sales values, store routing, and analysis plans remain in
+process memory and are not written to settings or logs. Deleting a profile also
+removes its saved credentials and encrypted cookies.
+
+### Multi-day workbook workflow
+
+1. Open an `.xlsx` workbook and select the sheet and inclusive date range.
+2. Review the scan counts. The default safety ceiling is `2,000` unique
+   date/store jobs.
+3. Select **Analyze**. Each unique date/store pair is queried once, and every
+   RTA request covers exactly one calendar day.
+4. Review the proposed values: column `L` is Article View daily sales, and
+   column `AB` is Trend View daily transaction count.
+5. If work was cancelled after a workbook plan was created, or a temporary job
+   still failed after the built-in retries, select **Retry failed/pending**. If
+   cancellation happened while signing in or loading authorized stores, run
+   **Analyze** again because no retryable plan exists yet. A cancelled,
+   incomplete plan can never be written.
+6. Save to a new workbook. Strict mode requires a complete plan with no issues.
+   Partial output is available only after analysis completed; affected rows are
+   kept entirely unchanged and require an explicit confirmation.
+
+The source workbook is never overwritten. Before applying a plan, the app
+checks the source SHA-256, size, and modification time and rejects the write if
+the file changed. Existing different values require **Overwrite existing
+values**, and formulas in `L` or `AB` are never replaced.
+
+For workbooks whose column `C` does not contain the RTA business store ID,
+enable the optional private JSON/CSV mapping in **Settings**. Keep populated
+mapping files outside version control.
+
 Credentials should come from environment variables or a secret manager:
 
 ```dotenv
@@ -166,6 +233,16 @@ go run ./cmd/rta-xlsx-fill \
   -date 2026-08-13
 ```
 
+Use `-from` and `-to` together for an inclusive range. They are mutually
+exclusive with `-date`:
+
+```powershell
+go run ./cmd/rta-xlsx-fill `
+  -input "C:\path\source.xlsx" `
+  -from 2026-08-01 `
+  -to 2026-08-31
+```
+
 After a clean dry run, save to a different file:
 
 ```powershell
@@ -176,7 +253,12 @@ go run ./cmd/rta-xlsx-fill `
   -write
 ```
 
-Do not pass `-row` during normal use. It remains available only as an optional diagnostic limit. `-max-queries` is an independent safety ceiling after automatic store matching.
+Do not pass `-row` during normal use; it is diagnostic-only and cannot be used
+with `-write`. `-max-jobs` is the safety ceiling after automatic store
+matching (default `2,000`); `-max-queries` remains as a deprecated alias.
+`-concurrency` is capped at `4`, while jobs for the same account remain serial.
+There is no whole-operation timeout by default. Use an explicit value such as
+`-timeout 20m` when one is required.
 
 The JSON report distinguishes the stages: `matched_rows` counts rows for the date, `selected_rows` counts rows authorized for this account, and `skipped_store_rows` counts date rows belonging to other accounts. If none of the date rows match an authorized store, the command fails instead of silently producing an unchanged workbook.
 
@@ -194,6 +276,39 @@ If a different workbook uses codes that are not RTA business-facing IDs, `-mappi
 
 Library callers using `xlsxfill.Fill` can supply the IDs returned by `Client.Stores` through `Request.AllowedBusinessStoreIDs` to apply the same automatic selection.
 
+### Two-phase batch API
+
+New integrations should use the two-phase API. `Analyze` never changes the
+workbook, `RetryFailed` resumes temporary failures and cancelled pending work,
+and `Apply` writes only a complete plan whose source fingerprint still matches:
+
+```go
+plan, err := xlsxfill.Analyze(ctx, provider, xlsxfill.BatchRequest{
+	InputPath:               `C:\reports\august.xlsx`,
+	From:                    from,
+	To:                      to,
+	AllowedBusinessStoreIDs: allowedStoreIDs,
+	MaxJobs:                 2000,
+	Concurrency:             2,
+})
+if errors.Is(err, context.Canceled) {
+	plan, err = xlsxfill.RetryFailed(context.Background(), plan)
+}
+if err != nil {
+	return err
+}
+
+report, err := xlsxfill.Apply(ctx, plan, xlsxfill.ApplyRequest{
+	OutputPath: `C:\reports\august.filled.xlsx`,
+})
+```
+
+Temporary transport and HTTP 408/429/5xx failures are retried twice after
+`1s` and `3s`. No-data, permission, mapping, and workbook-format problems are
+terminal. Set `AllowPartial` only for a completed plan with issues; every issue
+row remains unchanged. The original single-date `xlsxfill.Fill` and CLI
+`-date` behavior remain supported.
+
 ## Client configuration
 
 | Field | Purpose | Default |
@@ -202,6 +317,7 @@ Library callers using `xlsxfill.Fill` can supply the IDs returned by `Client.Sto
 | `Password` | RTA login password; required | none |
 | `CaptchaSolvers` | Solvers attempted in order; at least one required | none |
 | `CookieFile` | Persistent cookie-jar path | in-memory cookies |
+| `CookieStore` | Pluggable cookie persistence, mutually exclusive with `CookieFile` | none |
 | `HTTPClient` | Custom transport, proxy, timeout, or cookie jar | 30-second client |
 | `PageConcurrency` | Concurrent requests after the first page | `4` |
 | `LoginAttempts` | Fresh captcha/login attempts, from `1` to `10` | `4` |
@@ -255,6 +371,16 @@ go test ./...
 go test -race ./...
 go vet ./...
 go build ./...
+
+cd desktop/frontend
+bun install --frozen-lockfile
+bun run verify
+
+cd ../../cmd/rta-excel-filler
+wails build -platform windows/amd64
 ```
+
+Desktop builds use Wails CLI `v2.14.0`, Bun, and NSIS 3. Install the pinned
+CLI with `go install github.com/wailsapp/wails/v2/cmd/wails@v2.14.0`.
 
 Committed tests use synthetic images and local HTTP fixtures. They do not contact RTA or external captcha services and contain no production store data.

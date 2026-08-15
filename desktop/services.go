@@ -1,0 +1,71 @@
+package desktop
+
+import (
+	"context"
+
+	rtasales "github.com/Miku0139oao/rta-sales-client-go"
+	"github.com/Miku0139oao/rta-sales-client-go/securestore"
+)
+
+type fileDialogOptions struct {
+	Title            string
+	DefaultDirectory string
+	DefaultFilename  string
+	Filters          []fileDialogFilter
+}
+
+type fileDialogFilter struct {
+	DisplayName string
+	Pattern     string
+}
+
+type dialogService interface {
+	OpenFile(context.Context, fileDialogOptions) (string, error)
+	SaveFile(context.Context, fileDialogOptions) (string, error)
+}
+
+type eventSink interface {
+	Emit(context.Context, string, any)
+}
+
+type runtimeChecker interface {
+	Check() RuntimeStatus
+}
+
+type profileCookieStore interface {
+	CookieStore(profileID string) (rtasales.CookieStore, error)
+	DeleteCookie(profileID string) error
+}
+
+type nativeCookieStore struct {
+	native *securestore.Native
+}
+
+func (s nativeCookieStore) CookieStore(profileID string) (rtasales.CookieStore, error) {
+	return s.native.CookieStore(profileID)
+}
+
+func (s nativeCookieStore) DeleteCookie(profileID string) error {
+	return s.native.DeleteCookie(profileID)
+}
+
+type accountClient interface {
+	Stores(context.Context) ([]rtasales.Store, error)
+	Sales(context.Context, rtasales.SalesQuery) (*rtasales.SalesResult, error)
+}
+
+type clientFactory interface {
+	New(securestore.Credential, rtasales.CookieStore) (accountClient, error)
+}
+
+type rtaClientFactory struct{}
+
+func (rtaClientFactory) New(credential securestore.Credential, cookieStore rtasales.CookieStore) (accountClient, error) {
+	return rtasales.NewClient(rtasales.Config{
+		Account:        credential.Account,
+		Password:       credential.Password,
+		CaptchaSolvers: []rtasales.CaptchaSolver{rtasales.NewEmbeddedOCRSolver(rtasales.EmbeddedOCRConfig{})},
+		CookieStore:    cookieStore,
+		LoginAttempts:  4,
+	})
+}
