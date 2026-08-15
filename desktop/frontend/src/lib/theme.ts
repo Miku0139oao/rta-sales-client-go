@@ -2,8 +2,8 @@ import type { ResolvedTheme, ThemePreference } from './types';
 
 const DARK_QUERY = '(prefers-color-scheme: dark)';
 const THEME_COLORS: Record<ResolvedTheme, string> = {
-  light: '#f6f8f4',
-  dark: '#111410',
+  light: '#f4f6f8',
+  dark: '#0f1217',
 };
 
 export function resolveTheme(preference: ThemePreference, systemDark: boolean): ResolvedTheme {

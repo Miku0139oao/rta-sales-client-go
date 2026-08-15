@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f6f8f4" />
+    <meta name="theme-color" content="#f4f6f8" />
     <meta name="color-scheme" content="light dark" />
     <script>
       (() => {
@@ -15,7 +15,7 @@
             : preference;
           document.documentElement.dataset.theme = theme;
           document.documentElement.style.colorScheme = theme;
-          document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#111410' : '#f6f8f4');
+          document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#0f1217' : '#f4f6f8');
         } catch {
           document.documentElement.dataset.theme = 'light';
         }

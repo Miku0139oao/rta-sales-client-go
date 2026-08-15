@@ -23,7 +23,7 @@ describe('theme behavior', () => {
     applyTheme('dark');
     expect(document.documentElement.dataset.theme).toBe('dark');
     expect(document.documentElement.style.colorScheme).toBe('dark');
-    expect(meta.content).toBe('#111410');
+    expect(meta.content).toBe('#0f1217');
   });
 
   it('subscribes to live system theme changes and cleans up', () => {
