@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -91,6 +92,14 @@ func (f *rtaFixture) serveHTTP(response http.ResponseWriter, request *http.Reque
 			response.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		for _, column := range []string{
+			"column_purchase_category1_code", "column_purchase_category2_code", "column_purchase_category3_code",
+			"column_purchase_category4_code", "column_purchase_category5_code", "brand_name",
+		} {
+			if !strings.Contains(request.Form.Get("showColumns"), `"`+column+`":true`) || !strings.Contains(request.Form.Get("columnSeq"), column) {
+				f.testing.Errorf("sales form did not request %s", column)
+			}
+		}
 		page, _ := strconv.Atoi(request.Form.Get("pageNum"))
 		if page == f.failPage {
 			http.Error(response, "page failed", http.StatusBadGateway)
@@ -109,14 +118,23 @@ func (f *rtaFixture) serveHTTP(response http.ResponseWriter, request *http.Reque
 		f.rawPayloads = append(f.rawPayloads, rawPayload)
 		f.mu.Unlock()
 		row := map[string]any{
-			"purchase_category4_name":  "HEALTH",
-			"purchase_category5_name":  "VITAMINS",
-			"matnr":                    fmt.Sprintf("SKU-%d", page),
-			"article_name":             fmt.Sprintf("Item %d", page),
-			"tp_transaction_count":     page * 3,
-			"tp_transaction_count_agg": "999",
-			"tp_sale_amount":           fmt.Sprintf("%d.5", page*10),
-			"tp_gross_sale_qty":        page,
+			"purchase_category1_name":        "HEALTH & BEAUTY",
+			"column_purchase_category1_code": "A",
+			"purchase_category2_name":        "HEALTH CARE",
+			"column_purchase_category2_code": "A01",
+			"purchase_category3_name":        "SUPPLEMENTS",
+			"column_purchase_category3_code": "A0101",
+			"purchase_category4_name":        "HEALTH",
+			"column_purchase_category4_code": "A010101",
+			"purchase_category5_name":        "VITAMINS",
+			"column_purchase_category5_code": "A01010101",
+			"matnr":                          fmt.Sprintf("SKU-%d", page),
+			"article_name":                   fmt.Sprintf("Item %d", page),
+			"brand_name":                     "Fixture Brand",
+			"tp_transaction_count":           page * 3,
+			"tp_transaction_count_agg":       "999",
+			"tp_sale_amount":                 fmt.Sprintf("%d.5", page*10),
+			"tp_gross_sale_qty":              page,
 		}
 		writeJSON(response, map[string]any{
 			"code": "0000",
@@ -246,6 +264,9 @@ func TestSalesResolvesStorePaginatesAndAggregates(t *testing.T) {
 	if len(result.Items) != 2 || result.Items[0].Matnr != "SKU-1" || result.Items[1].Matnr != "SKU-2" {
 		t.Fatalf("pages were not merged in order: %+v", result.Items)
 	}
+	if result.Items[0].PurchaseCategory1Code != "A" || result.Items[0].PurchaseCategory5Code != "A01010101" || result.Items[0].BrandName != "Fixture Brand" {
+		t.Fatalf("category codes or brand were not decoded: %+v", result.Items[0])
+	}
 	if result.TotalAmount != 31 || result.GrossQuantity != 3 {
 		t.Fatalf("aggregate total=%v quantity=%v, want 31/3", result.TotalAmount, result.GrossQuantity)
 	}
@@ -307,6 +328,26 @@ func TestSalesResolvesStorePaginatesAndAggregates(t *testing.T) {
 	}
 	if !containsString(columns, "show_date") || !containsString(columns, "group_sales_ticket_num") || !containsString(columns, "gross_sales_gross_sale_untaxed_amt") {
 		t.Fatalf("Trend View columns omit date, transaction, or gross sales fields: %v", columns)
+	}
+}
+
+func TestSalesCanSkipWholeStoreTrendRequest(t *testing.T) {
+	fixture := newRTAFixture(t)
+	client, _, _ := fixture.client(t, "")
+	result, err := client.Sales(context.Background(), SalesQuery{
+		BusinessStoreID: "STOREA",
+		StartDate:       time.Date(2026, 6, 25, 0, 0, 0, 0, time.Local),
+		EndDate:         time.Date(2026, 6, 25, 0, 0, 0, 0, time.Local),
+		SkipTrend:       true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fixture.transactionRequests.Load() != 0 {
+		t.Fatalf("Trend View requests=%d, want 0", fixture.transactionRequests.Load())
+	}
+	if result.TrendGrossSaleAmount != nil || result.TotalTransactionCount != nil {
+		t.Fatalf("skipped Trend View returned totals: amount=%v transactions=%v", result.TrendGrossSaleAmount, result.TotalTransactionCount)
 	}
 }
 

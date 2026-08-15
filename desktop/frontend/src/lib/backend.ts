@@ -12,6 +12,13 @@ import type {
   ProfileUpsertRequest,
   SaveWorkbookRequest,
   ScanWorkbookRequest,
+  SalesAnalysisItem,
+  SalesAnalysisProgress,
+  SalesAnalysisPeriodResult,
+  SalesAnalysisRequest,
+  SalesAnalysisResult,
+  SalesAnalysisStore,
+  SalesAnalysisTotals,
   WorkbookScan,
 } from './types';
 import { AppError } from './types';
@@ -120,9 +127,109 @@ let mockProfiles: Profile[] = [
   { id: 'profile-backup', displayName: '備援帳號', enabled: true, priority: 2, hasCredentials: true, accountHint: 'sa••••02', lastTestStatus: 'untested' },
 ];
 const mockListeners = new Set<(progress: AnalysisProgress) => void>();
+const mockSalesAnalysisListeners = new Set<(progress: SalesAnalysisProgress) => void>();
 let mockCancelled = false;
+let mockSalesCancelled = false;
+
+const mockAnalysisStores: SalesAnalysisStore[] = [
+  { businessId: '107', label: '107 - Central' },
+  { businessId: '108', label: '108 - Harbour' },
+];
+
+const mockAnalysisItems: SalesAnalysisItem[] = [
+  {
+    storeId: '107', storeLabel: '107 - Central', category1: 'HEALTH & BEAUTY', category1Code: 'A', category2: 'BEAUTY CARE', category2Code: 'A02',
+    category3: 'SKIN CARE', category3Code: 'A0201', category4: 'FACIAL', category4Code: 'A020101', category5: 'MASQUE', category5Code: 'A02010101', articleCode: '552646', articleName: 'AHC 安瓶精華纖維面膜', brandName: 'AHC',
+    transactionCount: 1, saleQuantity: 3, saleAmount: 114, returnTransactionCount: 0, returnQuantity: 0, returnAmount: 0, netQuantity: 3, netSalesAmount: 114,
+  },
+  {
+    storeId: '107', storeLabel: '107 - Central', category1: 'NON FOOD', category1Code: 'B', category2: 'HOUSEHOLD', category2Code: 'B03',
+    category3: 'CLEANING', category3Code: 'B0302', category4: 'SURFACE', category4Code: 'B030201', category5: 'WIPES', category5Code: 'B03020102', articleCode: '900001', articleName: 'Household wipes', brandName: 'Mannings',
+    transactionCount: 2, saleQuantity: 5, saleAmount: 86, returnTransactionCount: 1, returnQuantity: 1, returnAmount: 12, netQuantity: 4, netSalesAmount: 74,
+  },
+  {
+    storeId: '108', storeLabel: '108 - Harbour', category1: 'HEALTH & BEAUTY', category1Code: 'A', category2: 'BEAUTY CARE', category2Code: 'A02',
+    category3: 'SKIN CARE', category3Code: 'A0201', category4: 'FACIAL', category4Code: 'A020101', category5: 'CLEANSER', category5Code: 'A02010102', articleCode: '285627', articleName: 'BF 深層卸妝潔膚水', brandName: 'Bifesta',
+    transactionCount: 4, saleQuantity: 6, saleAmount: 239.4, returnTransactionCount: 0, returnQuantity: 0, returnAmount: 0, netQuantity: 6, netSalesAmount: 239.4,
+  },
+];
 
 const pause = (duration = 90) => new Promise<void>((resolve) => setTimeout(resolve, duration));
+
+function mockItemTotals(items: SalesAnalysisItem[]): SalesAnalysisTotals {
+  return items.reduce((value, item) => ({
+    saleQuantity: value.saleQuantity + item.saleQuantity,
+    saleAmount: value.saleAmount + item.saleAmount,
+    returnQuantity: value.returnQuantity + item.returnQuantity,
+    returnAmount: value.returnAmount + item.returnAmount,
+    netQuantity: value.netQuantity + item.netQuantity,
+    netSalesAmount: value.netSalesAmount + item.netSalesAmount,
+  }), {
+    saleQuantity: 0, saleAmount: 0, returnQuantity: 0, returnAmount: 0, netQuantity: 0, netSalesAmount: 0,
+  });
+}
+
+async function mockRunSalesAnalysis(request: SalesAnalysisRequest): Promise<SalesAnalysisResult> {
+  mockSalesCancelled = false;
+  const operationId = `mock-sales-${Date.now()}`;
+  const selected = mockAnalysisStores.filter((store) => request.storeIds.includes(store.businessId));
+  const requestedPeriods = request.periods?.length ? request.periods : [{
+    key: 'current', label: 'Current', from: request.from ?? '', to: request.to ?? '', includeTrend: false,
+  }];
+  const totalTasks = selected.length * requestedPeriods.length;
+  mockSalesAnalysisListeners.forEach((listener) => listener({ operationId, current: 0, total: totalTasks, status: 'running' }));
+  let completed = 0;
+  for (const period of requestedPeriods) {
+    for (const store of selected) {
+      await pause(20);
+      if (mockSalesCancelled) throw new AppError('cancelled', 'Sales analysis cancelled');
+      completed += 1;
+      mockSalesAnalysisListeners.forEach((listener) => listener({
+        operationId, current: completed, total: totalTasks, storeId: store.businessId, storeLabel: store.label,
+        periodKey: period.key, periodLabel: period.label, status: 'success',
+      }));
+    }
+  }
+  const scales: Record<string, number> = { current: 1, previous: 0.92, previous2: 0.84, yearAgo: 0.88 };
+  const periods: SalesAnalysisPeriodResult[] = requestedPeriods.map((period) => {
+    const scale = scales[period.key] ?? 1;
+    const items = mockAnalysisItems
+      .filter((item) => request.storeIds.includes(item.storeId))
+      .map((item) => ({
+        ...item,
+        saleQuantity: item.saleQuantity * scale,
+        saleAmount: item.saleAmount * scale,
+        returnQuantity: item.returnQuantity * scale,
+        returnAmount: item.returnAmount * scale,
+        netQuantity: item.netQuantity * scale,
+        netSalesAmount: item.netSalesAmount * scale,
+      }));
+    const stores = selected.map((store, index) => {
+      const totals = mockItemTotals(items.filter((item) => item.storeId === store.businessId));
+      if (period.includeTrend) {
+        totals.trendNetSalesAmount = totals.netSalesAmount + (index + 1) * 4 * scale;
+        totals.transactionCount = (26 - index * 3) * scale;
+      }
+      return { ...store, totals };
+    });
+    const totals = mockItemTotals(items);
+    if (period.includeTrend) {
+      totals.trendNetSalesAmount = stores.reduce((sum, store) => sum + (store.totals.trendNetSalesAmount ?? 0), 0);
+      totals.transactionCount = stores.reduce((sum, store) => sum + (store.totals.transactionCount ?? 0), 0);
+    }
+    return {
+      key: period.key, label: period.label, from: period.from, to: period.to, complete: true,
+      successfulStores: selected.length, totals,
+      stores, items, issues: [],
+    };
+  });
+  const primary = periods[0]!;
+  return {
+    operationId, from: primary.from, to: primary.to, complete: true,
+    selectedStores: selected.length, successfulStores: primary.successfulStores, totals: primary.totals,
+    stores: primary.stores, items: primary.items, issues: [], periods, queryDurationMs: 180,
+  };
+}
 
 function mockResult(operationId = 'mock-analysis'): AnalysisResult {
   return {
@@ -251,6 +358,15 @@ export const backend: BackendApi = {
       return { ...found };
     }),
 
+  listSalesAnalysisStores: (profileId: string) =>
+    invoke(['ListSalesAnalysisStores'], [{ profileId }], async () => [...mockAnalysisStores]),
+
+  runSalesAnalysis: (request: SalesAnalysisRequest) =>
+    invoke(['RunSalesAnalysis'], [request], () => mockRunSalesAnalysis(request)),
+
+  cancelSalesAnalysis: (operationId: string) =>
+    invoke(['CancelSalesAnalysis'], [{ operationId }], async () => { mockSalesCancelled = true; }),
+
   analyze: (request: AnalyzeRequest) => invoke(['Analyze'], [request], mockAnalyze),
 
   cancelAnalysis: (operationId: string) =>
@@ -282,6 +398,16 @@ export const backend: BackendApi = {
 
     const cleanups = ['rta:progress', 'analysis-progress'].map((name) => source.on(name, (payload) => listener(payload as AnalysisProgress)));
     return () => cleanups.forEach((cleanup) => cleanup?.());
+  },
+
+  onSalesAnalysisProgress(listener: (progress: SalesAnalysisProgress) => void): () => void {
+    const source = eventSource();
+    if (!source) {
+      mockSalesAnalysisListeners.add(listener);
+      return () => mockSalesAnalysisListeners.delete(listener);
+    }
+    const cleanup = source.on('rta:sales-analysis-progress', (payload) => listener(payload as SalesAnalysisProgress));
+    return () => cleanup?.();
   },
 
   onFileDrop(listener: (paths: string[]) => void): () => void {

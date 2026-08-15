@@ -54,7 +54,7 @@ Open **Accounts**, add a display name and the RTA account/password, then use
 ownership priority: if two profiles can access the same store, the first
 enabled profile wins. The query-job concurrency limit in **Settings** applies
 across stores and dates even when one multi-store account handles every job
-(default `2`, maximum `4`).
+(default `16`, maximum `32`).
 
 Passwords are kept in Windows Credential Manager. Each profile's cookies are
 encrypted with Windows DPAPI before being saved under the current user's
@@ -62,6 +62,25 @@ application-data directory. `profiles.json` contains only display metadata.
 Workbook previews, sales values, store routing, and analysis plans remain in
 process memory and are not written to settings or logs. Deleting a profile also
 removes its saved credentials and encrypted cookies.
+
+### Sales analysis
+
+Open **Sales analysis**, choose one enabled multi-store profile, select the
+stores, and query either a month or a custom date range. Monthly comparison
+loads the current period, previous period, two periods ago, and the same period
+last year in one run. Period/store jobs share the selected profile and run in
+parallel up to the concurrency configured in **Settings**. When the selected
+month is still in progress, all four comparisons stop at the same day-of-month
+(capped at each month's final day); completed months use their full month.
+
+Product, brand, and all five category levels come from Article View. Gross
+sales, returns, net sales, quantities, category comparisons, top products, and
+store comparisons therefore retain the downloadable Article View definitions.
+Whole-store transaction counts come from Trend View and basket value is
+`Trend View net sales / Trend View transaction count`; product transactions are
+never summed to approximate a store transaction count. Category and product
+filters intentionally hide transaction count and basket value because Trend
+View does not provide those measures at the filtered product grain.
 
 ### Multi-day workbook workflow
 
@@ -196,6 +215,7 @@ RTA returns the authorized stores as a `data` array. For each entry, the client 
 | `EndDate` | Required inclusive end date; cannot precede `StartDate` |
 | `Category` | Optional caller-owned result label; it does not filter RTA by itself |
 | `ItemCodes` | Optional SKU/ManCode filter; empty queries all products |
+| `SkipTrend` | Optional; skips the whole-store Trend View request when only Article View rows are required |
 
 Blank and duplicate `ItemCodes` are removed before the request. `TrendGrossSaleAmount` and `TotalTransactionCount` are read directly from matching daily rows in RTA Trend View (`gross_sales_gross_sale_untaxed_amt` and `group_sales_ticket_num`) and summed over the requested inclusive date range. They are whole-store values and are not derived from Article View item rows. `TotalAmount` remains the item-filterable Article View aggregate.
 
@@ -257,7 +277,7 @@ go run ./cmd/rta-xlsx-fill `
 Do not pass `-row` during normal use; it is diagnostic-only and cannot be used
 with `-write`. `-max-jobs` is the safety ceiling after automatic store
 matching (default `2,000`); `-max-queries` remains as a deprecated alias.
-`-concurrency` is capped at `4` and applies to date/store query jobs, including
+`-concurrency` is capped at `32` and applies to date/store query jobs, including
 jobs handled by the same multi-store account.
 There is no whole-operation timeout by default. Use an explicit value such as
 `-timeout 20m` when one is required.
@@ -291,7 +311,7 @@ plan, err := xlsxfill.Analyze(ctx, provider, xlsxfill.BatchRequest{
 	To:                      to,
 	AllowedBusinessStoreIDs: allowedStoreIDs,
 	MaxJobs:                 2000,
-	Concurrency:             2,
+	Concurrency:             16,
 })
 if errors.Is(err, context.Canceled) {
 	plan, err = xlsxfill.RetryFailed(context.Background(), plan)

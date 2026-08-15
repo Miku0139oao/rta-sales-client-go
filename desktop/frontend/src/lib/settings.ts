@@ -6,7 +6,7 @@ export const defaultSettings: AppSettings = {
   locale: 'zh-TW',
   theme: 'system',
   maxJobs: 2000,
-  accountConcurrency: 2,
+  accountConcurrency: 16,
   useLocalMapping: false,
   mappingPath: '',
 };
@@ -21,7 +21,7 @@ export function normalizeSettings(value: Partial<AppSettings>): AppSettings {
     locale: value.locale === 'en' ? 'en' : 'zh-TW',
     theme: value.theme === 'light' || value.theme === 'dark' ? value.theme : 'system',
     maxJobs: clampInteger(value.maxJobs, defaultSettings.maxJobs, 1, 2000),
-    accountConcurrency: clampInteger(value.accountConcurrency, defaultSettings.accountConcurrency, 1, 4),
+    accountConcurrency: clampInteger(value.accountConcurrency, defaultSettings.accountConcurrency, 1, 32),
     useLocalMapping: value.useLocalMapping === true,
     mappingPath: typeof value.mappingPath === 'string' ? value.mappingPath : '',
   };

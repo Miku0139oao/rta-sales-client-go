@@ -7,9 +7,9 @@ describe('settings normalization', () => {
   });
 
   it('clamps workload and concurrency limits', () => {
-    expect(normalizeSettings({ maxJobs: 9000, accountConcurrency: 12 })).toMatchObject({
+    expect(normalizeSettings({ maxJobs: 9000, accountConcurrency: 99 })).toMatchObject({
       maxJobs: 2000,
-      accountConcurrency: 4,
+      accountConcurrency: 32,
     });
     expect(normalizeSettings({ maxJobs: 0, accountConcurrency: 0 })).toMatchObject({
       maxJobs: 1,

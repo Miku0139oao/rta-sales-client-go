@@ -192,3 +192,116 @@ type RuntimeStatus struct {
 	Version   string `json:"version,omitempty"`
 	Message   string `json:"message"`
 }
+
+// SalesAnalysisStore is an authorized, business-facing store available to a
+// desktop account profile. Query-only RTA identifiers never leave the client.
+type SalesAnalysisStore struct {
+	BusinessID string `json:"businessId"`
+	Label      string `json:"label"`
+}
+
+type SalesAnalysisRequest struct {
+	ProfileID   string                       `json:"profileId"`
+	StoreIDs    []string                     `json:"storeIds"`
+	From        string                       `json:"from,omitempty"`
+	To          string                       `json:"to,omitempty"`
+	Periods     []SalesAnalysisPeriodRequest `json:"periods,omitempty"`
+	Concurrency int                          `json:"concurrency"`
+}
+
+type SalesAnalysisPeriodRequest struct {
+	Key          string `json:"key"`
+	Label        string `json:"label"`
+	From         string `json:"from"`
+	To           string `json:"to"`
+	IncludeTrend bool   `json:"includeTrend"`
+}
+
+type SalesAnalysisItem struct {
+	StoreID                string  `json:"storeId"`
+	StoreLabel             string  `json:"storeLabel"`
+	Category1              string  `json:"category1"`
+	Category1Code          string  `json:"category1Code,omitempty"`
+	Category2              string  `json:"category2"`
+	Category2Code          string  `json:"category2Code,omitempty"`
+	Category3              string  `json:"category3"`
+	Category3Code          string  `json:"category3Code,omitempty"`
+	Category4              string  `json:"category4"`
+	Category4Code          string  `json:"category4Code,omitempty"`
+	Category5              string  `json:"category5"`
+	Category5Code          string  `json:"category5Code,omitempty"`
+	ArticleCode            string  `json:"articleCode"`
+	ArticleName            string  `json:"articleName"`
+	BrandName              string  `json:"brandName,omitempty"`
+	TransactionCount       float64 `json:"transactionCount"`
+	SaleQuantity           float64 `json:"saleQuantity"`
+	SaleAmount             float64 `json:"saleAmount"`
+	ReturnQuantity         float64 `json:"returnQuantity"`
+	ReturnTransactionCount float64 `json:"returnTransactionCount"`
+	ReturnAmount           float64 `json:"returnAmount"`
+	NetQuantity            float64 `json:"netQuantity"`
+	NetSalesAmount         float64 `json:"netSalesAmount"`
+}
+
+type SalesAnalysisTotals struct {
+	SaleQuantity        float64  `json:"saleQuantity"`
+	SaleAmount          float64  `json:"saleAmount"`
+	ReturnQuantity      float64  `json:"returnQuantity"`
+	ReturnAmount        float64  `json:"returnAmount"`
+	NetQuantity         float64  `json:"netQuantity"`
+	NetSalesAmount      float64  `json:"netSalesAmount"`
+	TrendNetSalesAmount *float64 `json:"trendNetSalesAmount,omitempty"`
+	TransactionCount    *float64 `json:"transactionCount,omitempty"`
+}
+
+type SalesAnalysisStoreSummary struct {
+	BusinessID string              `json:"businessId"`
+	Label      string              `json:"label"`
+	Totals     SalesAnalysisTotals `json:"totals"`
+}
+
+type SalesAnalysisIssue struct {
+	PeriodKey  string `json:"periodKey,omitempty"`
+	StoreID    string `json:"storeId"`
+	StoreLabel string `json:"storeLabel"`
+	Message    string `json:"message"`
+}
+
+type SalesAnalysisPeriodResult struct {
+	Key              string                      `json:"key"`
+	Label            string                      `json:"label"`
+	From             string                      `json:"from"`
+	To               string                      `json:"to"`
+	Complete         bool                        `json:"complete"`
+	SuccessfulStores int                         `json:"successfulStores"`
+	Totals           SalesAnalysisTotals         `json:"totals"`
+	Stores           []SalesAnalysisStoreSummary `json:"stores"`
+	Items            []SalesAnalysisItem         `json:"items"`
+	Issues           []SalesAnalysisIssue        `json:"issues,omitempty"`
+}
+
+type SalesAnalysisResult struct {
+	OperationID      string                      `json:"operationId"`
+	From             string                      `json:"from"`
+	To               string                      `json:"to"`
+	Complete         bool                        `json:"complete"`
+	SelectedStores   int                         `json:"selectedStores"`
+	SuccessfulStores int                         `json:"successfulStores"`
+	Totals           SalesAnalysisTotals         `json:"totals"`
+	Stores           []SalesAnalysisStoreSummary `json:"stores"`
+	Items            []SalesAnalysisItem         `json:"items"`
+	Issues           []SalesAnalysisIssue        `json:"issues,omitempty"`
+	Periods          []SalesAnalysisPeriodResult `json:"periods,omitempty"`
+	QueryDurationMS  int64                       `json:"queryDurationMs"`
+}
+
+type SalesAnalysisProgress struct {
+	OperationID string `json:"operationId"`
+	Current     int    `json:"current"`
+	Total       int    `json:"total"`
+	StoreID     string `json:"storeId,omitempty"`
+	StoreLabel  string `json:"storeLabel,omitempty"`
+	PeriodKey   string `json:"periodKey,omitempty"`
+	PeriodLabel string `json:"periodLabel,omitempty"`
+	Status      string `json:"status,omitempty"`
+}

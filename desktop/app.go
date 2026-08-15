@@ -51,6 +51,9 @@ type App struct {
 	profileTestRunning     bool
 	profileTestID          string
 	profileTestCancel      context.CancelFunc
+	salesAnalysisRunning   bool
+	salesAnalysisID        string
+	salesAnalysisCancel    context.CancelFunc
 }
 
 type operationState struct {
@@ -339,7 +342,7 @@ func (a *App) TestProfile(request TestProfileRequest) (ProfileTestResult, error)
 	}
 	ctx, cancel := context.WithTimeout(a.appContext(), 3*time.Minute)
 	a.operationMu.Lock()
-	if (a.active != nil && a.active.running) || a.profileMutationRunning || a.profileTestRunning {
+	if (a.active != nil && a.active.running) || a.profileMutationRunning || a.profileTestRunning || a.salesAnalysisRunning {
 		a.operationMu.Unlock()
 		cancel()
 		return ProfileTestResult{}, errors.New("another account or workbook operation is already running")
@@ -550,10 +553,10 @@ func (a *App) Analyze(request AnalyzeRequest) (AnalysisResult, error) {
 	}
 	concurrency := request.AccountConcurrency
 	if concurrency == 0 {
-		concurrency = 2
+		concurrency = xlsxfill.DefaultConcurrency
 	}
-	if concurrency < 1 || concurrency > 4 {
-		return AnalysisResult{}, errors.New("query concurrency must be between 1 and 4")
+	if concurrency < 1 || concurrency > xlsxfill.MaximumConcurrency {
+		return AnalysisResult{}, fmt.Errorf("query concurrency must be between 1 and %d", xlsxfill.MaximumConcurrency)
 	}
 	operationID, err := newUUID()
 	if err != nil {
@@ -562,7 +565,7 @@ func (a *App) Analyze(request AnalyzeRequest) (AnalysisResult, error) {
 	ctx, cancel := context.WithCancel(a.appContext())
 	state := &operationState{id: operationID, inputPath: inputPath, allowPartial: request.AllowPartial, running: true, cancel: cancel}
 	a.operationMu.Lock()
-	if (a.active != nil && a.active.running) || a.profileMutationRunning || a.profileTestRunning {
+	if (a.active != nil && a.active.running) || a.profileMutationRunning || a.profileTestRunning || a.salesAnalysisRunning {
 		a.operationMu.Unlock()
 		cancel()
 		return AnalysisResult{}, errors.New("another account or workbook operation is already running")
@@ -709,7 +712,7 @@ func (a *App) Apply(request ApplyRequest) (ApplyResult, error) {
 
 func (a *App) beginExistingWork(operationID string) (*operationState, context.Context, func(*enginePlan, error), error) {
 	a.operationMu.Lock()
-	if a.profileMutationRunning || a.profileTestRunning {
+	if a.profileMutationRunning || a.profileTestRunning || a.salesAnalysisRunning {
 		a.operationMu.Unlock()
 		return nil, nil, nil, errors.New("another account operation is already running")
 	}
@@ -824,7 +827,7 @@ func (a *App) buildRouter(ctx context.Context, operationID string) (*xlsxfill.Pr
 
 func (a *App) beginProfileMutation() (func(), error) {
 	a.operationMu.Lock()
-	if (a.active != nil && a.active.running) || a.profileMutationRunning || a.profileTestRunning {
+	if (a.active != nil && a.active.running) || a.profileMutationRunning || a.profileTestRunning || a.salesAnalysisRunning {
 		a.operationMu.Unlock()
 		return nil, errors.New("profiles cannot be changed while an account or workbook operation is running")
 	}
@@ -841,7 +844,7 @@ func (a *App) beginProfileMutation() (func(), error) {
 func (a *App) rejectWhileRunning() error {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
-	if (a.active != nil && a.active.running) || a.profileMutationRunning || a.profileTestRunning {
+	if (a.active != nil && a.active.running) || a.profileMutationRunning || a.profileTestRunning || a.salesAnalysisRunning {
 		return errors.New("another account or workbook operation is already running")
 	}
 	return nil

@@ -39,18 +39,27 @@ type SalesQuery struct {
 	EndDate         time.Time
 	Category        string
 	ItemCodes       []string
+	// SkipTrend avoids the additional whole-store Trend View request when the
+	// caller only needs Article View rows and category metrics.
+	SkipTrend bool
 }
 
 // SaleItem preserves the typed RTA sales fields and the complete raw row.
 // Quantities are float64 so weighted products are not truncated.
 type SaleItem struct {
 	PurchaseCategory1Name       string         `json:"purchase_category1_name"`
+	PurchaseCategory1Code       string         `json:"purchase_category1_code,omitempty"`
 	PurchaseCategory2Name       string         `json:"purchase_category2_name"`
+	PurchaseCategory2Code       string         `json:"purchase_category2_code,omitempty"`
 	PurchaseCategory3Name       string         `json:"purchase_category3_name"`
+	PurchaseCategory3Code       string         `json:"purchase_category3_code,omitempty"`
 	PurchaseCategory4Name       string         `json:"purchase_category4_name"`
+	PurchaseCategory4Code       string         `json:"purchase_category4_code,omitempty"`
 	PurchaseCategory5Name       string         `json:"purchase_category5_name"`
+	PurchaseCategory5Code       string         `json:"purchase_category5_code,omitempty"`
 	Matnr                       string         `json:"matnr"`
 	ArticleName                 string         `json:"article_name"`
+	BrandName                   string         `json:"brand_name,omitempty"`
 	TPTransactionCount          float64        `json:"tp_transaction_count"`
 	TPTransactionCountAgg       *float64       `json:"tp_transaction_count_agg,omitempty"`
 	TPSaleQuantity              float64        `json:"tp_sale_qty"`
@@ -198,9 +207,12 @@ func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, err
 	for _, page := range pages {
 		items = append(items, page...)
 	}
-	trend, err := c.fetchTrendTotals(ctx, query, store)
-	if err != nil {
-		return nil, err
+	trend := trendTotals{}
+	if !query.SkipTrend {
+		trend, err = c.fetchTrendTotals(ctx, query, store)
+		if err != nil {
+			return nil, err
+		}
 	}
 	total, quantity, categories := aggregateSales(items)
 	return &SalesResult{
@@ -484,12 +496,12 @@ sendPages:
 
 func fixedSalesForm(page int) url.Values {
 	return url.Values{
-		"showColumns":    {"{\"purchase_category1_name\":true,\"column_purchase_category1_code\":false,\"purchase_category2_name\":true,\"column_purchase_category2_code\":false,\"purchase_category3_name\":true,\"column_purchase_category3_code\":false,\"purchase_category4_name\":true,\"column_purchase_category4_code\":false,\"purchase_category5_name\":true,\"column_purchase_category5_code\":false,\"matnr\":true,\"article_name\":true,\"brand_name\":false,\"tp_transaction_count\":true,\"tp_transaction_count_agg\":true,\"tp_sale_qty\":true,\"tp_sale_amount\":true,\"tmp2_tp_sale_amount\":true,\"actual_sale_amount_contribution\":false,\"tp_return_transaction_count\":true,\"tp_return_transaction_count_agg\":true,\"tp_return_sale_qty\":true,\"tp_return_sale_amount\":true,\"tmp2_return_sale_amount\":true,\"return_sale_amount_contribution\":false,\"tp_gross_sale_qty\":true,\"tp_gross_sale_amount\":true,\"tmp2_gross_sale_amount\":true,\"gross_sale_amount_contribution\":false}"},
+		"showColumns":    {"{\"purchase_category1_name\":true,\"column_purchase_category1_code\":true,\"purchase_category2_name\":true,\"column_purchase_category2_code\":true,\"purchase_category3_name\":true,\"column_purchase_category3_code\":true,\"purchase_category4_name\":true,\"column_purchase_category4_code\":true,\"purchase_category5_name\":true,\"column_purchase_category5_code\":true,\"matnr\":true,\"article_name\":true,\"brand_name\":true,\"tp_transaction_count\":true,\"tp_transaction_count_agg\":true,\"tp_sale_qty\":true,\"tp_sale_amount\":true,\"tmp2_tp_sale_amount\":true,\"actual_sale_amount_contribution\":false,\"tp_return_transaction_count\":true,\"tp_return_transaction_count_agg\":true,\"tp_return_sale_qty\":true,\"tp_return_sale_amount\":true,\"tmp2_return_sale_amount\":true,\"return_sale_amount_contribution\":false,\"tp_gross_sale_qty\":true,\"tp_gross_sale_amount\":true,\"tmp2_gross_sale_amount\":true,\"gross_sale_amount_contribution\":false}"},
 		"filterParam":    {"{}"},
 		"orderByColumns": {"{\"tp_sale_amount\":2}"},
 		"viewCode":       {"318f39ba93894fb5b85344c24a352201"},
 		"pageSize":       {strconv.Itoa(salesPageSize)},
-		"columnSeq":      {"purchase_category1_name,purchase_category2_name,purchase_category3_name,purchase_category4_name,purchase_category5_name,matnr,article_name,tp_transaction_count,tp_transaction_count_agg,tp_sale_qty,tp_sale_amount,tmp2_tp_sale_amount,tp_return_transaction_count,tp_return_transaction_count_agg,tp_return_sale_qty,tp_return_sale_amount,tmp2_return_sale_amount,tp_gross_sale_qty,tp_gross_sale_amount,tmp2_gross_sale_amount"},
+		"columnSeq":      {"purchase_category1_name,column_purchase_category1_code,purchase_category2_name,column_purchase_category2_code,purchase_category3_name,column_purchase_category3_code,purchase_category4_name,column_purchase_category4_code,purchase_category5_name,column_purchase_category5_code,matnr,article_name,brand_name,tp_transaction_count,tp_transaction_count_agg,tp_sale_qty,tp_sale_amount,tmp2_tp_sale_amount,tp_return_transaction_count,tp_return_transaction_count_agg,tp_return_sale_qty,tp_return_sale_amount,tmp2_return_sale_amount,tp_gross_sale_qty,tp_gross_sale_amount,tmp2_gross_sale_amount"},
 		"pageNum":        {strconv.Itoa(page)},
 	}
 }
@@ -501,12 +513,18 @@ func saleItemFromRow(row map[string]any) SaleItem {
 	}
 	return SaleItem{
 		PurchaseCategory1Name:       stringFrom(row["purchase_category1_name"]),
+		PurchaseCategory1Code:       firstStringFrom(row, "purchase_category1_code", "column_purchase_category1_code"),
 		PurchaseCategory2Name:       stringFrom(row["purchase_category2_name"]),
+		PurchaseCategory2Code:       firstStringFrom(row, "purchase_category2_code", "column_purchase_category2_code"),
 		PurchaseCategory3Name:       stringFrom(row["purchase_category3_name"]),
+		PurchaseCategory3Code:       firstStringFrom(row, "purchase_category3_code", "column_purchase_category3_code"),
 		PurchaseCategory4Name:       stringFrom(row["purchase_category4_name"]),
+		PurchaseCategory4Code:       firstStringFrom(row, "purchase_category4_code", "column_purchase_category4_code"),
 		PurchaseCategory5Name:       stringFrom(row["purchase_category5_name"]),
+		PurchaseCategory5Code:       firstStringFrom(row, "purchase_category5_code", "column_purchase_category5_code"),
 		Matnr:                       stringFrom(row["matnr"]),
 		ArticleName:                 stringFrom(row["article_name"]),
+		BrandName:                   stringFrom(row["brand_name"]),
 		TPTransactionCount:          floatFrom(row["tp_transaction_count"]),
 		TPTransactionCountAgg:       optionalFloatFrom(row["tp_transaction_count_agg"]),
 		TPSaleQuantity:              floatFrom(row["tp_sale_qty"]),
@@ -519,6 +537,15 @@ func saleItemFromRow(row map[string]any) SaleItem {
 		TPGrossSaleAmount:           floatFrom(row["tp_gross_sale_amount"]),
 		Raw:                         raw,
 	}
+}
+
+func firstStringFrom(row map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(stringFrom(row[key])); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func aggregateSales(items []SaleItem) (float64, float64, []CategoryAggregate) {

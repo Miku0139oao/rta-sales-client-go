@@ -42,9 +42,15 @@ Get-Content .\SHA256SUMS.txt
 
 ### 帳號與私密資料
 
-進入「帳號」，填入顯示名稱、RTA 帳號與密碼，先執行「測試」再啟用。帳號設定檔的排列順序也是門店歸屬優先順序；兩個帳號都可存取同一門店時，由第一個已啟用的設定檔負責。「設定」中的查詢工作並行數會套用到不同門店與日期，即使所有工作都由同一個多門店帳號處理也能並行（預設 `2`，最高 `4`）。
+進入「帳號」，填入顯示名稱、RTA 帳號與密碼，先執行「測試」再啟用。帳號設定檔的排列順序也是門店歸屬優先順序；兩個帳號都可存取同一門店時，由第一個已啟用的設定檔負責。「設定」中的查詢工作並行數會套用到不同門店與日期，即使所有工作都由同一個多門店帳號處理也能並行（預設 `16`，最高 `32`）。
 
 密碼保存在 Windows Credential Manager。每個設定檔的 Cookie 都會先用 Windows DPAPI 加密，再存到目前使用者的應用程式資料目錄；`profiles.json` 只含顯示用 metadata。活頁簿預覽、銷售數值、門店路由與分析 plan 只存在程式記憶體，不會寫入設定或 log。刪除設定檔時，也會移除其帳密與加密 Cookie。
+
+### 銷售分析
+
+進入「銷售分析」，選擇一個已啟用的多門店帳號、勾選門店，再查詢月份或自訂日期範圍。月份比較會在一次操作中取得本期、上期、前期與去年同期；每個「期間 × 門店」工作共用所選帳號，並依「設定」中的並行數執行。選擇尚未結束的本月時，四個比較期間都會截止於相同日號（短月份以月底為限）；已結束月份則使用完整月份。
+
+商品、品牌與五層分類均來自 Article View，因此銷售金額、退款、淨銷售、數量、分類比較、熱門商品與門店比較都維持 Article View 下載檔的口徑。全店交易次數改由 Trend View 取得，客單價使用「Trend View 全店淨銷售額 ÷ Trend View 交易次數」，絕不加總商品列交易次數來推算。啟用商品或分類篩選時，畫面會隱藏交易次數與客單價，因為 Trend View 沒有相同商品粒度的數值。
 
 ### 多日活頁簿流程
 
@@ -164,6 +170,7 @@ RTA 會以 `data` array 回傳授權門店。套件逐筆處理：`key` 只保�
 | `EndDate` | 必填，包含在查詢範圍內，且不可早於 `StartDate` |
 | `Category` | 選用的呼叫端結果標籤，本身不會篩選 RTA 資料 |
 | `ItemCodes` | 選用的 SKU／ManCode 篩選；空值查詢全部商品 |
+| `SkipTrend` | 選用；只需要 Article View 明細時略過額外的全店 Trend View 查詢 |
 
 送出前會移除空白與重複的 `ItemCodes`。`TrendGrossSaleAmount` 與 `TotalTransactionCount` 直接讀取 RTA Trend View 同門店、同日期的 `gross_sales_gross_sale_untaxed_amt` 與 `group_sales_ticket_num`，日期範圍超過一天時會加總範圍內的每日列。兩者皆為全店口徑，不會由 Article View 商品明細推算；`TotalAmount` 則維持可依商品篩選的 Article View 加總。
 
@@ -221,7 +228,7 @@ go run ./cmd/rta-xlsx-fill `
   -write
 ```
 
-正常使用不要加入 `-row`；它只供診斷，而且不可與 `-write` 並用。`-max-jobs` 是自動選店後的安全上限（預設 `2,000`）；`-max-queries` 只保留作 deprecated alias。`-concurrency` 是日期／門店查詢工作的並行數，最高為 `4`；同一個多門店帳號的工作也會並行。預設沒有整體 timeout；需要時才明確加入例如 `-timeout 20m`。
+正常使用不要加入 `-row`；它只供診斷，而且不可與 `-write` 並用。`-max-jobs` 是自動選店後的安全上限（預設 `2,000`）；`-max-queries` 只保留作 deprecated alias。`-concurrency` 是日期／門店查詢工作的並行數，最高為 `32`；同一個多門店帳號的工作也會並行。預設沒有整體 timeout；需要時才明確加入例如 `-timeout 20m`。
 
 JSON 報告會分開顯示比對階段：`matched_rows` 是符合日期的列數，`selected_rows` 是此帳號有權限的列數，`skipped_store_rows` 是屬於其他帳號而略過的列數。若該日期沒有任何授權門店相符，指令會明確失敗，不會靜默產生沒有變更的活頁簿。
 
@@ -250,7 +257,7 @@ plan, err := xlsxfill.Analyze(ctx, provider, xlsxfill.BatchRequest{
 	To:                      to,
 	AllowedBusinessStoreIDs: allowedStoreIDs,
 	MaxJobs:                 2000,
-	Concurrency:             2,
+	Concurrency:             16,
 })
 if errors.Is(err, context.Canceled) {
 	plan, err = xlsxfill.RetryFailed(context.Background(), plan)
