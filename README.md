@@ -354,7 +354,7 @@ row remains unchanged. The original single-date `xlsxfill.Fill` and CLI
 
 ## Captcha OCR and hardware
 
-The embedded solver keeps a fast two-model consensus path for clear glyphs. Borderline glyphs are re-extracted at several color tolerances, then both shape models vote on the result. An uncertain image is not submitted; the next login attempt requests a fresh challenge or the next configured solver is used.
+The embedded solver keeps a fast two-model consensus path for clear glyphs. Borderline glyphs and closed-loop lookalikes (`0`/`8` vs `c`/`e`/`3`/`9`) are re-extracted at several color tolerances, then both shape models vote with hole and opening checks. An uncertain image is not submitted; the next login attempt requests a fresh challenge or the next configured solver is used.
 
 It uses ordinary CPU instructions and needs no GPU, CGO, Tesseract executable, background service, or external model file. The recommended configuration is:
 

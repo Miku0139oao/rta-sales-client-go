@@ -157,11 +157,12 @@ func (s *EmbeddedOCRSolver) classifyCaptchaCharacter(source image.Image, index i
 		return 0, math.Inf(1), 0, err
 	}
 	// Strong agreement from the original two-path classifier is both reliable
-	// and much cheaper than the multi-tolerance review. Borderline matches are
-	// reviewed because thin, similarly colored noise can close an otherwise
-	// open glyph and turn c/e/3/9 into 0/8-like shapes.
+	// and much cheaper than the multi-tolerance review. Borderline matches and
+	// closed-loop lookalikes are reviewed because thin, similarly colored noise
+	// can close an otherwise open glyph and turn c/e/3/9 into 0/8-like shapes.
 	if baselineDistance <= minFloat(0.15, s.maximumDistance) &&
-		baselineMargin >= maxFloat(0.05, s.minimumScoreMargin) {
+		baselineMargin >= maxFloat(0.05, s.minimumScoreMargin) &&
+		s.topologySupports(source, index, baselineCharacter) {
 		return baselineCharacter, baselineDistance, baselineMargin, nil
 	}
 	components, err := extractCaptchaGlyphEnsembleComponents(source, index, s.length)
@@ -178,6 +179,26 @@ func (s *EmbeddedOCRSolver) classifyCaptchaCharacter(source image.Image, index i
 		return baselineCharacter, baselineDistance, baselineMargin, nil
 	}
 	return winner.character, distance, margin, nil
+}
+
+func (s *EmbeddedOCRSolver) topologySupports(source image.Image, index int, character byte) bool {
+	if character == 0 {
+		return false
+	}
+	components, err := extractCaptchaGlyphEnsembleComponents(source, index, s.length)
+	if err != nil || len(components) == 0 {
+		components, err = extractCaptchaGlyphComponents(source, index, s.length, 0)
+		if err != nil || len(components) == 0 {
+			return true
+		}
+	}
+	agreements := 0
+	for _, component := range components {
+		if topologyAgrees(character, inspectGlyphTopology(component)) {
+			agreements++
+		}
+	}
+	return agreements*2 >= len(components)
 }
 
 func (s *EmbeddedOCRSolver) classifyCaptchaCharacterBaseline(source image.Image, index int) (byte, float64, float64, error) {
@@ -368,11 +389,17 @@ type binaryGlyph struct {
 	pixels []bool
 }
 
+type glyphTopology struct {
+	holes        int
+	rightOpening bool
+	leftOpening  bool
+}
+
 type preparedGlyph struct {
 	binaryGlyph
 	foreground []int
 	rows       []uint64
-	holes      int
+	topology   glyphTopology
 }
 
 func newBinaryGlyph(width, height int) binaryGlyph {
@@ -845,7 +872,7 @@ func prepareGlyphTemplates(source map[byte][]binaryGlyph) map[byte][]preparedGly
 func prepareGlyph(glyph binaryGlyph) preparedGlyph {
 	prepared := preparedGlyph{
 		binaryGlyph: glyph,
-		holes:       countGlyphHoles(glyph),
+		topology:    inspectGlyphTopology(glyph),
 	}
 	if glyph.width <= 64 {
 		prepared.rows = make([]uint64, glyph.height)
@@ -871,9 +898,16 @@ func glyphDistance(left, right preparedGlyph) float64 {
 		return math.Inf(1)
 	}
 	densityPenalty := math.Abs(float64(leftCount-rightCount)) / float64(max(leftCount, rightCount))
-	holePenalty := math.Abs(float64(left.holes-right.holes)) * 0.02
+	holePenalty := math.Abs(float64(left.topology.holes-right.topology.holes)) * 0.06
+	openingPenalty := 0.0
+	if left.topology.rightOpening != right.topology.rightOpening {
+		openingPenalty += 0.045
+	}
+	if left.topology.leftOpening != right.topology.leftOpening {
+		openingPenalty += 0.03
+	}
 	overlapPenalty := alignedGlyphOverlapDistance(left, right)
-	return overlapPenalty + densityPenalty*0.05 + holePenalty
+	return overlapPenalty + densityPenalty*0.05 + holePenalty + openingPenalty
 }
 
 func alignedGlyphOverlapDistance(left, right preparedGlyph) float64 {
@@ -910,6 +944,125 @@ func alignedGlyphOverlapDistance(left, right preparedGlyph) float64 {
 		}
 	}
 	return best
+}
+
+func inspectGlyphTopology(glyph binaryGlyph) glyphTopology {
+	cleaned := breakNoiseBridges(glyph)
+	return glyphTopology{
+		holes:        countGlyphHoles(cleaned),
+		rightOpening: sideOpening(cleaned, 1),
+		leftOpening:  sideOpening(cleaned, -1),
+	}
+}
+
+func breakNoiseBridges(source binaryGlyph) binaryGlyph {
+	if source.width < 4 || source.height < 6 {
+		return source
+	}
+	eroded := newBinaryGlyph(source.width, source.height)
+	for y := 1; y < source.height-1; y++ {
+		for x := 1; x < source.width-1; x++ {
+			if !source.at(x, y) {
+				continue
+			}
+			neighbors := 0
+			if source.at(x-1, y) {
+				neighbors++
+			}
+			if source.at(x+1, y) {
+				neighbors++
+			}
+			if source.at(x, y-1) {
+				neighbors++
+			}
+			if source.at(x, y+1) {
+				neighbors++
+			}
+			if neighbors >= 2 {
+				eroded.set(x, y, true)
+			}
+		}
+	}
+	result := newBinaryGlyph(source.width, source.height)
+	for y := 0; y < source.height; y++ {
+		for x := 0; x < source.width; x++ {
+			if !eroded.at(x, y) {
+				continue
+			}
+			for offsetY := -1; offsetY <= 1; offsetY++ {
+				for offsetX := -1; offsetX <= 1; offsetX++ {
+					if source.at(x+offsetX, y+offsetY) {
+						result.set(x+offsetX, y+offsetY, true)
+					}
+				}
+			}
+		}
+	}
+	if result.foregroundCount() < 12 {
+		return source
+	}
+	return result
+}
+
+func sideOpening(glyph binaryGlyph, direction int) bool {
+	if glyph.width < 4 || glyph.height < 6 {
+		return false
+	}
+	top := glyph.height * 3 / 10
+	bottom := glyph.height * 7 / 10
+	if bottom <= top {
+		return false
+	}
+	openRows := 0
+	inkRows := 0
+	for y := top; y < bottom; y++ {
+		hasInk := false
+		for x := 0; x < glyph.width; x++ {
+			if glyph.at(x, y) {
+				hasInk = true
+				break
+			}
+		}
+		if !hasInk {
+			continue
+		}
+		inkRows++
+		if direction > 0 {
+			edge := glyph.width - 1
+			for edge >= 0 && !glyph.at(edge, y) {
+				edge--
+			}
+			if edge < glyph.width*3/4 {
+				openRows++
+			}
+		} else {
+			edge := 0
+			for edge < glyph.width && !glyph.at(edge, y) {
+				edge++
+			}
+			if edge > glyph.width/4 {
+				openRows++
+			}
+		}
+	}
+	return inkRows > 0 && float64(openRows)/float64(inkRows) >= 0.45
+}
+
+func topologyAgrees(character byte, topology glyphTopology) bool {
+	switch character {
+	case '0':
+		return topology.holes >= 1 && !topology.rightOpening
+	case '8':
+		return topology.holes >= 2
+	case '6', '9', 'a', 'b', 'd':
+		return topology.holes >= 1
+	case 'c', 'e':
+		return topology.rightOpening || topology.holes == 0
+	case '3':
+		return topology.leftOpening || topology.holes == 0
+	default:
+		return true
+	}
 }
 
 func countGlyphHoles(glyph binaryGlyph) int {
