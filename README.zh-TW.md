@@ -290,7 +290,7 @@ report, err := xlsxfill.Apply(ctx, plan, xlsxfill.ApplyRequest{
 
 ## 驗證碼 OCR 與硬體需求
 
-內建 solver 使用兩條獨立的擷取／分類路徑，只有兩者結果相同且通過信心門檻時才接受。信心不足的圖片不會送出；系統會取得新的 challenge，或交給下一個已設定的 solver。
+內建 solver 對清楚字形保留快速的雙模型共識路徑；遇到邊界案例時，會改用多組色差重新擷取，再交由兩套形狀模型投票。信心不足的圖片不會送出；系統會取得新的 challenge，或交給下一個已設定的 solver。
 
 它只使用一般 CPU 指令，不需要 GPU、CGO、Tesseract 執行檔、背景服務或外部模型檔。建議設定：
 
@@ -298,7 +298,7 @@ report, err := xlsxfill.Apply(ctx, plan, xlsxfill.ApplyRequest{
 solver := rtasales.NewEmbeddedOCRSolver(rtasales.EmbeddedOCRConfig{})
 ```
 
-在一批獨立的 1,000 張 challenge 驗證中，raw top-1 辨識為 `989/1000`；預設門檻送出 `905/1000`，有限樣本中的 `905` 筆送出結果均獲接受。這不能證明單張圖片有 99.99% 準確率。四次新 challenge 提供的是重試層可靠度；被拒絕的圖片不會當作正確結果。
+最終版本另以 200 張全新 challenge 獨立驗證：raw 辨識為 `200/200`；預設門檻送出 `187/200`，RTA 接受 `187/187`。同一批圖片在舊路徑下為 raw `198/200`、送出 `172/200`。有限樣本不代表單張圖片具有絕對準確率；四次新 challenge 提供的是重試層可靠度，被拒絕的圖片不會當作正確結果。
 
 需要遠端備援的應用可在 solver 清單後加入 `NewTwoCaptchaSolver`。已部署 Tesseract 的應用可用 `TesseractSolver`；自訂 solver 只需實作：
 

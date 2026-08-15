@@ -348,7 +348,7 @@ row remains unchanged. The original single-date `xlsxfill.Fill` and CLI
 
 ## Captcha OCR and hardware
 
-The embedded solver uses two independent extraction/classification paths and accepts an answer only when both agree and pass the confidence gate. An uncertain image is not submitted; the next login attempt requests a fresh challenge or the next configured solver is used.
+The embedded solver keeps a fast two-model consensus path for clear glyphs. Borderline glyphs are re-extracted at several color tolerances, then both shape models vote on the result. An uncertain image is not submitted; the next login attempt requests a fresh challenge or the next configured solver is used.
 
 It uses ordinary CPU instructions and needs no GPU, CGO, Tesseract executable, background service, or external model file. The recommended configuration is:
 
@@ -356,7 +356,7 @@ It uses ordinary CPU instructions and needs no GPU, CGO, Tesseract executable, b
 solver := rtasales.NewEmbeddedOCRSolver(rtasales.EmbeddedOCRConfig{})
 ```
 
-In an independent 1,000-challenge validation, raw top-1 recognition was `989/1000`. The default gate submitted `905/1000`, and all `905` submitted answers were accepted in that finite sample. This is not a 99.99% per-image accuracy guarantee. Four fresh challenges provide retry-level reliability; rejected images are not treated as correct results.
+In a final independent 200-challenge validation, raw recognition was `200/200`. The default gate submitted `187/200`, and RTA accepted all `187/187`; on those same images the previous path recognized `198/200` and submitted `172/200`. This finite sample is not a per-image accuracy guarantee. Four fresh challenges provide retry-level reliability; rejected images are not treated as correct results.
 
 Applications that want a remote fallback can append `NewTwoCaptchaSolver`. Applications already deploying Tesseract can use `TesseractSolver`, and custom solvers implement:
 
