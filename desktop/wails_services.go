@@ -15,6 +15,12 @@ func (wailsDialogService) OpenFile(ctx context.Context, options fileDialogOption
 	})
 }
 
+func (wailsDialogService) OpenDirectory(ctx context.Context, options fileDialogOptions) (string, error) {
+	return runtime.OpenDirectoryDialog(ctx, runtime.OpenDialogOptions{
+		Title: options.Title, DefaultDirectory: options.DefaultDirectory,
+	})
+}
+
 func (wailsDialogService) SaveFile(ctx context.Context, options fileDialogOptions) (string, error) {
 	return runtime.SaveFileDialog(ctx, runtime.SaveDialogOptions{
 		Title: options.Title, DefaultDirectory: options.DefaultDirectory,

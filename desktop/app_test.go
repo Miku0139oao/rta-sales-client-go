@@ -18,14 +18,19 @@ import (
 )
 
 type fakeDialogs struct {
-	mu       sync.Mutex
-	open     string
-	save     string
-	lastSave fileDialogOptions
+	mu        sync.Mutex
+	open      string
+	directory string
+	save      string
+	lastSave  fileDialogOptions
 }
 
 func (d *fakeDialogs) OpenFile(context.Context, fileDialogOptions) (string, error) {
 	return d.open, nil
+}
+
+func (d *fakeDialogs) OpenDirectory(context.Context, fileDialogOptions) (string, error) {
+	return d.directory, nil
 }
 
 func (d *fakeDialogs) SaveFile(_ context.Context, options fileDialogOptions) (string, error) {

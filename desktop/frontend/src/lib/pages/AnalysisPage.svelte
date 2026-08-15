@@ -2,6 +2,12 @@
   import { onMount } from 'svelte';
   import { backend } from '../backend';
   import { errorMessage } from '../i18n';
+  import {
+    bytesToBase64,
+    generateSalesAnalysisPDF,
+    listSuccessfulReportStores,
+    salesAnalysisPDFFilename,
+  } from '../sales-report-pdf';
   import type { Translator } from '../i18n';
   import type {
     AppSettings,
@@ -31,6 +37,9 @@
     id: string; name: string; code: string; current: number; previous: number; previous2: number; yearAgo: number;
   };
   type TopItem = { id: string; code: string; name: string; brand: string; amount: number; quantity: number };
+  type CategoryRankingGroup = {
+    id: string; code: string; name: string; amount: number; quantity: number; items: TopItem[];
+  };
   type StoreComparisonRow = {
     id: string; label: string; current?: SalesAnalysisTotals; previous?: SalesAnalysisTotals; yearAgo?: SalesAnalysisTotals;
   };
@@ -52,7 +61,11 @@
   let loadingStores = false;
   let running = false;
   let cancelling = false;
+  let exportingPDF = false;
+  let pdfExportCurrent = 0;
+  let pdfExportTotal = 0;
   let error = '';
+  let exportNotice = '';
   let result: SalesAnalysisResult | undefined;
   let progress: SalesAnalysisProgress | undefined;
   let operationId = '';
@@ -62,7 +75,9 @@
   let to = localISODate();
   let activeView: ReportView = 'overview';
   let search = '';
-  let groupLevel: CategoryKey = 'category4';
+  let groupLevel: CategoryKey = 'category2';
+  let salesRankingKey = 'current';
+  let quantityRankingKey = 'current';
   let selections = emptySelections();
   let reportPeriods: SalesAnalysisPeriodResult[] = [];
   let currentPeriod: SalesAnalysisPeriodResult | undefined;
@@ -75,12 +90,18 @@
   let categoryRows: CategoryComparisonRow[] = [];
   let topSales: TopItem[] = [];
   let topQuantity: TopItem[] = [];
+  let salesRankingPeriods: SalesAnalysisPeriodResult[] = [];
+  let quantityRankingPeriods: SalesAnalysisPeriodResult[] = [];
+  let salesRankingPeriod: SalesAnalysisPeriodResult | undefined;
+  let quantityRankingPeriod: SalesAnalysisPeriodResult | undefined;
+  let salesRankingGroups: CategoryRankingGroup[] = [];
+  let quantityRankingGroups: CategoryRankingGroup[] = [];
   let storeRows: StoreComparisonRow[] = [];
   let page = 1;
   let pageCount = 1;
   let pageRows: SalesAnalysisItem[] = [];
 
-  $: busy = loadingProfiles || loadingStores || running;
+  $: busy = loadingProfiles || loadingStores || running || exportingPDF;
   $: onBusyChange(busy);
   $: rangeInvalid = periodMode === 'range' && Boolean(from && to && from > to);
   $: reportPeriods = normalizePeriods(result);
@@ -94,6 +115,12 @@
   $: categoryRows = buildCategoryComparison(reportPeriods, groupLevel, selections, search);
   $: topSales = buildTopItems(filteredItems, 'amount').slice(0, 15);
   $: topQuantity = buildTopItems(filteredItems, 'quantity').slice(0, 15);
+  $: salesRankingPeriods = reportPeriods.filter((period) => ['current', 'yearAgo', 'yearAgoNext'].includes(period.key));
+  $: quantityRankingPeriods = reportPeriods.filter((period) => ['current', 'previous', 'previous2'].includes(period.key));
+  $: salesRankingPeriod = periodByKey(salesRankingPeriods, salesRankingKey) ?? salesRankingPeriods[0];
+  $: quantityRankingPeriod = periodByKey(quantityRankingPeriods, quantityRankingKey) ?? quantityRankingPeriods[0];
+  $: salesRankingGroups = buildCategoryRankings(salesRankingPeriod, groupLevel, 'amount', selections, search);
+  $: quantityRankingGroups = buildCategoryRankings(quantityRankingPeriod, groupLevel, 'quantity', selections, search);
   $: storeRows = buildStoreRows(reportPeriods);
   $: pageCount = Math.max(1, Math.ceil(filteredItems.length / pageSize));
   $: if (page > pageCount) page = pageCount;
@@ -196,6 +223,42 @@
     }
   }
 
+  async function exportPDF() {
+    if (!result || exportingPDF) return;
+    exportingPDF = true;
+    pdfExportCurrent = 0;
+    pdfExportTotal = 0;
+    error = '';
+    exportNotice = '';
+    try {
+      const directory = await backend.chooseSalesAnalysisPDFDirectory();
+      if (!directory) return;
+      const reportStores = listSuccessfulReportStores(result);
+      if (reportStores.length === 0) throw new Error('No successful store is available for PDF export');
+      pdfExportTotal = reportStores.length;
+      const written: string[] = [];
+      for (const [index, store] of reportStores.entries()) {
+        pdfExportCurrent = index + 1;
+        await yieldToUI();
+        const data = await generateSalesAnalysisPDF(result, store.businessId, groupLevel, settings.locale);
+        written.push(await backend.writeSalesAnalysisPDF({
+          directory,
+          filename: salesAnalysisPDFFilename(store.businessId, result.from, result.to),
+          dataBase64: bytesToBase64(data),
+        }));
+      }
+      exportNotice = t('analysis.exportedPDF', { count: written.length, directory });
+    } catch (caught) {
+      error = errorMessage(settings.locale, caught);
+    } finally {
+      exportingPDF = false;
+    }
+  }
+
+  function yieldToUI(): Promise<void> {
+    return new Promise((resolve) => window.setTimeout(resolve, 0));
+  }
+
   function buildPeriodRequests(): SalesAnalysisPeriodRequest[] {
     if (periodMode === 'month') {
       if (!/^\d{4}-\d{2}$/.test(month)) return [];
@@ -205,11 +268,13 @@
       const cutoffDay = Number(currentTo.slice(-2));
       const previousMonth = shiftMonth(month, -1);
       const previous2Month = shiftMonth(month, -2);
+      const yearAgoNextMonth = shiftMonth(month, -11);
       return [
         periodRequest('current', t('analysis.currentPeriod'), currentFrom, currentTo),
         periodRequest('previous', t('analysis.previousPeriod'), `${previousMonth}-01`, currentMonthSelected ? monthToDayEnd(previousMonth, cutoffDay) : endOfMonth(previousMonth)),
         periodRequest('previous2', t('analysis.previous2Period'), `${previous2Month}-01`, currentMonthSelected ? monthToDayEnd(previous2Month, cutoffDay) : endOfMonth(previous2Month)),
         periodRequest('yearAgo', t('analysis.yearAgoPeriod'), shiftYear(currentFrom, -1), shiftYear(currentTo, -1)),
+        periodRequest('yearAgoNext', t('analysis.yearAgoNextPeriod'), `${yearAgoNextMonth}-01`, endOfMonth(yearAgoNextMonth), false),
       ];
     }
     if (!from || !to || from > to) return [];
@@ -226,8 +291,8 @@
     ];
   }
 
-  function periodRequest(key: string, label: string, periodFrom: string, periodTo: string): SalesAnalysisPeriodRequest {
-    return { key, label, from: periodFrom, to: periodTo, includeTrend: true };
+  function periodRequest(key: string, label: string, periodFrom: string, periodTo: string, includeTrend = true): SalesAnalysisPeriodRequest {
+    return { key, label, from: periodFrom, to: periodTo, includeTrend };
   }
 
   function emptySelections(): FacetSelections {
@@ -247,7 +312,9 @@
   function resetFilters() {
     selections = emptySelections();
     search = '';
-    groupLevel = 'category4';
+    groupLevel = 'category2';
+    salesRankingKey = 'current';
+    quantityRankingKey = 'current';
     page = 1;
   }
 
@@ -396,6 +463,35 @@
     });
   }
 
+  function buildCategoryRankings(
+    period: SalesAnalysisPeriodResult | undefined,
+    key: CategoryKey,
+    sortBy: 'amount' | 'quantity',
+    current: FacetSelections,
+    searchTerm: string,
+  ): CategoryRankingGroup[] {
+    if (!period) return [];
+    const grouped = new Map<string, { code: string; name: string; items: SalesAnalysisItem[]; amount: number; quantity: number }>();
+    for (const item of period.items) {
+      if (!matchesFilters(item, current, searchTerm)) continue;
+      const code = categoryCode(item, key);
+      const name = categoryValue(item, key);
+      const id = code || name;
+      const group = grouped.get(id) ?? { code, name, items: [], amount: 0, quantity: 0 };
+      group.items.push(item);
+      group.amount += item.netSalesAmount;
+      group.quantity += item.netQuantity;
+      grouped.set(id, group);
+    }
+    return [...grouped.entries()]
+      .map(([id, group]) => ({
+        id, code: group.code, name: group.name, amount: group.amount, quantity: group.quantity,
+        items: buildTopItems(group.items, sortBy).slice(0, 15),
+      }))
+      .sort((left, right) => (sortBy === 'amount' ? right.amount - left.amount : right.quantity - left.quantity) || left.id.localeCompare(right.id, settings.locale))
+      .slice(0, 6);
+  }
+
   function buildStoreRows(periods: SalesAnalysisPeriodResult[]): StoreComparisonRow[] {
     const grouped = new Map<string, StoreComparisonRow>();
     for (const period of periods) {
@@ -499,14 +595,22 @@
   <div class="page-heading split-heading">
     <h1 id="analysis-title">{t('analysis.title')}</h1>
     {#if result}
-      <md-outlined-button type="button" onclick={() => { result = undefined; resetFilters(); }}>
-        <span class="material-symbols-rounded" slot="icon" aria-hidden="true">tune</span>{t('analysis.changeQuery')}
-      </md-outlined-button>
+      <div class="analysis-heading-actions">
+        <md-filled-button type="button" onclick={() => void exportPDF()} disabled={exportingPDF}>
+          <span class="material-symbols-rounded" slot="icon" aria-hidden="true">picture_as_pdf</span>{exportingPDF ? t('analysis.exportingPDFProgress', { current: pdfExportCurrent, total: pdfExportTotal }) : t('analysis.exportPDF')}
+        </md-filled-button>
+        <md-outlined-button type="button" onclick={() => { result = undefined; exportNotice = ''; resetFilters(); }} disabled={exportingPDF}>
+          <span class="material-symbols-rounded" slot="icon" aria-hidden="true">tune</span>{t('analysis.changeQuery')}
+        </md-outlined-button>
+      </div>
     {/if}
   </div>
 
   {#if error}
     <div class="notice error-notice" role="alert"><span class="material-symbols-rounded" aria-hidden="true">error</span><span>{error}</span></div>
+  {/if}
+  {#if exportNotice}
+    <div class="notice success-notice" role="status"><span class="material-symbols-rounded" aria-hidden="true">check_circle</span><span>{exportNotice}</span></div>
   {/if}
 
   {#if loadingProfiles}
@@ -578,7 +682,7 @@
       </div>
       <md-linear-progress value={progress?.total ? progress.current / progress.total : 0}></md-linear-progress>
       <div class="analysis-progress-footer">
-        <strong>{t('excel.progressCount', { current: progress?.current ?? 0, total: progress?.total ?? selectedStoreIds.size * 4 })}</strong>
+        <strong>{t('excel.progressCount', { current: progress?.current ?? 0, total: progress?.total ?? selectedStoreIds.size * buildPeriodRequests().length })}</strong>
         <md-outlined-button type="button" onclick={() => void cancelAnalysis()} disabled={!operationId || cancelling}>{cancelling ? t('common.loading') : t('common.cancel')}</md-outlined-button>
       </div>
     </section>
@@ -655,6 +759,44 @@
             <tbody>{#each categoryRows as row}<tr><th><strong>{row.name}</strong>{#if row.code}<span>{row.code}</span>{/if}</th><td class="numeric emphasis">{formatMoney(row.current)}</td><td class="numeric">{formatMoney(row.previous)}</td><td class="numeric">{formatMoney(row.previous2)}</td><td class="numeric">{formatMoney(row.yearAgo)}</td><td class={`numeric ${deltaClass(delta(row.current, row.previous))}`}>{formatPercent(delta(row.current, row.previous))}</td><td class={`numeric ${deltaClass(delta(row.current, row.yearAgo))}`}>{formatPercent(delta(row.current, row.yearAgo))}</td></tr>{:else}<tr><td colspan="7" class="empty-table">{t('analysis.noResults')}</td></tr>{/each}</tbody>
           </table></div>
         </section>
+
+        <section class="ranking-section surface-card" aria-labelledby="sales-ranking-title">
+          <div class="ranking-heading">
+            <div><h2 id="sales-ranking-title">{t('analysis.categorySalesRanking')}</h2><span>{t(facets.find((facet) => facet.key === groupLevel)?.label ?? 'analysis.category2')}</span></div>
+            <div class="ranking-period-tabs" role="tablist" aria-label={t('analysis.salesRankingPeriods')}>
+              {#each salesRankingPeriods as period}
+                <button type="button" class:active={salesRankingPeriod?.key === period.key} role="tab" aria-selected={salesRankingPeriod?.key === period.key} onclick={() => { salesRankingKey = period.key; }}>{period.label}</button>
+              {/each}
+            </div>
+          </div>
+          <div class="ranking-grid">
+            {#each salesRankingGroups as group (group.id)}
+              <article class="ranking-group">
+                <header><div><strong>{group.name}</strong>{#if group.code}<span>{group.code}</span>{/if}</div><b>{formatMoney(group.amount)}</b></header>
+                <ol>{#each group.items as item, index}<li><span class="rank">{index + 1}</span><div class="ranking-product"><strong>{item.name}</strong><span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div><div class="ranking-values"><b>{formatMoney(item.amount)}</b><span>{formatNumber(item.quantity)} {t('analysis.units')}</span></div></li>{/each}</ol>
+              </article>
+            {:else}<div class="ranking-empty">{t('analysis.noResults')}</div>{/each}
+          </div>
+        </section>
+
+        <section class="ranking-section surface-card" aria-labelledby="quantity-ranking-title">
+          <div class="ranking-heading">
+            <div><h2 id="quantity-ranking-title">{t('analysis.monthlyQuantityRanking')}</h2><span>{t(facets.find((facet) => facet.key === groupLevel)?.label ?? 'analysis.category2')}</span></div>
+            <div class="ranking-period-tabs" role="tablist" aria-label={t('analysis.quantityRankingPeriods')}>
+              {#each quantityRankingPeriods as period}
+                <button type="button" class:active={quantityRankingPeriod?.key === period.key} role="tab" aria-selected={quantityRankingPeriod?.key === period.key} onclick={() => { quantityRankingKey = period.key; }}>{period.label}</button>
+              {/each}
+            </div>
+          </div>
+          <div class="ranking-grid">
+            {#each quantityRankingGroups as group (group.id)}
+              <article class="ranking-group">
+                <header><div><strong>{group.name}</strong>{#if group.code}<span>{group.code}</span>{/if}</div><b>{formatNumber(group.quantity)} {t('analysis.units')}</b></header>
+                <ol>{#each group.items as item, index}<li><span class="rank">{index + 1}</span><div class="ranking-product"><strong>{item.name}</strong><span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div><div class="ranking-values"><b>{formatNumber(item.quantity)} {t('analysis.units')}</b><span>{formatMoney(item.amount)}</span></div></li>{/each}</ol>
+              </article>
+            {:else}<div class="ranking-empty">{t('analysis.noResults')}</div>{/each}
+          </div>
+        </section>
       {:else if activeView === 'products'}
         <section class="analysis-table-card surface-card" aria-labelledby="items-title">
           <div class="analysis-table-heading"><h2 id="items-title">{t('analysis.items')}</h2><strong>{t('common.items', { count: filteredItems.length })}</strong></div>
@@ -679,6 +821,7 @@
 
 <style>
   .analysis-page { max-width: 1480px; }
+  .analysis-heading-actions { display: flex; align-items: center; gap: 9px; }
   .analysis-loading { display: flex; min-height: 220px; align-items: center; justify-content: center; gap: 14px; }
   .analysis-loading md-circular-progress, .inline-loading md-circular-progress { width: 24px; height: 24px; }
   .analysis-query { padding: 24px; }
@@ -706,7 +849,7 @@
   .analysis-progress-footer { margin-top: 14px; }
   .analysis-progress-footer > strong { color: var(--md-sys-color-on-surface-variant); font-variant-numeric: tabular-nums; }
   .analysis-results { display: grid; gap: 16px; }
-  .period-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; overflow: hidden; padding: 0; }
+  .period-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 1px; overflow: hidden; padding: 0; }
   .period-strip > div { display: grid; gap: 4px; padding: 15px 17px; border-right: 1px solid var(--md-sys-color-outline-variant); }
   .period-strip > div:last-child { border-right: 0; }
   .period-strip span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -778,6 +921,30 @@
   .empty-table { height: 150px; text-align: center !important; color: var(--md-sys-color-on-surface-variant); }
   .pagination { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 14px 18px; border-top: 1px solid var(--app-table-border); }
   .pagination strong { min-width: 70px; text-align: center; font-variant-numeric: tabular-nums; }
+  .ranking-section { overflow: hidden; padding: 0; }
+  .ranking-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px 20px; border-bottom: 1px solid var(--app-table-border); }
+  .ranking-heading > div:first-child { display: grid; gap: 3px; }
+  .ranking-heading h2 { margin: 0; }
+  .ranking-heading > div:first-child > span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; }
+  .ranking-period-tabs { display: flex; flex-wrap: wrap; gap: 5px; }
+  .ranking-period-tabs button { min-height: 36px; padding: 7px 11px; cursor: pointer; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 10px; color: var(--md-sys-color-on-surface-variant); background: transparent; font-weight: 650; }
+  .ranking-period-tabs button.active { border-color: var(--app-active-border); color: var(--md-sys-color-on-secondary-container); background: var(--md-sys-color-secondary-container); }
+  .ranking-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(390px, 1fr)); gap: 12px; padding: 14px; }
+  .ranking-group { min-width: 0; overflow: hidden; border: 1px solid var(--app-border); border-radius: 14px; background: var(--md-sys-color-surface-container-lowest); }
+  .ranking-group > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 58px; padding: 11px 13px; border-bottom: 1px solid var(--app-table-border); background: var(--md-sys-color-surface-container-low); }
+  .ranking-group > header > div { display: grid; min-width: 0; gap: 2px; }
+  .ranking-group > header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ranking-group > header span { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
+  .ranking-group > header b { color: var(--app-summary-value); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ranking-group ol { display: grid; margin: 0; padding: 0 12px 9px; list-style: none; }
+  .ranking-group li { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 48px; border-top: 1px solid var(--app-table-border); }
+  .ranking-group li:first-child { border-top: 0; }
+  .ranking-group .rank { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 7px; color: var(--md-sys-color-primary); background: var(--md-sys-color-secondary-container); font-size: 11px; font-weight: 750; }
+  .ranking-product, .ranking-values { display: grid; min-width: 0; gap: 2px; }
+  .ranking-product strong, .ranking-product span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ranking-product span, .ranking-values span { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
+  .ranking-values { min-width: max-content; justify-items: end; text-align: right; font-variant-numeric: tabular-nums; }
+  .ranking-empty { min-height: 120px; display: grid; place-items: center; color: var(--md-sys-color-on-surface-variant); }
 
   @media (max-width: 980px) {
     .analysis-filters { grid-template-columns: 1fr; }
@@ -785,9 +952,11 @@
     .period-strip > div:nth-child(2) { border-right: 0; }
     .top-grid { grid-template-columns: 1fr; }
     .comparison-heading { flex-direction: column; }
+    .ranking-heading { align-items: flex-start; flex-direction: column; }
   }
 
   @media (max-width: 620px) {
+    .analysis-heading-actions { width: 100%; align-items: stretch; flex-direction: column; }
     .analysis-query { padding: 18px; }
     .analysis-kpis { grid-template-columns: 1fr; }
     .store-grid, .period-strip { grid-template-columns: 1fr; }
@@ -799,5 +968,8 @@
     .report-tabs { width: 100%; }
     .report-tabs button { flex: 1; justify-content: center; padding-inline: 10px; }
     .report-tabs button .material-symbols-rounded { display: none; }
+    .ranking-grid { grid-template-columns: 1fr; padding: 10px; }
+    .ranking-period-tabs { width: 100%; }
+    .ranking-period-tabs button { flex: 1; }
   }
 </style>
