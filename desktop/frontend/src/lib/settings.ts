@@ -4,6 +4,7 @@ const STORAGE_KEY = 'rta-sales-desktop-settings-v1';
 
 export const defaultSettings: AppSettings = {
   locale: 'zh-TW',
+  theme: 'system',
   maxJobs: 2000,
   accountConcurrency: 2,
   useLocalMapping: false,
@@ -18,6 +19,7 @@ function clampInteger(value: unknown, fallback: number, min: number, max: number
 export function normalizeSettings(value: Partial<AppSettings>): AppSettings {
   return {
     locale: value.locale === 'en' ? 'en' : 'zh-TW',
+    theme: value.theme === 'light' || value.theme === 'dark' ? value.theme : 'system',
     maxJobs: clampInteger(value.maxJobs, defaultSettings.maxJobs, 1, 2000),
     accountConcurrency: clampInteger(value.accountConcurrency, defaultSettings.accountConcurrency, 1, 4),
     useLocalMapping: value.useLocalMapping === true,

@@ -3,8 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#395849" />
-    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#f6f8f4" />
+    <meta name="color-scheme" content="light dark" />
+    <script>
+      (() => {
+        try {
+          const saved = JSON.parse(localStorage.getItem('rta-sales-desktop-settings-v1') || '{}');
+          const preference = saved.theme === 'light' || saved.theme === 'dark' ? saved.theme : 'system';
+          const theme = preference === 'system'
+            ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+            : preference;
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.style.colorScheme = theme;
+          document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#111410' : '#f6f8f4');
+        } catch {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script>
     <title>RTA 銷售資料填入工具</title>
   </head>
   <body>

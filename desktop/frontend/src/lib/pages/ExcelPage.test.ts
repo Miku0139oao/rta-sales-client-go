@@ -138,11 +138,12 @@ describe('Excel safety workflow', () => {
     const apply = vi.fn(async (_request: unknown) => ({
       outputPath: 'D:\\filled.xlsx', changedCells: 2, skippedRows: 1,
     }));
+    const saveWorkbook = vi.fn(async () => 'D:\\filled.xlsx');
     configureBackend({
       methods: {
         OpenWorkbook: vi.fn(async () => 'D:\\sales.xlsx'),
         ScanWorkbook: vi.fn(async () => scan),
-        SaveWorkbook: vi.fn(async () => 'D:\\filled.xlsx'),
+        SaveWorkbook: saveWorkbook,
         Apply: apply,
         Analyze: vi.fn(async () => result({
           preview: [{
@@ -171,6 +172,7 @@ describe('Excel safety workflow', () => {
     expect(screen.getByText('問題列會保留原值，只寫入其餘列。')).toBeInTheDocument();
     await fireEvent.click(container.querySelector('.app-dialog md-filled-button')!);
     await waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
+    expect(saveWorkbook).toHaveBeenCalledTimes(1);
     expect(apply).toHaveBeenCalledWith(expect.objectContaining({
       operationId: 'operation-1', inputPath: 'D:\\sales.xlsx', outputPath: 'D:\\filled.xlsx',
       allowPartial: true, keepIssueOriginal: true,

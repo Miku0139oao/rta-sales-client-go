@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultSettings, normalizeSettings } from './settings';
+import { defaultSettings, loadSettings, normalizeSettings } from './settings';
 
 describe('settings normalization', () => {
   it('uses safe defaults', () => {
@@ -22,5 +22,12 @@ describe('settings normalization', () => {
       useLocalMapping: true,
       mappingPath: 'D:\\private\\map.json',
     });
+  });
+
+  it('upgrades saved settings without a theme to the system preference', () => {
+    localStorage.setItem('rta-sales-desktop-settings-v1', JSON.stringify({ locale: 'en', maxJobs: 40 }));
+    expect(loadSettings()).toMatchObject({ locale: 'en', theme: 'system', maxJobs: 40 });
+    expect(normalizeSettings({ theme: 'dark' })).toMatchObject({ theme: 'dark' });
+    expect(normalizeSettings({ theme: 'sepia' as never })).toMatchObject({ theme: 'system' });
   });
 });

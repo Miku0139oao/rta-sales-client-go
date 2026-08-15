@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte';
   import { backend } from '../backend';
   import { errorMessage, type Translator } from '../i18n';
+  import { modal } from '../modal';
   import type {
     AnalysisProgress,
     AnalysisResult,
@@ -350,7 +351,7 @@
   }
 
   async function saveCopy() {
-    if (!analysis || workflowBusy) return;
+    if (!analysis || saving || workflowBusy) return;
     const requestGeneration = ++generation;
     const requestedAnalysis = analysis;
     const requestedInput = inputPath;
@@ -430,7 +431,6 @@
     <div>
       <h1 id="excel-title">{t('excel.title')}</h1>
     </div>
-    <div class="protection-label"><span class="material-symbols-rounded" aria-hidden="true">verified_user</span>{t('excel.protection')}</div>
   </div>
 
   <ol class="workflow-steps" aria-label={t('excel.workflow')}>
@@ -464,7 +464,6 @@
         <span class="material-symbols-rounded" slot="icon">folder_open</span>
         {opening ? t('excel.opening') : t('excel.open')}
       </md-filled-button>
-      <div class="source-safety"><span class="material-symbols-rounded" aria-hidden="true">lock</span>{t('excel.sourceSafety')}</div>
     </section>
   {:else}
     <section
@@ -478,7 +477,6 @@
         <strong>{scan?.fileName ?? inputPath.split(/[\\/]/).pop()}</strong>
         <span class="path-text" title={inputPath}>{inputPath}</span>
         {#if workflowStep > 1}<span class="selection-brief">{sheetName} · {fromDate}{fromDate === toDate ? '' : ` → ${toDate}`}</span>{/if}
-        <span class="safe-copy"><span class="material-symbols-rounded" aria-hidden="true">lock</span>{t('excel.sourceSafety')}</span>
       </div>
       <md-outlined-button onclick={openWorkbook} disabled={workflowBusy}>{t('excel.changeFile')}</md-outlined-button>
     </section>
@@ -666,23 +664,23 @@
 </section>
 
 {#if overwriteDialog}
-  <div class="dialog-scrim" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) overwriteDialog = false; }}>
-    <dialog class="app-dialog compact-dialog" open aria-modal="true" aria-labelledby="overwrite-title" aria-describedby="overwrite-body">
+  <dialog use:modal={{ busy: workflowBusy, onClose: () => (overwriteDialog = false) }} class="app-dialog compact-dialog" aria-modal="true" aria-labelledby="overwrite-title" aria-describedby="overwrite-body">
+    <form class="confirmation-form" onsubmit={(event) => { event.preventDefault(); confirmOverwrite(); }}>
       <div class="dialog-symbol warning-symbol"><span class="material-symbols-rounded" aria-hidden="true">difference</span></div>
       <h2 id="overwrite-title">{t('excel.overwriteConfirmTitle')}</h2>
       <p id="overwrite-body">{t('excel.overwriteConfirmBody')}</p>
-      <div class="dialog-actions"><md-text-button onclick={() => (overwriteDialog = false)}>{t('common.cancel')}</md-text-button><md-filled-button onclick={confirmOverwrite}>{t('common.confirm')}</md-filled-button></div>
-    </dialog>
-  </div>
+      <div class="dialog-actions"><md-text-button type="button" onclick={() => (overwriteDialog = false)}>{t('common.cancel')}</md-text-button><md-filled-button type="submit" onclick={confirmOverwrite} data-autofocus>{t('common.confirm')}</md-filled-button></div>
+    </form>
+  </dialog>
 {/if}
 
 {#if partialDialog}
-  <div class="dialog-scrim" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) partialDialog = false; }}>
-    <dialog class="app-dialog compact-dialog" open aria-modal="true" aria-labelledby="partial-title" aria-describedby="partial-body">
+  <dialog use:modal={{ busy: workflowBusy, onClose: () => (partialDialog = false) }} class="app-dialog compact-dialog" aria-modal="true" aria-labelledby="partial-title" aria-describedby="partial-body">
+    <form class="confirmation-form" onsubmit={(event) => { event.preventDefault(); confirmPartial(); }}>
       <div class="dialog-symbol warning-symbol"><span class="material-symbols-rounded" aria-hidden="true">rule</span></div>
       <h2 id="partial-title">{t('excel.partialConfirmTitle')}</h2>
       <p id="partial-body">{t('excel.partialConfirmBody')}</p>
-      <div class="dialog-actions"><md-text-button onclick={() => (partialDialog = false)}>{t('common.cancel')}</md-text-button><md-filled-button onclick={confirmPartial}>{t('common.confirm')}</md-filled-button></div>
-    </dialog>
-  </div>
+      <div class="dialog-actions"><md-text-button type="button" onclick={() => (partialDialog = false)}>{t('common.cancel')}</md-text-button><md-filled-button type="submit" onclick={confirmPartial} data-autofocus>{t('common.confirm')}</md-filled-button></div>
+    </form>
+  </dialog>
 {/if}

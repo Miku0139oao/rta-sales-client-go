@@ -207,4 +207,137 @@ describe('account safety workflow', () => {
     expect(screen.getByText('尚未測試')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
+
+  it('updates enable state immediately and rolls it back when persistence fails', async () => {
+    let rejectEnable!: (reason: Error) => void;
+    const enable = vi.fn(() => new Promise<Profile>((_resolve, reject) => { rejectEnable = reject; }));
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [profile]),
+      Enable: enable,
+    } });
+    render(AccountsPage, { props: { t: translator('zh-TW'), locale: 'zh-TW' } });
+    await waitFor(() => expect(screen.getByText('Primary')).toBeInTheDocument());
+    const card = screen.getByText('Primary').closest('.profile-card')!;
+    const activation = card.querySelector('md-switch')!;
+
+    await fireEvent.click(activation);
+    expect(screen.getByText('已啟用')).toBeInTheDocument();
+    expect(activation).toHaveAttribute('aria-busy', 'true');
+    expect(enable).toHaveBeenCalledWith({ profileId: profile.id, enabled: true });
+
+    rejectEnable(new Error('failed'));
+    await waitFor(() => expect(screen.getByText('已停用')).toBeInTheDocument());
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+  });
+
+  it('prevents duplicate deletion and keeps a busy modal open', async () => {
+    let resolveDelete!: () => void;
+    const remove = vi.fn(() => new Promise<void>((resolve) => { resolveDelete = resolve; }));
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [profile]),
+      DeleteProfile: remove,
+    } });
+    const { container } = render(AccountsPage, { props: { t: translator('zh-TW'), locale: 'zh-TW' } });
+    await waitFor(() => expect(screen.getByText('Primary')).toBeInTheDocument());
+    await fireEvent.click(container.querySelector('.danger-action')!);
+    const deleteButton = button(container, '刪除');
+    await fireEvent.click(deleteButton);
+    await fireEvent.click(deleteButton);
+
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledWith({ profileId: profile.id });
+    const dialog = container.querySelector('.app-dialog')!;
+    await fireEvent(dialog, new Event('cancel', { cancelable: true }));
+    expect(container.querySelector('.app-dialog')).toBeInTheDocument();
+
+    resolveDelete();
+    await waitFor(() => expect(container.querySelector('.app-dialog')).not.toBeInTheDocument());
+    expect(screen.queryByText('Primary')).not.toBeInTheDocument();
+  });
+
+  it('shows a failed deletion inside the still-open modal', async () => {
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [profile]),
+      DeleteProfile: vi.fn(async () => { throw new Error('failed'); }),
+    } });
+    const { container } = render(AccountsPage, { props: { t: translator('zh-TW'), locale: 'zh-TW' } });
+    await waitFor(() => expect(screen.getByText('Primary')).toBeInTheDocument());
+    await fireEvent.click(container.querySelector('.danger-action')!);
+    await fireEvent.click(button(container, '刪除'));
+
+    const dialog = container.querySelector('.app-dialog')!;
+    await waitFor(() => expect(dialog.querySelector('[role="alert"]')).toHaveTextContent('桌面服務發生錯誤，請再試一次。'));
+    expect(dialog).toBeInTheDocument();
+  });
+
+  it('reorders across card midpoints and persists once on pointer release', async () => {
+    const profiles: Profile[] = [
+      { ...profile, id: 'a', displayName: 'A', priority: 1 },
+      { ...profile, id: 'b', displayName: 'B', priority: 2 },
+      { ...profile, id: 'c', displayName: 'C', priority: 3 },
+    ];
+    const reorder = vi.fn(async (input: unknown) => {
+      const ids = (input as { profileIds: string[] }).profileIds;
+      return ids.map((id, index) => ({ ...profiles.find((candidate) => candidate.id === id)!, priority: index + 1 }));
+    });
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => profiles),
+      Reorder: reorder,
+    } });
+    const { container } = render(AccountsPage, { props: { t: translator('zh-TW'), locale: 'zh-TW' } });
+    await waitFor(() => expect(screen.getByText('C')).toBeInTheDocument());
+    [...container.querySelectorAll<HTMLElement>('.profile-card')].forEach((card, index) => {
+      card.getBoundingClientRect = () => ({ top: index * 100, bottom: index * 100 + 100, height: 100, left: 0, right: 600, width: 600, x: 0, y: index * 100, toJSON: () => ({}) });
+    });
+    const handle = container.querySelector<HTMLElement>('[data-profile-id="a"] .drag-handle')!;
+
+    const pointer = (type: string, values: Record<string, number>) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperties(event, Object.fromEntries(Object.entries(values).map(([key, value]) => [key, { value }])));
+      return event;
+    };
+    await fireEvent(handle, pointer('pointerdown', { pointerId: 7, button: 0, clientY: 20 }));
+    await fireEvent(handle, pointer('pointermove', { pointerId: 7, clientY: 280 }));
+    await fireEvent(handle, pointer('pointermove', { pointerId: 7, clientY: 280 }));
+    expect(reorder).not.toHaveBeenCalled();
+    expect([...container.querySelectorAll('.profile-card h2')].map((heading) => heading.textContent)).toEqual(['B', 'C', 'A']);
+
+    await fireEvent(handle, pointer('pointerup', { pointerId: 7, clientY: 280 }));
+    await waitFor(() => expect(reorder).toHaveBeenCalledTimes(1));
+    expect(reorder).toHaveBeenCalledWith({ profileIds: ['b', 'c', 'a'] });
+  });
+
+  it('rolls the visible order back when persistence fails', async () => {
+    const second = { ...profile, id: 'profile-2', displayName: 'Secondary', priority: 2 };
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [profile, second]),
+      Reorder: vi.fn(async () => { throw new Error('failed'); }),
+    } });
+    const { container } = render(AccountsPage, { props: { t: translator('zh-TW'), locale: 'zh-TW' } });
+    await waitFor(() => expect(screen.getByText('Secondary')).toBeInTheDocument());
+    await fireEvent.click(container.querySelector('[aria-label="下移 Primary"]')!);
+
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+    expect([...container.querySelectorAll('.profile-card h2')].map((heading) => heading.textContent)).toEqual(['Primary', 'Secondary']);
+  });
+
+  it('restores opener focus after Escape and closes on a backdrop click', async () => {
+    configureBackend({ methods: { ListProfiles: vi.fn(async () => [profile]) } });
+    const { container } = render(AccountsPage, { props: { t: translator('zh-TW'), locale: 'zh-TW' } });
+    await waitFor(() => expect(screen.getByText('Primary')).toBeInTheDocument());
+    const edit = container.querySelector<HTMLElement>('[aria-label="編輯 Primary"]')!;
+    edit.tabIndex = 0;
+    edit.focus();
+    await fireEvent.click(edit);
+    await waitFor(() => expect(document.activeElement).toBe(container.querySelector('#profile-name')));
+
+    await fireEvent(container.querySelector('.app-dialog')!, new Event('cancel', { cancelable: true }));
+    await waitFor(() => expect(container.querySelector('.app-dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(document.activeElement).toBe(edit));
+
+    await fireEvent.click(edit);
+    await waitFor(() => expect(container.querySelector('.app-dialog')).toBeInTheDocument());
+    await fireEvent.click(container.querySelector('.app-dialog')!, { clientX: -1, clientY: -1 });
+    await waitFor(() => expect(container.querySelector('.app-dialog')).not.toBeInTheDocument());
+  });
 });

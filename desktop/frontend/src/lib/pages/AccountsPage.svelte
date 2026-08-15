@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { backend } from '../backend';
   import { errorMessage, type Translator } from '../i18n';
+  import { modal } from '../modal';
   import type { AnalysisProgress, Locale, Profile, ProfileTestResult, ProfileUpsertRequest } from '../types';
 
   export let t: Translator;
@@ -11,14 +12,19 @@
   let profiles: Profile[] = [];
   let loading = true;
   let error = '';
+  let dialogError = '';
   let editorOpen = false;
   let editing: Profile | undefined;
   let deleting: Profile | undefined;
   let saving = false;
+  let deletingBusy = false;
+  let enablePendingId = '';
+  let reorderBusy = false;
   let testingId = '';
   let testOperationId = '';
   let cancellingTest = false;
   let draggedId = '';
+  let dragState: { pointerId: number; profileId: string; original: Profile[]; handle: HTMLElement } | undefined;
   let testResults = new Map<string, ProfileTestResult>();
   let form: ProfileUpsertRequest = emptyForm();
   let formErrors: { displayName?: string; account?: string; password?: string } = {};
@@ -32,9 +38,10 @@
     editing = undefined;
     form = emptyForm();
     formErrors = {};
+    dialogError = '';
   }
 
-  $: accountBusy = Boolean(testingId || saving);
+  $: accountBusy = Boolean(testingId || saving || deletingBusy || enablePendingId || reorderBusy || dragState);
   $: activationLocked = !editing || !editing.hasCredentials || Boolean(form.account.trim() || form.password);
   $: onBusyChange(accountBusy);
 
@@ -59,6 +66,8 @@
 
   function openCreate() {
     if (accountBusy) return;
+    error = '';
+    dialogError = '';
     editing = undefined;
     form = emptyForm();
     formErrors = {};
@@ -67,6 +76,8 @@
 
   function openEdit(profile: Profile) {
     if (accountBusy) return;
+    error = '';
+    dialogError = '';
     editing = profile;
     form = {
       id: profile.id,
@@ -95,6 +106,7 @@
     if (saving || !validate()) return;
     saving = true;
     error = '';
+    dialogError = '';
     const credentialsChanged = !editing || Boolean(form.account.trim() || form.password);
     try {
       const saved = await backend.saveProfile({
@@ -113,7 +125,7 @@
       }
       closeEditor();
     } catch (caught) {
-      error = errorMessage(locale, caught);
+      dialogError = errorMessage(locale, caught);
     } finally {
       saving = false;
     }
@@ -153,25 +165,50 @@
 
   async function toggleEnabled(profile: Profile) {
     if (accountBusy) return;
+    const previous = profiles;
+    const enabled = !profile.enabled;
+    profiles = profiles.map((candidate) => candidate.id === profile.id ? { ...candidate, enabled } : candidate);
+    enablePendingId = profile.id;
     error = '';
     try {
-      const updated = await backend.setProfileEnabled(profile.id, !profile.enabled);
+      const updated = await backend.setProfileEnabled(profile.id, enabled);
       profiles = profiles.map((candidate) => candidate.id === updated.id ? updated : candidate);
     } catch (caught) {
+      profiles = previous;
       error = errorMessage(locale, caught);
+    } finally {
+      enablePendingId = '';
     }
   }
 
   async function removeProfile() {
-    if (!deleting || accountBusy) return;
+    if (!deleting || deletingBusy || testingId || saving || enablePendingId || reorderBusy || dragState) return;
+    const profileId = deleting.id;
+    deletingBusy = true;
     error = '';
+    dialogError = '';
     try {
-      await backend.deleteProfile(deleting.id);
-      profiles = profiles.filter((profile) => profile.id !== deleting?.id).map((profile, index) => ({ ...profile, priority: index + 1 }));
+      await backend.deleteProfile(profileId);
+      profiles = profiles.filter((profile) => profile.id !== profileId).map((profile, index) => ({ ...profile, priority: index + 1 }));
       deleting = undefined;
     } catch (caught) {
-      error = errorMessage(locale, caught);
+      dialogError = errorMessage(locale, caught);
+    } finally {
+      deletingBusy = false;
     }
+  }
+
+  function openDelete(profile: Profile) {
+    if (accountBusy) return;
+    error = '';
+    dialogError = '';
+    deleting = profile;
+  }
+
+  function closeDelete() {
+    if (deletingBusy) return;
+    deleting = undefined;
+    dialogError = '';
   }
 
   async function move(profileId: string, direction: -1 | 1) {
@@ -181,23 +218,62 @@
     if (index < 0 || target < 0 || target >= profiles.length) return;
     const reordered = [...profiles];
     [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
-    await persistOrder(reordered);
+    await persistOrder(reordered, profiles);
   }
 
-  async function dropOn(targetId: string) {
-    if (accountBusy || !draggedId || draggedId === targetId) return;
-    const sourceIndex = profiles.findIndex((profile) => profile.id === draggedId);
-    const targetIndex = profiles.findIndex((profile) => profile.id === targetId);
-    if (sourceIndex < 0 || targetIndex < 0) return;
-    const reordered = [...profiles];
-    const [moved] = reordered.splice(sourceIndex, 1);
-    reordered.splice(targetIndex, 0, moved);
+  function beginPointerDrag(event: PointerEvent, profileId: string) {
+    if (accountBusy || event.button !== 0) return;
+    const handle = event.currentTarget as HTMLElement;
+    event.preventDefault();
+    handle.setPointerCapture?.(event.pointerId);
+    draggedId = profileId;
+    dragState = {
+      pointerId: event.pointerId,
+      profileId,
+      original: profiles.map((profile) => ({ ...profile })),
+      handle,
+    };
+  }
+
+  function updatePointerDrag(event: PointerEvent) {
+    if (!dragState || event.pointerId !== dragState.pointerId) return;
+    event.preventDefault();
+    const moved = profiles.find((profile) => profile.id === dragState?.profileId);
+    if (!moved) return;
+
+    const remaining = profiles.filter((profile) => profile.id !== moved.id);
+    const cards = [...document.querySelectorAll<HTMLElement>('.profile-card[data-profile-id]')]
+      .filter((card) => card.dataset.profileId !== moved.id);
+    let insertionIndex = 0;
+    for (const card of cards) {
+      const bounds = card.getBoundingClientRect();
+      if (event.clientY > bounds.top + bounds.height / 2) insertionIndex += 1;
+    }
+    const reordered = [...remaining];
+    reordered.splice(insertionIndex, 0, moved);
+    if (reordered.every((profile, index) => profile.id === profiles[index]?.id)) return;
+    profiles = reordered.map((profile, index) => ({ ...profile, priority: index + 1 }));
+  }
+
+  async function finishPointerDrag(event: PointerEvent, shouldPersist: boolean) {
+    if (!dragState || event.pointerId !== dragState.pointerId) return;
+    const completed = dragState;
+    const reordered = profiles;
+    dragState = undefined;
     draggedId = '';
-    await persistOrder(reordered);
+    if (completed.handle.hasPointerCapture?.(event.pointerId)) completed.handle.releasePointerCapture?.(event.pointerId);
+
+    const changed = reordered.some((profile, index) => profile.id !== completed.original[index]?.id);
+    if (!shouldPersist) {
+      profiles = completed.original;
+      return;
+    }
+    if (changed) await persistOrder(reordered, completed.original);
   }
 
-  async function persistOrder(reordered: Profile[]) {
-    const previous = profiles;
+  async function persistOrder(reordered: Profile[], previous: Profile[]) {
+    if (reorderBusy) return;
+    reorderBusy = true;
     profiles = reordered.map((profile, index) => ({ ...profile, priority: index + 1 }));
     error = '';
     try {
@@ -205,6 +281,8 @@
     } catch (caught) {
       profiles = previous;
       error = errorMessage(locale, caught);
+    } finally {
+      reorderBusy = false;
     }
   }
 
@@ -227,11 +305,6 @@
     <md-filled-button onclick={openCreate} disabled={accountBusy}>
       <span class="material-symbols-rounded" slot="icon">add</span>{t('accounts.add')}
     </md-filled-button>
-  </div>
-
-  <div class="notice security-notice">
-    <span class="material-symbols-rounded" aria-hidden="true">shield_lock</span>
-    <strong>{t('accounts.securityTitle')}</strong>
   </div>
 
   {#if error}
@@ -259,13 +332,22 @@
         <li
           class="surface-card profile-card"
           class:disabled-card={!profile.enabled}
-          draggable={!accountBusy}
-          ondragstart={() => (draggedId = profile.id)}
-          ondragend={() => (draggedId = '')}
-          ondragover={(event) => event.preventDefault()}
-          ondrop={() => dropOn(profile.id)}
+          class:dragging={draggedId === profile.id}
+          data-profile-id={profile.id}
         >
-          <div class="drag-handle" title={t('accounts.drag')} aria-hidden="true">
+          <div
+            class="drag-handle"
+            role="button"
+            tabindex={accountBusy ? -1 : 0}
+            aria-label={t('accounts.drag')}
+            aria-disabled={accountBusy}
+            title={t('accounts.drag')}
+            onpointerdown={(event) => beginPointerDrag(event, profile.id)}
+            onpointermove={updatePointerDrag}
+            onpointerup={(event) => void finishPointerDrag(event, true)}
+            onpointercancel={(event) => void finishPointerDrag(event, false)}
+            onlostpointercapture={(event) => void finishPointerDrag(event, true)}
+          >
             <span class="material-symbols-rounded">drag_indicator</span>
           </div>
           <div class="priority-badge" aria-label={t('accounts.priority', { value: index + 1 })}>{index + 1}</div>
@@ -293,6 +375,7 @@
               aria-label={`${profile.displayName}: ${profile.enabled ? t('common.enabled') : t('common.disabled')}`}
               selected={profile.enabled}
               disabled={accountBusy || (!profile.hasCredentials && !profile.enabled)}
+              aria-busy={enablePendingId === profile.id}
               onclick={() => toggleEnabled(profile)}
             ></md-switch>
             <md-outlined-button
@@ -308,7 +391,7 @@
             <md-outlined-button aria-label={`${t('common.edit')} ${profile.displayName}`} disabled={accountBusy} onclick={() => openEdit(profile)}>
               <span class="material-symbols-rounded" slot="icon">edit</span>{t('common.edit')}
             </md-outlined-button>
-            <md-icon-button class="danger-action" aria-label={`${t('common.delete')} ${profile.displayName}`} disabled={accountBusy} onclick={() => (deleting = profile)}><span class="material-symbols-rounded">delete</span></md-icon-button>
+            <md-icon-button class="danger-action" aria-label={`${t('common.delete')} ${profile.displayName}`} disabled={accountBusy} onclick={() => openDelete(profile)}><span class="material-symbols-rounded">delete</span></md-icon-button>
           </div>
         </li>
       {/each}
@@ -317,58 +400,58 @@
 </section>
 
 {#if editorOpen}
-  <div class="dialog-scrim" role="presentation" onclick={(event) => { if (event.target === event.currentTarget && !saving) closeEditor(); }}>
-    <dialog class="app-dialog" open aria-modal="true" aria-labelledby="profile-dialog-title">
-      <div class="dialog-header">
-        <div>
-          <h2 id="profile-dialog-title">{editing ? t('accounts.dialogEdit') : t('accounts.dialogAdd')}</h2>
-        </div>
-        <md-icon-button aria-label={t('common.close')} onclick={closeEditor} disabled={saving}><span class="material-symbols-rounded">close</span></md-icon-button>
+  <dialog use:modal={{ busy: saving, onClose: closeEditor }} class="app-dialog" aria-modal="true" aria-labelledby="profile-dialog-title">
+    <div class="dialog-header">
+      <div>
+        <h2 id="profile-dialog-title">{editing ? t('accounts.dialogEdit') : t('accounts.dialogAdd')}</h2>
       </div>
-      <form onsubmit={(event) => { event.preventDefault(); saveProfile(); }}>
-        <div class="field-group">
-          <label for="profile-name">{t('accounts.displayName')}</label>
-          <input id="profile-name" bind:value={form.displayName} disabled={saving} autocomplete="off" aria-invalid={Boolean(formErrors.displayName)} aria-describedby={formErrors.displayName ? 'profile-name-error' : undefined} />
-          {#if formErrors.displayName}<small class="field-error" id="profile-name-error">{formErrors.displayName}</small>{/if}
-        </div>
-        <div class="field-group">
-          <label for="profile-account">{editing ? t('accounts.accountEdit') : t('accounts.account')}</label>
-          <input id="profile-account" bind:value={form.account} disabled={saving} autocomplete="username" aria-invalid={Boolean(formErrors.account)} aria-describedby={formErrors.account ? 'profile-account-error' : undefined} />
-          {#if formErrors.account}<small class="field-error" id="profile-account-error">{formErrors.account}</small>{/if}
-        </div>
-        <div class="field-group">
-          <label for="profile-password">{editing ? t('accounts.passwordEdit') : t('accounts.passwordNew')}</label>
-          <input id="profile-password" type="password" bind:value={form.password} disabled={saving} autocomplete="new-password" aria-invalid={Boolean(formErrors.password)} aria-describedby={formErrors.password ? 'profile-password-error' : undefined} />
-          {#if formErrors.password}<small id="profile-password-error" class="field-error">{formErrors.password}</small>{/if}
-        </div>
-        <div class="setting-row dialog-setting-row">
-          <strong>{t('common.enabled')}</strong>
-          <md-switch
-            aria-label={t('common.enabled')}
-            selected={activationLocked ? false : form.enabled}
-            disabled={saving || activationLocked}
-            onclick={() => { if (!activationLocked) form = { ...form, enabled: !form.enabled }; }}
-          ></md-switch>
-        </div>
-        <div class="dialog-actions">
-          <md-text-button type="button" onclick={closeEditor} disabled={saving}>{t('common.cancel')}</md-text-button>
-          <md-filled-button type="button" onclick={saveProfile} disabled={saving}>{saving ? t('common.saving') : t('common.save')}</md-filled-button>
-        </div>
-      </form>
-    </dialog>
-  </div>
+      <md-icon-button aria-label={t('common.close')} onclick={closeEditor} disabled={saving}><span class="material-symbols-rounded">close</span></md-icon-button>
+    </div>
+    <form onsubmit={(event) => { event.preventDefault(); saveProfile(); }}>
+      {#if dialogError}<div class="dialog-error" role="alert">{dialogError}</div>{/if}
+      <div class="field-group">
+        <label for="profile-name">{t('accounts.displayName')}</label>
+        <input id="profile-name" bind:value={form.displayName} disabled={saving} autocomplete="off" data-autofocus aria-invalid={Boolean(formErrors.displayName)} aria-describedby={formErrors.displayName ? 'profile-name-error' : undefined} />
+        {#if formErrors.displayName}<small class="field-error" id="profile-name-error">{formErrors.displayName}</small>{/if}
+      </div>
+      <div class="field-group">
+        <label for="profile-account">{editing ? t('accounts.accountEdit') : t('accounts.account')}</label>
+        <input id="profile-account" bind:value={form.account} disabled={saving} autocomplete="username" aria-invalid={Boolean(formErrors.account)} aria-describedby={formErrors.account ? 'profile-account-error' : undefined} />
+        {#if formErrors.account}<small class="field-error" id="profile-account-error">{formErrors.account}</small>{/if}
+      </div>
+      <div class="field-group">
+        <label for="profile-password">{editing ? t('accounts.passwordEdit') : t('accounts.passwordNew')}</label>
+        <input id="profile-password" type="password" bind:value={form.password} disabled={saving} autocomplete="new-password" aria-invalid={Boolean(formErrors.password)} aria-describedby={formErrors.password ? 'profile-password-error' : undefined} />
+        {#if formErrors.password}<small id="profile-password-error" class="field-error">{formErrors.password}</small>{/if}
+      </div>
+      <div class="setting-row dialog-setting-row">
+        <strong>{t('common.enabled')}</strong>
+        <md-switch
+          aria-label={t('common.enabled')}
+          selected={activationLocked ? false : form.enabled}
+          disabled={saving || activationLocked}
+          onclick={() => { if (!activationLocked) form = { ...form, enabled: !form.enabled }; }}
+        ></md-switch>
+      </div>
+      <div class="dialog-actions">
+        <md-text-button type="button" onclick={closeEditor} disabled={saving}>{t('common.cancel')}</md-text-button>
+        <md-filled-button type="submit" onclick={saveProfile} disabled={saving}>{saving ? t('common.saving') : t('common.save')}</md-filled-button>
+      </div>
+    </form>
+  </dialog>
 {/if}
 
 {#if deleting}
-  <div class="dialog-scrim" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) deleting = undefined; }}>
-    <dialog class="app-dialog compact-dialog" open aria-modal="true" aria-labelledby="delete-dialog-title" aria-describedby="delete-dialog-body">
+  <dialog use:modal={{ busy: deletingBusy, onClose: closeDelete }} class="app-dialog compact-dialog" aria-modal="true" aria-labelledby="delete-dialog-title" aria-describedby="delete-dialog-body">
+    <form class="confirmation-form" onsubmit={(event) => { event.preventDefault(); removeProfile(); }}>
       <div class="dialog-symbol danger-symbol"><span class="material-symbols-rounded" aria-hidden="true">delete_forever</span></div>
       <h2 id="delete-dialog-title">{t('accounts.deleteTitle')}</h2>
       <p id="delete-dialog-body">{t('accounts.deleteBody', { name: deleting.displayName })}</p>
+      {#if dialogError}<div class="dialog-error" role="alert">{dialogError}</div>{/if}
       <div class="dialog-actions">
-        <md-text-button onclick={() => (deleting = undefined)}>{t('common.cancel')}</md-text-button>
-        <md-filled-button class="danger-button" onclick={removeProfile}>{t('common.delete')}</md-filled-button>
+        <md-text-button type="button" onclick={closeDelete} disabled={deletingBusy}>{t('common.cancel')}</md-text-button>
+        <md-filled-button type="submit" class="danger-button" onclick={removeProfile} disabled={deletingBusy} data-autofocus>{deletingBusy ? t('common.deleting') : t('common.delete')}</md-filled-button>
       </div>
-    </dialog>
-  </div>
+    </form>
+  </dialog>
 {/if}

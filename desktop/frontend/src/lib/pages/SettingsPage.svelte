@@ -3,16 +3,21 @@
   import { backend } from '../backend';
   import { errorMessage } from '../i18n';
   import type { Translator } from '../i18n';
-  import type { AppSettings } from '../types';
+  import type { AppSettings, ThemePreference } from '../types';
 
   export let t: Translator;
   export let settings: AppSettings;
   export let onChange: (settings: AppSettings) => void;
+  export let onThemeChange: (theme: ThemePreference) => void;
 
   let draft: AppSettings = { ...settings };
   let saved = false;
   let browsing = false;
   let mappingError = '';
+
+  $: if (settings.theme !== draft.theme) {
+    draft = { ...draft, theme: settings.theme };
+  }
 
   function updateNumber(key: 'maxJobs' | 'accountConcurrency', event: Event) {
     draft = { ...draft, [key]: Number((event.currentTarget as HTMLInputElement | HTMLSelectElement).value) };
@@ -35,9 +40,15 @@
   }
 
   function reset() {
-    draft = { ...defaultSettings, locale: settings.locale };
+    draft = { ...defaultSettings, locale: settings.locale, theme: settings.theme };
     onChange(draft);
     saved = true;
+  }
+
+  function changeTheme(theme: ThemePreference) {
+    if (draft.theme === theme) return;
+    draft = { ...draft, theme };
+    onThemeChange(theme);
   }
 
   async function browseMapping() {
@@ -67,20 +78,43 @@
   {/if}
 
   <form class="settings-grid" onsubmit={(event) => { event.preventDefault(); save(); }}>
-    <section class="surface-card settings-card" aria-labelledby="language-heading">
-      <div class="section-icon" aria-hidden="true"><span class="material-symbols-rounded">translate</span></div>
+    <section class="surface-card settings-card" aria-labelledby="appearance-heading">
+      <div class="section-icon" aria-hidden="true"><span class="material-symbols-rounded">palette</span></div>
       <div class="settings-content">
-        <h2 id="language-heading">{t('settings.language')}</h2>
-        <div class="field-group compact-field">
-          <label for="locale">{t('settings.language')}</label>
-          <select
-            id="locale"
-            value={draft.locale}
-            onchange={(event) => { draft = { ...draft, locale: (event.currentTarget as HTMLSelectElement).value === 'en' ? 'en' : 'zh-TW' }; saved = false; }}
-          >
-            <option value="zh-TW">{t('settings.zhTW')}</option>
-            <option value="en">{t('settings.english')}</option>
-          </select>
+        <h2 id="appearance-heading">{t('settings.appearance')}</h2>
+        <div class="appearance-fields">
+          <div class="field-group">
+            <span class="field-label" id="theme-label">{t('settings.theme')}</span>
+            <div class="theme-options" role="radiogroup" aria-labelledby="theme-label">
+              {#each [
+                { value: 'system', icon: 'desktop_windows', label: 'theme.system' },
+                { value: 'light', icon: 'light_mode', label: 'theme.light' },
+                { value: 'dark', icon: 'dark_mode', label: 'theme.dark' },
+              ] as option}
+                <button
+                  type="button"
+                  class:active={draft.theme === option.value}
+                  role="radio"
+                  aria-checked={draft.theme === option.value}
+                  onclick={() => changeTheme(option.value as ThemePreference)}
+                >
+                  <span class="material-symbols-rounded" aria-hidden="true">{option.icon}</span>
+                  <span>{t(option.label)}</span>
+                </button>
+              {/each}
+            </div>
+          </div>
+          <div class="field-group compact-field">
+            <label for="locale">{t('settings.language')}</label>
+            <select
+              id="locale"
+              value={draft.locale}
+              onchange={(event) => { draft = { ...draft, locale: (event.currentTarget as HTMLSelectElement).value === 'en' ? 'en' : 'zh-TW' }; saved = false; }}
+            >
+              <option value="zh-TW">{t('settings.zhTW')}</option>
+              <option value="en">{t('settings.english')}</option>
+            </select>
+          </div>
         </div>
       </div>
     </section>

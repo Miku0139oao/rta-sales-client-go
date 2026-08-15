@@ -49,10 +49,6 @@ export function configureBackend(next: BackendInjection | undefined): void {
   injection = next;
 }
 
-export function isBrowserPreview(): boolean {
-  return import.meta.env.DEV && !findMethod(['OpenWorkbook']);
-}
-
 function findMethod(names: string[]): AnyMethod | undefined {
   if (injection?.methods) {
     for (const name of names) {

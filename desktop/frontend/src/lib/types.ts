@@ -1,5 +1,7 @@
 export type Locale = 'zh-TW' | 'en';
 export type Page = 'excel' | 'accounts' | 'settings';
+export type ThemePreference = 'system' | 'light' | 'dark';
+export type ResolvedTheme = Exclude<ThemePreference, 'system'>;
 export type AnalysisStage = 'scan' | 'login' | 'stores' | 'query' | 'preview';
 export type PreviewStatus = 'change' | 'unchanged' | 'issue' | 'failed';
 export type PreviewFilter = 'all' | 'change' | 'unchanged' | 'issue';
@@ -146,6 +148,7 @@ export interface SaveWorkbookRequest {
 
 export interface AppSettings {
   locale: Locale;
+  theme: ThemePreference;
   maxJobs: number;
   accountConcurrency: number;
   useLocalMapping: boolean;
