@@ -105,7 +105,7 @@ Desktop work is Windows-only. Library tests also run on the Linux CI runners.
 
 Install:
 
-- Go 1.25+ (CI uses 1.25.12 and 1.26.6)
+- Go 1.25+ (CI installs 1.25.13 so govulncheck matches a patched standard library)
 - [Bun 1.3.14](https://bun.sh) — the frontend is pinned to Bun, not npm
 - Git and PowerShell
 - WebView2, or the desktop window will not start

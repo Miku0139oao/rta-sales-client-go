@@ -105,7 +105,7 @@ report, err := xlsxfill.Apply(ctx, plan, xlsxfill.ApplyRequest{
 
 要裝的：
 
-- Go 1.25 或更新（CI 會測 1.25.12 跟 1.26.6）
+- Go 1.25 或更新（CI 使用 1.25.13，govulncheck 才不會掃到已修的標準庫漏洞）
 - [Bun 1.3.14](https://bun.sh)（frontend 指定 Bun，別改用 npm）
 - Git、PowerShell
 - 本機要有 WebView2，不然視窗開不起來
