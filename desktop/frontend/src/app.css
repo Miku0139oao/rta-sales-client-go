@@ -287,6 +287,63 @@ main {
   line-height: 1.08;
 }
 
+.workflow-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: -8px 0 22px;
+  padding: 0;
+  list-style: none;
+}
+
+.workflow-steps li {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 13px;
+  border-radius: 14px;
+  color: var(--md-sys-color-outline);
+  background: rgb(236 240 235 / 0.72);
+}
+
+.workflow-steps li > span {
+  display: grid;
+  flex: 0 0 auto;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.workflow-steps li strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-steps li.active {
+  color: var(--md-sys-color-on-secondary-container);
+  background: var(--md-sys-color-secondary-container);
+}
+
+.workflow-steps li.complete {
+  color: #356047;
+  background: #e5f3e9;
+}
+
+.workbook-controls[tabindex="-1"]:focus,
+.progress-card[tabindex="-1"]:focus,
+.preview-section[tabindex="-1"]:focus,
+.success-card[tabindex="-1"]:focus,
+.error-notice[tabindex="-1"]:focus {
+  outline: none;
+}
+
 .surface-card {
   border: 1px solid rgb(193 201 193 / 0.72);
   border-radius: var(--app-radius);
@@ -472,6 +529,12 @@ main {
   white-space: nowrap;
 }
 
+.selection-brief {
+  color: #315d43;
+  font-size: 13px;
+  font-weight: 680;
+}
+
 .loading-state {
   display: flex;
   min-height: 180px;
@@ -486,6 +549,14 @@ main {
 .write-options {
   margin-bottom: 24px;
   padding: clamp(20px, 3vw, 30px);
+}
+
+.workbook-controls,
+.progress-card,
+.preview-section,
+.success-card,
+.error-notice {
+  scroll-margin-top: 96px;
 }
 
 .control-grid {
@@ -635,8 +706,7 @@ main {
 }
 
 .progress-heading,
-.preview-heading,
-.save-row {
+.preview-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -702,8 +772,24 @@ main {
 }
 
 .preview-heading {
+  position: sticky;
+  z-index: 5;
+  top: 84px;
   align-items: flex-end;
-  margin-bottom: 20px;
+  margin: -10px -12px 14px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: rgb(249 251 248 / 0.94);
+  box-shadow: 0 8px 18px rgb(30 54 40 / 0.08);
+  backdrop-filter: blur(12px);
+}
+
+.preview-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .filter-bar {
@@ -758,7 +844,7 @@ main {
 
 .table-scroll {
   overflow: auto;
-  max-height: 560px;
+  max-height: min(480px, 52vh);
 }
 
 table {
@@ -897,29 +983,6 @@ th.proposed-column {
   font-size: 15px;
 }
 
-.checkbox-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 18px 0 0;
-  cursor: pointer;
-  color: #273b30;
-  font-size: 14px;
-  font-weight: 650;
-}
-
-.checkbox-row input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-}
-
-.checkbox-visual {
-  color: var(--md-sys-color-primary);
-  font-size: 24px;
-}
-
 .inline-blocker {
   display: flex;
   align-items: center;
@@ -934,26 +997,6 @@ th.proposed-column {
 
 .inline-blocker .material-symbols-rounded {
   font-size: 19px;
-}
-
-.save-row {
-  align-items: center;
-  margin-top: 24px;
-  padding-top: 20px;
-  border-top: 1px solid var(--md-sys-color-outline-variant);
-}
-
-.save-row > div {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--md-sys-color-on-surface-variant);
-  font-size: 12px;
-}
-
-.save-row > div .material-symbols-rounded {
-  color: var(--md-sys-color-primary);
-  font-size: 18px;
 }
 
 .success-card {
@@ -1419,7 +1462,20 @@ th.proposed-column {
   }
 
   .preview-heading {
+    position: static;
+    width: 100%;
+    margin: 0 0 20px;
+    padding: 0;
     flex-direction: column;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+
+  .preview-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .success-card md-outlined-button {
@@ -1469,6 +1525,15 @@ th.proposed-column {
     grid-template-columns: 1fr;
   }
 
+  .workflow-steps li {
+    justify-content: center;
+    padding-inline: 8px;
+  }
+
+  .workflow-steps li strong {
+    font-size: 11px;
+  }
+
   .source-card,
   .success-card {
     grid-template-columns: 1fr;
@@ -1481,22 +1546,13 @@ th.proposed-column {
   }
 
   .write-option,
-  .setting-row,
-  .save-row {
+  .setting-row {
     align-items: flex-start;
   }
 
   .policy-selection {
     align-items: flex-end;
     flex-direction: column;
-  }
-
-  .save-row {
-    flex-direction: column;
-  }
-
-  .save-row md-filled-button {
-    align-self: stretch;
   }
 
   .profile-card {

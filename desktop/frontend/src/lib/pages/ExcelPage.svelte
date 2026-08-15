@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { backend } from '../backend';
   import { errorMessage, type Translator } from '../i18n';
   import type {
@@ -43,6 +43,11 @@
   let operationError = '';
   let applyResult: ApplyResult | undefined;
   let generation = 0;
+  let controlsSection: HTMLElement | undefined;
+  let progressSection: HTMLElement | undefined;
+  let previewSection: HTMLElement | undefined;
+  let successSection: HTMLElement | undefined;
+  let errorNotice: HTMLElement | undefined;
 
   $: previewRows = analysis?.preview ?? analysis?.rows ?? [];
   $: filteredRows = filter === 'all'
@@ -59,6 +64,7 @@
   $: hasWritableChanges = (analysis?.changedCellCount ?? 0) > 0;
   $: aggregateProblemCount = analysis?.aggregateProblemCount ?? (analysis ? Math.max(0, analysis.problemCount - issueCount) : 0);
   $: workflowBusy = opening || scanning || analyzing || retrying || saving;
+  $: workflowStep = applyResult || saving ? 3 : analyzing || retrying || analysis ? 2 : 1;
   $: onBusyChange(workflowBusy);
   $: activeStageIndex = progress ? stages.indexOf(progress.stage) : -1;
   $: progressValue = progress && progress.total > 0 ? Math.min(1, progress.current / progress.total) : 0;
@@ -79,6 +85,18 @@
     progress = next;
   }));
 
+  async function reveal(getElement: () => HTMLElement | undefined) {
+    await tick();
+    const element = getElement();
+    element?.focus({ preventScroll: true });
+    element?.scrollIntoView?.({ behavior: 'auto', block: 'start' });
+  }
+
+  async function showOperationError(message: string) {
+    operationError = message;
+    await reveal(() => errorNotice);
+  }
+
   async function openWorkbook() {
     if (workflowBusy) return;
     const requestGeneration = ++generation;
@@ -89,14 +107,14 @@
       if (requestGeneration !== generation) return;
       if (!selected) return;
       if (!selected.toLowerCase().endsWith('.xlsx')) {
-        operationError = t('excel.xlsxOnly');
+        await showOperationError(t('excel.xlsxOnly'));
         return;
       }
       inputPath = selected;
       sheetName = '';
       await scanWorkbook('', requestGeneration);
     } catch (error) {
-      if (requestGeneration === generation) operationError = errorMessage(settings.locale, error);
+      if (requestGeneration === generation) await showOperationError(errorMessage(settings.locale, error));
     } finally {
       if (requestGeneration === generation) opening = false;
     }
@@ -125,7 +143,7 @@
     } catch (error) {
       if (requestGeneration === generation) {
         scan = undefined;
-        operationError = errorMessage(settings.locale, error);
+        await showOperationError(errorMessage(settings.locale, error));
       }
     } finally {
       if (requestGeneration === generation) scanning = false;
@@ -158,6 +176,7 @@
     operationError = '';
     progress = { operationId: '', stage: 'scan', current: 0, total: stages.length };
     filter = 'all';
+    await reveal(() => progressSection);
     try {
       const result = await backend.analyze({
         inputPath: requestedInput,
@@ -176,12 +195,13 @@
       progress = { operationId: result.operationId, stage: 'preview', current: stages.length, total: stages.length };
     } catch (error) {
       if (requestGeneration === generation && (error as { code?: string })?.code !== 'cancelled') {
-        operationError = errorMessage(settings.locale, error);
+        await showOperationError(errorMessage(settings.locale, error));
       }
     } finally {
       if (requestGeneration === generation) {
         analyzing = false;
         cancelling = false;
+        if (analysis && !operationError) await reveal(() => previewSection);
       }
     }
   }
@@ -217,7 +237,7 @@
     try {
       await backend.cancelAnalysis(operationId);
     } catch (error) {
-      operationError = errorMessage(settings.locale, error);
+      await showOperationError(errorMessage(settings.locale, error));
       cancelling = false;
     }
   }
@@ -230,19 +250,35 @@
     retrying = true;
     operationError = '';
     progress = { operationId, stage: 'query', current: 0, total: Math.max(1, retryableCount) };
+    await reveal(() => progressSection);
     try {
       const result = await backend.retryFailed(operationId);
       if (requestGeneration !== generation || inputPath !== requestedInput || analysis?.operationId !== operationId) return;
       analysis = normalizeAnalysis(result);
       progress = { operationId, stage: 'preview', current: stages.length, total: stages.length };
     } catch (error) {
-      if (requestGeneration === generation) operationError = errorMessage(settings.locale, error);
+      if (requestGeneration === generation) await showOperationError(errorMessage(settings.locale, error));
     } finally {
       if (requestGeneration === generation) {
         retrying = false;
         cancelling = false;
+        if (analysis && !operationError) await reveal(() => previewSection);
       }
     }
+  }
+
+  async function editSelection() {
+    if (workflowBusy) return;
+    generation += 1;
+    analysis = undefined;
+    applyResult = undefined;
+    progress = undefined;
+    filter = 'all';
+    allowPartial = false;
+    keepIssueOriginal = false;
+    partialDialog = false;
+    operationError = '';
+    await reveal(() => controlsSection);
   }
 
   function resetWriteOptions() {
@@ -273,7 +309,7 @@
   function togglePartial() {
     if (workflowBusy || !analysisComplete || !hasWritableChanges || aggregateProblemCount > 0) return;
     allowPartial = !allowPartial;
-    if (!allowPartial) keepIssueOriginal = false;
+    keepIssueOriginal = allowPartial;
   }
 
   async function requestSave() {
@@ -309,7 +345,7 @@
       if (requestGeneration !== generation || inputPath !== requestedInput || analysis?.operationId !== requestedAnalysis.operationId) return;
       if (!outputPath) return;
       if (normalizePath(outputPath) === normalizePath(requestedInput)) {
-        operationError = t('error.output_same_as_input');
+        await showOperationError(t('error.output_same_as_input'));
         return;
       }
       const result = await backend.apply({
@@ -322,9 +358,10 @@
       });
       if (requestGeneration === generation && inputPath === requestedInput && analysis?.operationId === requestedAnalysis.operationId) {
         applyResult = result;
+        await reveal(() => successSection);
       }
     } catch (error) {
-      if (requestGeneration === generation) operationError = errorMessage(settings.locale, error);
+      if (requestGeneration === generation) await showOperationError(errorMessage(settings.locale, error));
     } finally {
       if (requestGeneration === generation) saving = false;
     }
@@ -373,8 +410,17 @@
     <div class="protection-label"><span class="material-symbols-rounded" aria-hidden="true">verified_user</span>{t('excel.protection')}</div>
   </div>
 
+  <ol class="workflow-steps" aria-label={t('excel.workflow')}>
+    {#each [1, 2, 3] as step}
+      <li class:active={workflowStep === step} class:complete={workflowStep > step}>
+        <span>{workflowStep > step ? '✓' : step}</span>
+        <strong>{t(`excel.step.${step}`)}</strong>
+      </li>
+    {/each}
+  </ol>
+
   {#if operationError}
-    <div class="notice error-notice" role="alert">
+    <div bind:this={errorNotice} class="notice error-notice" role="alert" tabindex="-1">
       <span class="material-symbols-rounded" aria-hidden="true">error</span>
       <div><strong>{t('error.title')}</strong><p>{operationError}</p></div>
     </div>
@@ -399,6 +445,7 @@
         <span id="source-title" class="label">{t('excel.source')}</span>
         <strong>{scan?.fileName ?? inputPath.split(/[\\/]/).pop()}</strong>
         <span class="path-text" title={inputPath}>{inputPath}</span>
+        {#if workflowStep > 1}<span class="selection-brief">{sheetName} · {fromDate}{fromDate === toDate ? '' : ` → ${toDate}`}</span>{/if}
         <span class="safe-copy"><span class="material-symbols-rounded" aria-hidden="true">lock</span>{t('excel.sourceSafety')}</span>
       </div>
       <md-outlined-button onclick={openWorkbook} disabled={workflowBusy}>{t('excel.changeFile')}</md-outlined-button>
@@ -409,8 +456,8 @@
         <md-circular-progress indeterminate></md-circular-progress>
         <span>{t('excel.progress.scan')}</span>
       </div>
-    {:else if scan}
-      <section class="workbook-controls surface-card" aria-labelledby="scan-summary-title">
+    {:else if scan && !analysis && !analyzing && !retrying && !applyResult}
+      <section bind:this={controlsSection} class="workbook-controls surface-card" aria-labelledby="scan-summary-title" tabindex="-1">
         <div class="control-grid">
           <div class="field-group">
             <label for="sheet-name">{t('excel.sheet')}</label>
@@ -472,7 +519,7 @@
     {/if}
 
     {#if analyzing || retrying}
-      <section class="progress-card surface-card" aria-labelledby="progress-title" aria-live="polite">
+      <section bind:this={progressSection} class="progress-card surface-card" aria-labelledby="progress-title" aria-live="polite" tabindex="-1">
         <div class="progress-heading">
           <h2 id="progress-title">{retrying ? t('excel.retrying') : t('excel.progressTitle')}</h2>
           <span>{t('excel.progressCount', { current: progress?.current ?? 0, total: progress?.total ?? stages.length })}</span>
@@ -490,15 +537,21 @@
       </section>
     {/if}
 
-    {#if analysis && !analyzing && !retrying}
-      <section class="preview-section" aria-labelledby="preview-title">
+    {#if analysis && !analyzing && !retrying && !applyResult}
+      <section bind:this={previewSection} class="preview-section" aria-labelledby="preview-title" tabindex="-1">
         <div class="preview-heading">
           <h2 id="preview-title">{t('excel.previewTitle')}</h2>
-          {#if retryableCount > 0}
-            <md-outlined-button onclick={retryFailed} disabled={retrying}>
-              <span class="material-symbols-rounded" slot="icon">refresh</span>{retrying ? t('excel.retrying') : t('common.retry')}
-            </md-outlined-button>
-          {/if}
+          <div class="preview-actions">
+            <md-text-button onclick={editSelection} disabled={workflowBusy}>{t('excel.editSelection')}</md-text-button>
+            {#if retryableCount > 0}
+              <md-outlined-button onclick={retryFailed} disabled={retrying}>
+                <span class="material-symbols-rounded" slot="icon">refresh</span>{retrying ? t('excel.retrying') : t('common.retry')}
+              </md-outlined-button>
+            {/if}
+            <md-filled-button onclick={requestSave} disabled={!canSave}>
+              <span class="material-symbols-rounded" slot="icon">save_as</span>{saving ? t('excel.savingAs') : t('excel.saveAs')}
+            </md-filled-button>
+          </div>
         </div>
 
         {#if analysis.overlapCount > 0}
@@ -557,13 +610,6 @@
               onclick={togglePartial}
             ></md-switch>
           </div>
-          {#if allowPartial}
-            <label class="checkbox-row">
-              <input type="checkbox" bind:checked={keepIssueOriginal} />
-              <span class="checkbox-visual material-symbols-rounded" aria-hidden="true">{keepIssueOriginal ? 'check_box' : 'check_box_outline_blank'}</span>
-              <span>{t('excel.keepIssues')}</span>
-            </label>
-          {/if}
           {#if !analysisComplete}
             <div class="inline-blocker" role="status"><span class="material-symbols-rounded" aria-hidden="true">pending_actions</span>{t('excel.incompleteBlock')}</div>
           {:else if aggregateProblemCount > 0}
@@ -573,18 +619,12 @@
           {:else if issueCount > 0 && !(allowPartial && keepIssueOriginal)}
             <div class="inline-blocker" role="status"><span class="material-symbols-rounded" aria-hidden="true">block</span>{t('excel.issueBlock', { count: issueCount })}</div>
           {/if}
-          <div class="save-row">
-            <div><span class="material-symbols-rounded" aria-hidden="true">file_copy</span><span>{t('excel.sourceSafety')}</span></div>
-            <md-filled-button onclick={requestSave} disabled={!canSave}>
-              <span class="material-symbols-rounded" slot="icon">save_as</span>{saving ? t('excel.savingAs') : t('excel.saveAs')}
-            </md-filled-button>
-          </div>
         </section>
       </section>
     {/if}
 
     {#if applyResult}
-      <section class="success-card surface-card" aria-labelledby="saved-title" aria-live="polite">
+      <section bind:this={successSection} class="success-card surface-card" aria-labelledby="saved-title" aria-live="polite" tabindex="-1">
         <div class="success-symbol"><span class="material-symbols-rounded" aria-hidden="true">task_alt</span></div>
         <div><h2 id="saved-title">{t('excel.savedTitle')}</h2><p>{t('excel.savedBody', { changed: applyResult.changedCells, skipped: applyResult.skippedRows })}</p><span class="label">{t('excel.savedPath')}</span><code>{applyResult.outputPath}</code></div>
         <md-outlined-button onclick={startAnother} disabled={workflowBusy}>{t('excel.startAnother')}</md-outlined-button>

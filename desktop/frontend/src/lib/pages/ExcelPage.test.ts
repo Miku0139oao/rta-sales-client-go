@@ -64,7 +64,7 @@ describe('Excel safety workflow', () => {
     await fireEvent.click(container.querySelectorAll('md-switch')[0]);
     expect(screen.getByText('分析可能覆寫 L／AB 欄位中已存在的不同值。此選擇在本次分析後無法變更。')).toBeInTheDocument();
     await fireEvent.click(container.querySelector('.app-dialog md-filled-button')!);
-    await fireEvent.click(button(container, '分析並建立預覽'));
+    await fireEvent.click(button(container, '開始分析'));
     await waitFor(() => expect(screen.getByText('帳號授權範圍重疊')).toBeInTheDocument());
 
     expect(analyze).toHaveBeenCalledTimes(1);
@@ -72,7 +72,32 @@ describe('Excel safety workflow', () => {
     expect(screen.getAllByText('允許覆寫不同值').length).toBeGreaterThan(0);
   });
 
-  it('blocks issue rows until partial mode and keep-original are both selected, then asks again', async () => {
+  it('returns from results to the same range without rescanning the workbook', async () => {
+    const scanWorkbook = vi.fn(async () => scan);
+    const analyze = vi.fn(async () => result());
+    configureBackend({ methods: {
+      OpenWorkbook: vi.fn(async () => 'D:\\sales.xlsx'),
+      ScanWorkbook: scanWorkbook,
+      Analyze: analyze,
+    } });
+    const { container } = render(ExcelPage, {
+      props: { t: translator('zh-TW'), settings: defaultSettings, onGoToAccounts: vi.fn() },
+    });
+    await openAndScan(container);
+    await fireEvent.input(screen.getByLabelText('開始日期'), { target: { value: '2026-08-02' } });
+    await fireEvent.click(button(container, '開始分析'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: '檢查分析結果' })).toBeInTheDocument());
+    expect(screen.queryByRole('heading', { name: '掃描摘要' })).not.toBeInTheDocument();
+
+    await fireEvent.click(button(container, '修改範圍'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: '掃描摘要' })).toBeInTheDocument());
+    expect((screen.getByLabelText('開始日期') as HTMLInputElement).value).toBe('2026-08-02');
+    expect(screen.queryByRole('heading', { name: '檢查分析結果' })).not.toBeInTheDocument();
+    expect(scanWorkbook).toHaveBeenCalledTimes(1);
+    expect(analyze).toHaveBeenCalledTimes(1);
+  });
+
+  it('enables partial write with one explicit choice and asks once before saving', async () => {
     const apply = vi.fn(async (_request: unknown) => ({
       outputPath: 'D:\\filled.xlsx', changedCells: 2, skippedRows: 1,
     }));
@@ -95,18 +120,18 @@ describe('Excel safety workflow', () => {
       props: { t: translator('zh-TW'), settings: defaultSettings, onGoToAccounts: vi.fn() },
     });
     await openAndScan(container);
-    await fireEvent.click(button(container, '分析並建立預覽'));
-    await waitFor(() => expect(screen.getByText(/目前有 1 個問題/)).toBeInTheDocument());
+    await fireEvent.click(button(container, '開始分析'));
+    await waitFor(() => expect(screen.getByText(/還有 1 個問題/)).toBeInTheDocument());
     expect(container.textContent).not.toContain('重試失敗項目');
-    expect(button(container, '另存新檔')).toHaveAttribute('disabled');
+    expect(button(container, '另存並寫入')).toHaveAttribute('disabled');
 
-    await fireEvent.click(container.querySelectorAll('md-switch')[1]);
-    await fireEvent.click(screen.getByRole('checkbox', { name: '問題列保持原值' }));
-    expect(button(container, '另存新檔')).toHaveAttribute('disabled', 'false');
-    await fireEvent.click(button(container, '另存新檔'));
+    await fireEvent.click(container.querySelector('md-switch')!);
+    expect(screen.queryByRole('checkbox', { name: '問題列保持原值' })).not.toBeInTheDocument();
+    expect(button(container, '另存並寫入')).toHaveAttribute('disabled', 'false');
+    await fireEvent.click(button(container, '另存並寫入'));
 
     expect(screen.getByRole('heading', { name: '確認部分寫入' })).toBeInTheDocument();
-    expect(screen.getByText('問題列將保持原值，其餘可用資料會寫入新檔。')).toBeInTheDocument();
+    expect(screen.getByText('問題列會保留原值，只寫入其餘列。')).toBeInTheDocument();
     await fireEvent.click(container.querySelector('.app-dialog md-filled-button')!);
     await waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
     expect(apply).toHaveBeenCalledWith(expect.objectContaining({
@@ -136,7 +161,7 @@ describe('Excel safety workflow', () => {
       props: { t: translator('zh-TW'), settings: defaultSettings, onGoToAccounts: vi.fn() },
     });
     await openAndScan(container);
-    await fireEvent.click(button(container, '分析並建立預覽'));
+    await fireEvent.click(button(container, '開始分析'));
     const cancelButton = button(container, '取消分析');
     expect(cancelButton).toHaveAttribute('disabled');
 
@@ -159,11 +184,11 @@ describe('Excel safety workflow', () => {
       props: { t: translator('zh-TW'), settings: defaultSettings, onGoToAccounts: vi.fn() },
     });
     await openAndScan(container);
-    await fireEvent.click(button(container, '分析並建立預覽'));
+    await fireEvent.click(button(container, '開始分析'));
     await waitFor(() => expect(screen.getByText('分析仍有未完成的工作。請先重試可重試項目，完成後才能另存。')).toBeInTheDocument());
 
-    expect(container.querySelectorAll('md-switch')[1]).toHaveAttribute('disabled', 'true');
-    expect(button(container, '另存新檔')).toHaveAttribute('disabled', 'true');
+    expect(container.querySelector('md-switch')).toHaveAttribute('disabled', 'true');
+    expect(button(container, '另存並寫入')).toHaveAttribute('disabled', 'true');
   });
 
   it('blocks aggregate backend problems even when preview rows have no issues', async () => {
@@ -180,10 +205,10 @@ describe('Excel safety workflow', () => {
       props: { t: translator('zh-TW'), settings: defaultSettings, onGoToAccounts: vi.fn() },
     });
     await openAndScan(container);
-    await fireEvent.click(button(container, '分析並建立預覽'));
+    await fireEvent.click(button(container, '開始分析'));
     await waitFor(() => expect(screen.getByText('分析回報 1 個阻擋問題，必須先處理才能另存。')).toBeInTheDocument());
 
-    expect(button(container, '另存新檔')).toHaveAttribute('disabled', 'true');
+    expect(button(container, '另存並寫入')).toHaveAttribute('disabled', 'true');
   });
 
   it('locks workbook changes during retry and allows cancelling that operation', async () => {
@@ -214,20 +239,20 @@ describe('Excel safety workflow', () => {
       props: { t: translator('zh-TW'), settings: defaultSettings, onGoToAccounts: vi.fn() },
     });
     await openAndScan(container);
-    await fireEvent.click(button(container, '分析並建立預覽'));
+    await fireEvent.click(button(container, '開始分析'));
     await waitFor(() => expect(container.textContent).toContain('重試失敗項目'));
     await fireEvent.click(button(container, '重試失敗項目'));
 
     await waitFor(() => expect(retry).toHaveBeenCalledWith({ operationId: 'operation-1' }));
     expect(button(container, '更換檔案')).toHaveAttribute('disabled', 'true');
-    expect(button(container, '重新掃描')).toHaveAttribute('disabled', 'true');
+    expect(container.textContent).not.toContain('修改範圍');
     const cancelButton = button(container, '取消分析');
     expect(cancelButton).toHaveAttribute('disabled', 'false');
     await fireEvent.click(cancelButton);
     expect(cancel).toHaveBeenCalledWith({ operationId: 'operation-1' });
 
     resolveRetry(result());
-    await waitFor(() => expect(screen.getByRole('heading', { name: '寫入前預覽', level: 2 })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: '檢查分析結果', level: 2 })).toBeInTheDocument());
   });
 
   it('does not infer retry work when the backend explicitly returns zero', async () => {
@@ -245,8 +270,8 @@ describe('Excel safety workflow', () => {
       props: { t: translator('zh-TW'), settings: defaultSettings, onGoToAccounts: vi.fn() },
     });
     await openAndScan(container);
-    await fireEvent.click(button(container, '分析並建立預覽'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: '寫入前預覽', level: 2 })).toBeInTheDocument());
+    await fireEvent.click(button(container, '開始分析'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: '檢查分析結果', level: 2 })).toBeInTheDocument());
     expect(container.textContent).not.toContain('重試失敗項目');
   });
 });
