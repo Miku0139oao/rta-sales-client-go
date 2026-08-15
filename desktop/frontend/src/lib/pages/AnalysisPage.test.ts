@@ -35,8 +35,8 @@ const analysisResult: SalesAnalysisResult = {
   stores: [],
   items: [
     {
-      storeId: '107', storeLabel: '107 - Central', category1: 'A-HEALTH & BEAUTY', category2: 'BEAUTY CARE',
-      category3: 'SKIN CARE', category4: 'FACIAL', category5: 'MASQUE', articleCode: '552646', articleName: 'Mask',
+      storeId: '107', storeLabel: '107 - Central', category1: 'A-HEALTH & BEAUTY', category1Code: 'A', category2: 'BEAUTY CARE', category2Code: 'A02',
+      category3: 'SKIN CARE', category3Code: 'A0201', category4: 'FACIAL', category5: 'MASQUE', articleCode: '552646', articleName: 'Mask',
       transactionCount: 2, saleQuantity: 3, saleAmount: 110, returnTransactionCount: 1, returnQuantity: 1, returnAmount: 10, netQuantity: 2, netSalesAmount: 100,
     },
     {
@@ -123,8 +123,14 @@ describe('sales analysis page', () => {
         { key: 'previous', label: '上期', from: '2026-07-01', to: '2026-07-31', includeTrend: true },
         { key: 'previous2', label: '前期', from: '2026-05-31', to: '2026-06-30', includeTrend: true },
         { key: 'yearAgo', label: '去年同期', from: '2025-08-01', to: '2025-08-31', includeTrend: true },
+        { key: 'yearAgoNext', label: '去年下月', from: '2025-09-01', to: '2025-09-30', includeTrend: false },
       ],
     });
+    await fireEvent.click(screen.getByRole('tab', { name: '關注' }));
+    expect(screen.getByRole('heading', { name: '接下來關注' })).toBeInTheDocument();
+    expect(screen.getByText('去年下月熱賣，用來準備接下來要補貨或推廣的商品。')).toBeInTheDocument();
+    expect(screen.getByText('護膚')).toBeInTheDocument();
+    expect(screen.getAllByText('Mask').length).toBeGreaterThan(0);
     await fireEvent.click(screen.getByRole('tab', { name: '商品' }));
     expect(screen.getByText('Mask')).toBeInTheDocument();
     expect(screen.getByText('Wipes')).toBeInTheDocument();

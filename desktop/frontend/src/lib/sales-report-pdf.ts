@@ -1,5 +1,6 @@
 import type { jsPDF } from 'jspdf';
 import notoSansTCURL from './assets/NotoSansTC-Regular.ttf?url';
+import { buildFocusGroups, type FocusGroup, type FocusProduct } from './analysisFocus';
 import type {
   Locale,
   SalesAnalysisItem,
@@ -55,6 +56,13 @@ interface Labels {
   previous: string;
   yearAgo: string;
   vsPrevious: string;
+  vsYearAgo: string;
+  focusTitle: string;
+  focusHealth: string;
+  focusSkin: string;
+  focusPC: string;
+  focusSales: string;
+  focusQuantity: string;
   categoryPerformance: string;
   category: string;
   topSales: string;
@@ -131,13 +139,18 @@ function renderSalesAnalysisPDF(
   doc.setProperties({
     title: `RTA Sales Analysis - ${storeId}`,
     subject: `${current.from} - ${current.to}`,
-    author: 'RTA Excel Filler',
-    creator: 'RTA Excel Filler',
+    author: 'RTA Sales Analyzer',
+    creator: 'RTA Sales Analyzer',
   });
 
   drawSummaryPage(doc, periods, current, storeId, storeLabel, categoryLevel, labels, locale);
   doc.addPage();
   drawOverallRankingsPage(doc, current, storeId, storeLabel, categoryLevel, labels, locale);
+  const yearAgoNext = periodByKey(periods, 'yearAgoNext');
+  if (yearAgoNext) {
+    doc.addPage();
+    drawFocusPage(doc, yearAgoNext, current, storeId, storeLabel, labels);
+  }
 
   for (const key of ['current', 'yearAgo', 'yearAgoNext']) {
     const period = periodByKey(periods, key);
@@ -392,23 +405,126 @@ function drawCategoryPerformancePanel(doc: jsPDF, x: number, y: number, width: n
   const innerX = x + 4;
   const tableY = y + 19;
   const innerWidth = width - 8;
-  const columns = [innerWidth - 84, 28, 28, 28];
-  drawTableHeader(doc, innerX, tableY, columns, [labels.category, labels.current, labels.previous, labels.yearAgo]);
+  const columns = [innerWidth - 108, 24, 20, 24, 20, 20];
+  drawTableHeader(doc, innerX, tableY, columns, [labels.category, labels.current, labels.previous, labels.vsPrevious, labels.yearAgo, labels.vsYearAgo]);
   currentGroups.forEach((group, index) => {
     const rowY = tableY + 10 + index * 14;
     if (index % 2 === 0) {
       setFill(doc, COLORS.surface);
       doc.roundedRect(innerX, rowY - 5.5, innerWidth, 11.5, 1.5, 1.5, 'F');
     }
-    setText(doc, COLORS.ink, 7, 'bold');
+    setText(doc, COLORS.ink, 6.6, 'bold');
     doc.text(fitText(doc, categoryLabel(group, locale), columns[0] - 3), innerX + 2, rowY + 1.7);
-    const values = [group.amount, previousMap.get(group.id)?.amount, yearAgoMap.get(group.id)?.amount];
+    const previousAmount = previousMap.get(group.id)?.amount;
+    const yearAgoAmount = yearAgoMap.get(group.id)?.amount;
+    const values: Array<{ text: string; color: RGB; bold?: boolean }> = [
+      { text: compactMoney(group.amount), color: COLORS.ink, bold: true },
+      { text: previousAmount === undefined ? '-' : compactMoney(previousAmount), color: COLORS.slate },
+      percentCell(delta(group.amount, previousAmount)),
+      { text: yearAgoAmount === undefined ? '-' : compactMoney(yearAgoAmount), color: COLORS.slate },
+      percentCell(delta(group.amount, yearAgoAmount)),
+    ];
     let cellX = innerX + columns[0];
     values.forEach((value, valueIndex) => {
-      setText(doc, valueIndex === 0 ? COLORS.ink : COLORS.slate, 6.7, valueIndex === 0 ? 'bold' : 'normal');
-      doc.text(value === undefined ? '-' : compactMoney(value), cellX + columns[valueIndex + 1] - 2, rowY + 1.7, { align: 'right' });
+      setText(doc, value.color, 6.3, value.bold ? 'bold' : 'normal');
+      doc.text(value.text, cellX + columns[valueIndex + 1] - 2, rowY + 1.7, { align: 'right' });
       cellX += columns[valueIndex + 1];
     });
+  });
+}
+
+function percentCell(change: number | undefined): { text: string; color: RGB; bold?: boolean } {
+  if (change === undefined) return { text: '-', color: COLORS.slate };
+  return { text: formatPercent(change), color: change >= 0 ? COLORS.positive : COLORS.negative, bold: true };
+}
+
+const FOCUS_GROUP_ORDER = ['health', 'skin', 'pc'] as const;
+
+function drawFocusPage(
+  doc: jsPDF,
+  yearAgoNext: StorePeriod,
+  current: StorePeriod,
+  storeId: string,
+  storeLabel: string,
+  labels: Labels,
+): void {
+  drawPageHeader(doc, labels.focusTitle, `${yearAgoNext.from} - ${yearAgoNext.to}`, storeId, storeLabel);
+  const groups = buildFocusGroups(yearAgoNext.items, current.items, 8);
+  const titles: Record<string, string> = {
+    health: labels.focusHealth,
+    skin: labels.focusSkin,
+    pc: labels.focusPC,
+  };
+  const gap = 4;
+  const cardWidth = (277 - gap * 2) / 3;
+  for (let index = 0; index < 3; index += 1) {
+    const group = groups.find((candidate) => candidate.id === FOCUS_GROUP_ORDER[index]);
+    drawFocusGroupCard(doc, 10 + index * (cardWidth + gap), 30, cardWidth, 160, titles[FOCUS_GROUP_ORDER[index]] ?? FOCUS_GROUP_ORDER[index], group, labels);
+  }
+}
+
+function drawFocusGroupCard(
+  doc: jsPDF,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  title: string,
+  group: FocusGroup | undefined,
+  labels: Labels,
+): void {
+  card(doc, x, y, width, height);
+  setFill(doc, COLORS.tealSoft);
+  doc.roundedRect(x, y, width, 11, 2, 2, 'F');
+  setText(doc, COLORS.ink, 8, 'bold');
+  doc.text(fitText(doc, title, width - 8), x + 4, y + 7.2);
+  drawFocusList(doc, x + 3, y + 16, width - 6, labels.focusSales, group?.sales ?? [], 'amount', labels);
+  drawFocusList(doc, x + 3, y + 88, width - 6, labels.focusQuantity, group?.quantity ?? [], 'quantity', labels);
+}
+
+function drawFocusList(
+  doc: jsPDF,
+  x: number,
+  y: number,
+  width: number,
+  title: string,
+  items: FocusProduct[],
+  metric: 'amount' | 'quantity',
+  labels: Labels,
+): void {
+  setText(doc, COLORS.teal, 6.4, 'bold');
+  doc.text(title, x, y);
+  const headerY = y + 5;
+  const columns = [6, width - 40, 18, 16];
+  setText(doc, COLORS.slate, 5.2, 'bold');
+  doc.text('#', x + 1, headerY);
+  doc.text(labels.product, x + columns[0] + 1, headerY);
+  doc.text(metric === 'amount' ? labels.amount : labels.quantity, x + columns[0] + columns[1] + columns[2] - 1, headerY, { align: 'right' });
+  doc.text(metric === 'amount' ? labels.quantity : labels.amount, x + columns.reduce((sum, value) => sum + value, 0) - 1, headerY, { align: 'right' });
+  setDraw(doc, COLORS.line);
+  doc.line(x, headerY + 1.4, x + width, headerY + 1.4);
+  const rows = items.slice(0, 8);
+  if (rows.length === 0) {
+    setText(doc, COLORS.slate, 6, 'normal');
+    doc.text('-', x + width / 2, headerY + 16, { align: 'center' });
+    return;
+  }
+  rows.forEach((item, index) => {
+    const rowY = headerY + 6 + index * 6.6;
+    if (index % 2 === 0) {
+      setFill(doc, COLORS.surface);
+      doc.rect(x, rowY - 3.6, width, 6.2, 'F');
+    }
+    setText(doc, index < 3 ? COLORS.teal : COLORS.slate, 5.6, 'bold');
+    doc.text(String(index + 1), x + 1, rowY);
+    setText(doc, COLORS.ink, 5.8, 'normal');
+    doc.text(fitText(doc, item.name || item.code || '-', columns[1] - 2), x + columns[0] + 1, rowY);
+    const primary = metric === 'amount' ? compactMoney(item.amount) : formatQuantity(item.quantity);
+    const secondary = metric === 'amount' ? formatQuantity(item.quantity) : compactMoney(item.amount);
+    setText(doc, COLORS.ink, 5.6, 'bold');
+    doc.text(primary, x + columns[0] + columns[1] + columns[2] - 1, rowY, { align: 'right' });
+    setText(doc, COLORS.slate, 5.3, 'normal');
+    doc.text(secondary, x + columns.reduce((sum, value) => sum + value, 0) - 1, rowY, { align: 'right' });
   });
 }
 
@@ -591,7 +707,10 @@ function reportLabels(locale: Locale): Labels {
       title: 'Store sales analysis', summary: 'Sales summary', period: 'Period', generated: 'Generated',
       netSales: 'Net sales', netQuantity: 'Net quantity', transactions: 'Transactions', basket: 'Average basket',
       comparison: 'Performance comparison', metric: 'Metric', current: 'Current', previous: 'Previous', yearAgo: 'Year ago',
-      vsPrevious: 'vs previous', categoryPerformance: 'Category performance', category: 'Category',
+      vsPrevious: 'vs previous', vsYearAgo: 'vs year ago',
+      focusTitle: 'Watch next', focusHealth: 'Health', focusSkin: 'Skin', focusPC: 'Personal care',
+      focusSales: 'Top 10 by sales', focusQuantity: 'Top 10 by quantity',
+      categoryPerformance: 'Category performance', category: 'Category',
       topSales: 'Top 15 by sales', topQuantity: 'Top 15 by quantity', salesRanking: 'Category sales ranking',
       quantityRanking: 'Category quantity ranking', product: 'Product', amount: 'Sales', quantity: 'Qty', uncategorized: 'Uncategorized',
     };
@@ -600,7 +719,10 @@ function reportLabels(locale: Locale): Labels {
     title: '門店銷售分析', summary: '銷售摘要', period: '分析期間', generated: '產生時間',
     netSales: '淨銷售額', netQuantity: '淨銷售數量', transactions: '交易次數', basket: '客單價',
     comparison: '銷售表現', metric: '指標', current: '本期', previous: '上期', yearAgo: '去年同期',
-    vsPrevious: '較上期', categoryPerformance: '分類表現', category: '分類',
+    vsPrevious: '較上期', vsYearAgo: '較去年同期',
+    focusTitle: '接下來關注', focusHealth: '保健', focusSkin: '護膚', focusPC: '個護',
+    focusSales: '銷售額 Top 10', focusQuantity: '銷量 Top 10',
+    categoryPerformance: '分類表現', category: '分類',
     topSales: '銷售額 Top 15', topQuantity: '銷量 Top 15', salesRanking: '分類商品銷售排行',
     quantityRanking: '分類商品銷量排行', product: '商品', amount: '銷售額', quantity: '銷量', uncategorized: '未分類',
   };

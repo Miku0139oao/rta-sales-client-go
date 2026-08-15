@@ -1,7 +1,7 @@
 import type { Locale } from './types';
 
 const zhTW = {
-  'app.name': 'RTA 銷售資料填入工具',
+  'app.name': 'RTA 銷售分析',
   'nav.excel': 'Excel 填入',
   'nav.analysis': '銷售分析',
   'nav.accounts': '帳號',
@@ -170,6 +170,16 @@ const zhTW = {
   'analysis.periods': '比較期間',
   'analysis.reportViews': '報表頁籤',
   'analysis.overview': '概覽',
+  'analysis.focus': '關注',
+  'analysis.focusTitle': '接下來關注',
+  'analysis.focusHint': '去年下月熱賣，用來準備接下來要補貨或推廣的商品。',
+  'analysis.focusMissing': '需要月份比較才有去年下月資料。',
+  'analysis.focusHealth': '保健',
+  'analysis.focusSkin': '護膚',
+  'analysis.focusPC': '個護',
+  'analysis.focusSales': '銷售額 Top 10',
+  'analysis.focusQuantity': '銷量 Top 10',
+  'analysis.focusCurrent': '本期',
   'analysis.categories': '分類',
   'analysis.products': '商品',
   'analysis.grossSales': '銷售金額',
@@ -266,7 +276,7 @@ const zhTW = {
 type TranslationKey = keyof typeof zhTW;
 
 const en: Record<TranslationKey, string> = {
-  'app.name': 'RTA Sales Workbook Filler',
+  'app.name': 'RTA Sales Analyzer',
   'nav.excel': 'Excel fill',
   'nav.analysis': 'Sales analysis',
   'nav.accounts': 'Accounts',
@@ -435,6 +445,16 @@ const en: Record<TranslationKey, string> = {
   'analysis.periods': 'Comparison periods',
   'analysis.reportViews': 'Report views',
   'analysis.overview': 'Overview',
+  'analysis.focus': 'Watch',
+  'analysis.focusTitle': 'Watch next',
+  'analysis.focusHint': 'Last year’s next month shows what to stock or promote next.',
+  'analysis.focusMissing': 'Month comparison is required for last year’s next month.',
+  'analysis.focusHealth': 'Health',
+  'analysis.focusSkin': 'Skin',
+  'analysis.focusPC': 'Personal care',
+  'analysis.focusSales': 'Top 10 by sales',
+  'analysis.focusQuantity': 'Top 10 by quantity',
+  'analysis.focusCurrent': 'Current',
   'analysis.categories': 'Categories',
   'analysis.products': 'Products',
   'analysis.grossSales': 'Gross sales',

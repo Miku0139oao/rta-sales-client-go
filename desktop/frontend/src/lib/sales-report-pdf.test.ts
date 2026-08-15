@@ -82,13 +82,13 @@ function resultFixture(): SalesAnalysisResult {
 }
 
 describe('sales analysis PDF', () => {
-  it('builds an eight-page landscape store report with an embedded Chinese font', async () => {
+  it('builds a nine-page landscape store report with an embedded Chinese font', async () => {
     const fontBase64 = readFileSync(resolve(process.cwd(), 'src/lib/assets/NotoSansTC-Regular.ttf')).toString('base64');
     const pdf = await buildSalesAnalysisPDF(resultFixture(), '107', 'category2', 'zh-TW', fontBase64);
     expect(new TextDecoder().decode(pdf.slice(0, 8))).toBe('%PDF-1.3');
     expect(pdf.byteLength).toBeGreaterThan(100_000);
     const source = new TextDecoder('latin1').decode(pdf);
-    expect(source.match(/\/Type \/Page\b/g)).toHaveLength(8);
+    expect(source.match(/\/Type \/Page\b/g)).toHaveLength(9);
     if (process.env.SALES_REPORT_QA_OUTPUT) writeFileSync(process.env.SALES_REPORT_QA_OUTPUT, pdf);
   });
 
