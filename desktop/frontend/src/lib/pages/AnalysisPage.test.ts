@@ -73,7 +73,8 @@ describe('sales analysis page', () => {
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
     const storeCheckboxes = container.querySelectorAll('.store-grid input[type="checkbox"]');
     expect(storeCheckboxes).toHaveLength(2);
-    await fireEvent.click(storeCheckboxes[1]!);
+    expect([...storeCheckboxes].every((checkbox) => (checkbox as HTMLInputElement).checked)).toBe(true);
+    expect(screen.getByText('已選 2 間門店')).toBeInTheDocument();
     await fireEvent.change(screen.getByLabelText('分析期間'), { target: { value: 'range' } });
     await waitFor(() => expect(screen.getByLabelText('開始日期')).toBeInTheDocument());
     await fireEvent.input(screen.getByLabelText('開始日期'), { target: { value: '2026-08-01' } });

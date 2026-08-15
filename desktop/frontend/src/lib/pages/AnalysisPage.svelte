@@ -132,7 +132,7 @@
     selectedStoreIds = new Set<string>();
     try {
       stores = await backend.listSalesAnalysisStores(profileId);
-      if (stores[0]) selectedStoreIds = new Set([stores[0].businessId]);
+      selectedStoreIds = new Set(stores.map((store) => store.businessId));
     } catch (caught) {
       error = errorMessage(settings.locale, caught);
     } finally {
@@ -734,10 +734,10 @@
   .report-tabs button { display: flex; min-height: 42px; align-items: center; gap: 8px; padding: 8px 16px; cursor: pointer; border: 0; border-radius: 10px; color: var(--md-sys-color-on-surface-variant); background: transparent; font-weight: 680; white-space: nowrap; }
   .report-tabs button.active { color: var(--md-sys-color-on-secondary-container); background: var(--md-sys-color-secondary-container); }
   .report-tabs .material-symbols-rounded { font-size: 20px; }
-  .analysis-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 11px; margin: 0; }
-  .analysis-kpis > div { min-height: 116px; padding: 18px 19px; border: 1px solid var(--app-border); border-radius: 17px; background: var(--app-card); box-shadow: var(--app-shadow); }
+  .analysis-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 11px; margin: 0; }
+  .analysis-kpis > div { min-width: 0; min-height: 116px; padding: 18px 19px; border: 1px solid var(--app-border); border-radius: 17px; background: var(--app-card); box-shadow: var(--app-shadow); }
   .analysis-kpis dt { color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-weight: 700; }
-  .analysis-kpis dd { margin: 8px 0 5px; color: var(--app-summary-value); font-size: clamp(20px, 2vw, 27px); font-weight: 730; font-variant-numeric: tabular-nums; }
+  .analysis-kpis dd { margin: 8px 0 5px; color: var(--app-summary-value); font-size: clamp(20px, 1.8vw, 27px); font-weight: 730; font-variant-numeric: tabular-nums; letter-spacing: -.02em; line-height: 1.15; white-space: nowrap; }
   .analysis-kpis span { color: var(--md-sys-color-on-surface-variant); font-size: 11px; font-weight: 650; }
   .positive { color: var(--app-proposed) !important; }
   .negative { color: var(--md-sys-color-error) !important; }
@@ -746,6 +746,8 @@
   .section-heading, .comparison-heading, .analysis-table-heading { padding: 19px 21px 14px; }
   .section-heading h2, .comparison-heading h2, .analysis-table-heading h2 { margin: 0; }
   .performance-card .table-scroll, .comparison-card .table-scroll { max-height: min(620px, 62vh); }
+  .analysis-results .table-scroll { scrollbar-width: none; -ms-overflow-style: none; }
+  .analysis-results .table-scroll::-webkit-scrollbar { display: none; width: 0; height: 0; }
   .performance-card th:first-child, .comparison-card th:first-child { text-align: left; }
   .emphasis { color: var(--app-summary-value); font-weight: 740; }
   .top-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -785,6 +787,7 @@
 
   @media (max-width: 620px) {
     .analysis-query { padding: 18px; }
+    .analysis-kpis { grid-template-columns: 1fr; }
     .store-grid, .period-strip { grid-template-columns: 1fr; }
     .period-strip > div { border-right: 0; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
     .period-strip > div:last-child { border-bottom: 0; }
