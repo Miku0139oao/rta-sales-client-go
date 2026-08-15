@@ -410,6 +410,41 @@ main {
     rgb(255 255 255 / 0.82);
 }
 
+.workbook-drop-target:not(.drop-disabled) {
+  --wails-drop-target: drop;
+}
+
+.file-drop-card,
+.source-card {
+  transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease;
+}
+
+.file-drop-card.wails-drop-target-active,
+.source-card.wails-drop-target-active {
+  border-color: var(--md-sys-color-primary);
+  box-shadow: 0 0 0 4px rgb(42 102 69 / 0.16), var(--app-shadow);
+}
+
+.file-drop-card.wails-drop-target-active {
+  background:
+    radial-gradient(circle at 50% 30%, rgb(152 235 184 / 0.55), transparent 16rem),
+    #f4fff8;
+}
+
+.drop-instruction {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 18px;
+  color: var(--md-sys-color-primary);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.drop-instruction .material-symbols-rounded {
+  font-size: 22px;
+}
+
 .file-illustration {
   position: relative;
   display: grid;

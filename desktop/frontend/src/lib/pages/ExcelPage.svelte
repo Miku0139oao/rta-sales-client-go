@@ -81,9 +81,17 @@
     (!overwrite || overwriteConfirmed)
   );
 
-  onMount(() => backend.onProgress((next) => {
-    progress = next;
-  }));
+  onMount(() => {
+    const cleanups = [
+      backend.onProgress((next) => {
+        progress = next;
+      }),
+      backend.onFileDrop((paths) => {
+        void acceptDroppedWorkbook(paths);
+      }),
+    ];
+    return () => cleanups.forEach((cleanup) => cleanup());
+  });
 
   async function reveal(getElement: () => HTMLElement | undefined) {
     await tick();
@@ -104,20 +112,35 @@
     operationError = '';
     try {
       const selected = await backend.openWorkbook();
-      if (requestGeneration !== generation) return;
-      if (!selected) return;
-      if (!selected.toLowerCase().endsWith('.xlsx')) {
-        await showOperationError(t('excel.xlsxOnly'));
-        return;
-      }
-      inputPath = selected;
-      sheetName = '';
-      await scanWorkbook('', requestGeneration);
+      if (requestGeneration === generation) opening = false;
+      await acceptWorkbook(selected, requestGeneration);
     } catch (error) {
       if (requestGeneration === generation) await showOperationError(errorMessage(settings.locale, error));
     } finally {
       if (requestGeneration === generation) opening = false;
     }
+  }
+
+  async function acceptDroppedWorkbook(paths: string[]) {
+    if (opening || scanning || analyzing || retrying || saving || paths.length === 0) return;
+    const selected = paths.find((path) => isXlsxPath(path)) ?? paths[0];
+    const requestGeneration = ++generation;
+    await acceptWorkbook(selected, requestGeneration);
+  }
+
+  async function acceptWorkbook(selected: string, requestGeneration: number) {
+    if (requestGeneration !== generation || !selected) return;
+    if (!isXlsxPath(selected)) {
+      await showOperationError(t('excel.xlsxOnly'));
+      return;
+    }
+    inputPath = selected;
+    sheetName = '';
+    await scanWorkbook('', requestGeneration);
+  }
+
+  function isXlsxPath(path: string): boolean {
+    return path.trim().toLowerCase().endsWith('.xlsx');
   }
 
   async function scanWorkbook(requestedSheet = sheetName, existingGeneration?: number) {
@@ -427,11 +450,16 @@
   {/if}
 
   {#if !inputPath}
-    <section class="file-drop-card surface-card" aria-label={t('excel.open')}>
+    <section
+      class="file-drop-card surface-card workbook-drop-target"
+      class:drop-disabled={workflowBusy}
+      aria-label={t('excel.open')}
+    >
       <div class="file-illustration" aria-hidden="true">
         <span class="material-symbols-rounded sheet-symbol">table_view</span>
         <span class="material-symbols-rounded search-symbol">search</span>
       </div>
+      <strong class="drop-instruction"><span class="material-symbols-rounded" aria-hidden="true">move_to_inbox</span>{t('excel.dropHere')}</strong>
       <md-filled-button onclick={openWorkbook} disabled={workflowBusy}>
         <span class="material-symbols-rounded" slot="icon">folder_open</span>
         {opening ? t('excel.opening') : t('excel.open')}
@@ -439,7 +467,11 @@
       <div class="source-safety"><span class="material-symbols-rounded" aria-hidden="true">lock</span>{t('excel.sourceSafety')}</div>
     </section>
   {:else}
-    <section class="source-card surface-card" aria-labelledby="source-title">
+    <section
+      class="source-card surface-card workbook-drop-target"
+      class:drop-disabled={workflowBusy}
+      aria-labelledby="source-title"
+    >
       <div class="source-icon"><span class="material-symbols-rounded" aria-hidden="true">description</span></div>
       <div class="source-copy">
         <span id="source-title" class="label">{t('excel.source')}</span>

@@ -46,6 +46,29 @@ describe('Wails backend adapter', () => {
     expect(cleanups).toEqual(['rta:progress', 'analysis-progress']);
   });
 
+  it('subscribes to Wails file drops using drop-target filtering', () => {
+    const previousRuntime = window.runtime;
+    const onFileDrop = vi.fn();
+    const onFileDropOff = vi.fn();
+    window.runtime = { ...previousRuntime, OnFileDrop: onFileDrop, OnFileDropOff: onFileDropOff };
+    configureBackend({ methods: {} });
+    const received: string[][] = [];
+
+    try {
+      const unsubscribe = backend.onFileDrop((paths) => received.push(paths));
+      expect(onFileDrop).toHaveBeenCalledTimes(1);
+      expect(onFileDrop.mock.calls[0]?.[1]).toBe(true);
+
+      onFileDrop.mock.calls[0]?.[0](120, 240, ['D:\\dropped.xlsx']);
+      expect(received).toEqual([['D:\\dropped.xlsx']]);
+
+      unsubscribe();
+      expect(onFileDropOff).toHaveBeenCalledTimes(1);
+    } finally {
+      window.runtime = previousRuntime;
+    }
+  });
+
   it('passes the bounded workload and local mapping path to Analyze', async () => {
     const analyze = vi.fn(async () => ({
       operationId: 'op1', complete: true, changedCellCount: 0, problemCount: 0,

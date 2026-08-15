@@ -48,6 +48,43 @@ afterEach(() => {
 });
 
 describe('Excel safety workflow', () => {
+  it('scans a dropped .xlsx workbook and rejects unsupported drops', async () => {
+    let dropListener: ((paths: string[]) => void) | undefined;
+    const scanWorkbook = vi.fn(async (input: unknown) => {
+      const request = input as { inputPath: string };
+      return {
+        ...scan,
+        inputPath: request.inputPath,
+        fileName: request.inputPath.split('\\').pop(),
+      };
+    });
+    configureBackend({
+      methods: { ScanWorkbook: scanWorkbook },
+      fileDrops: {
+        on(listener) {
+          dropListener = listener;
+          return () => undefined;
+        },
+      },
+    });
+    render(ExcelPage, {
+      props: { t: translator('zh-TW'), settings: defaultSettings, onGoToAccounts: vi.fn() },
+    });
+    await waitFor(() => expect(dropListener).toBeDefined());
+    expect(screen.getByText('拖放 .xlsx 到這裡')).toBeInTheDocument();
+
+    dropListener!(['D:\\notes.csv']);
+    await waitFor(() => expect(screen.getByText('僅支援 .xlsx 活頁簿')).toBeInTheDocument());
+    expect(scanWorkbook).not.toHaveBeenCalled();
+
+    dropListener!(['D:\\notes.csv', 'D:\\daily-sales.XLSX', 'D:\\later.xlsx']);
+    dropListener!(['D:\\ignored-while-scanning.xlsx']);
+    await waitFor(() => expect(screen.getByText('掃描摘要')).toBeInTheDocument());
+    expect(scanWorkbook).toHaveBeenCalledTimes(1);
+    expect(scanWorkbook).toHaveBeenCalledWith(expect.objectContaining({ inputPath: 'D:\\daily-sales.XLSX' }));
+    expect(screen.getByText('daily-sales.XLSX')).toBeInTheDocument();
+  });
+
   it('confirms overwrite before the single analysis and keeps the preview policy read-only', async () => {
     const analyze = vi.fn(async (_request: unknown) => result({ overlapCount: 3 }));
     configureBackend({

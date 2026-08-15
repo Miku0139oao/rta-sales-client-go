@@ -168,6 +168,7 @@ export interface BackendApi {
   retryFailed(operationId: string): Promise<AnalysisResult>;
   apply(request: ApplyRequest): Promise<ApplyResult>;
   onProgress(listener: (progress: AnalysisProgress) => void): () => void;
+  onFileDrop(listener: (paths: string[]) => void): () => void;
 }
 
 export interface AppErrorShape {

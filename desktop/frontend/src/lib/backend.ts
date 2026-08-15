@@ -21,10 +21,14 @@ type MethodSource = Record<string, AnyMethod | undefined>;
 type EventSource = {
   on: (name: string, listener: (payload: unknown) => void) => (() => void) | void;
 };
+type FileDropSource = {
+  on: (listener: (paths: string[]) => void) => (() => void) | void;
+};
 
 interface BackendInjection {
   methods: MethodSource;
   events?: EventSource;
+  fileDrops?: FileDropSource;
 }
 
 declare global {
@@ -33,6 +37,8 @@ declare global {
     runtime?: {
       EventsOn?: (name: string, listener: (payload: unknown) => void) => (() => void) | void;
       EventsOff?: (name: string) => void;
+      OnFileDrop?: (listener: (x: number, y: number, paths: string[]) => void, useDropTarget: boolean) => void;
+      OnFileDropOff?: () => void;
     };
   }
 }
@@ -169,6 +175,17 @@ function eventSource(): EventSource | undefined {
   };
 }
 
+function fileDropSource(): FileDropSource | undefined {
+  if (injection?.fileDrops) return injection.fileDrops;
+  if (typeof window === 'undefined' || !window.runtime?.OnFileDrop) return undefined;
+  return {
+    on(listener) {
+      window.runtime!.OnFileDrop!((_x, _y, paths) => listener(paths), true);
+      return () => window.runtime?.OnFileDropOff?.();
+    },
+  };
+}
+
 export const backend: BackendApi = {
   openWorkbook: () => invoke(['OpenWorkbook'], [], async () => 'C:\\Users\\Demo\\Documents\\RTA-sales-2026-08.xlsx'),
 
@@ -269,5 +286,9 @@ export const backend: BackendApi = {
 
     const cleanups = ['rta:progress', 'analysis-progress'].map((name) => source.on(name, (payload) => listener(payload as AnalysisProgress)));
     return () => cleanups.forEach((cleanup) => cleanup?.());
+  },
+
+  onFileDrop(listener: (paths: string[]) => void): () => void {
+    return fileDropSource()?.on(listener) ?? (() => undefined);
   },
 };

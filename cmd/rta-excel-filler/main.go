@@ -28,6 +28,9 @@ func main() {
 			Assets: desktop.FrontendAssets,
 		},
 		BackgroundColour: options.NewRGB(247, 249, 252),
+		DragAndDrop: &options.DragAndDrop{
+			EnableFileDrop: true,
+		},
 		OnStartup: func(ctx context.Context) {
 			desktop.Start(app, ctx)
 		},
