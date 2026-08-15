@@ -201,23 +201,67 @@
 
 * {
   box-sizing: border-box;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.pane-scroll,
+main,
+.table-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(148 163 184 / 0.45) transparent;
+}
+
+.pane-scroll::-webkit-scrollbar,
+main::-webkit-scrollbar,
+.table-scroll::-webkit-scrollbar {
+  display: block;
+  width: 6px;
+  height: 6px;
+}
+
+.pane-scroll::-webkit-scrollbar-thumb,
+main::-webkit-scrollbar-thumb,
+.table-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgb(148 163 184 / 0.45);
+}
+
+.pane-scroll::-webkit-scrollbar-track,
+main::-webkit-scrollbar-track,
+.table-scroll::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 html {
   min-width: 320px;
-  min-height: 100%;
+  height: 100%;
+  overflow: hidden;
   background: var(--md-sys-color-surface);
 }
 
 body {
   min-width: 320px;
-  min-height: 100vh;
+  height: 100%;
   margin: 0;
+  overflow: hidden;
   -webkit-user-select: none;
   user-select: none;
   background:
     radial-gradient(circle at 94% 4%, var(--app-body-glow), transparent 28rem),
     linear-gradient(180deg, var(--app-background-top) 0, var(--md-sys-color-surface) 26rem);
+}
+
+#app {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 button,
@@ -315,14 +359,18 @@ md-icon-button {
 }
 
 .app-shell {
-  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .top-app-bar {
-  position: sticky;
+  position: relative;
   z-index: 20;
-  top: 0;
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
   min-height: 60px;
@@ -381,14 +429,16 @@ md-icon-button {
 
 .shell-body {
   display: grid;
+  flex: 1 1 auto;
   grid-template-columns: 88px minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
 }
 
 .navigation-rail {
-  position: sticky;
-  top: 60px;
-  height: calc(100vh - 60px);
+  min-height: 0;
   padding: 12px 8px;
+  overflow: hidden;
   border-right: 1px solid var(--app-border-soft);
   background: var(--app-navigation);
 }
@@ -448,7 +498,16 @@ md-icon-button {
 
 main {
   min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
   padding: 22px clamp(18px, 3vw, 40px) 48px;
+}
+
+main:has(.analysis-page.has-results) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 main:focus {
@@ -458,6 +517,10 @@ main:focus {
 .page {
   width: min(100%, 1320px);
   margin-inline: auto;
+}
+
+.page.analysis-page.has-results {
+  height: 100%;
 }
 
 .page-heading {
@@ -481,10 +544,10 @@ main:focus {
 }
 
 .workflow-steps {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  margin: -8px 0 22px;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin: 2px 0 22px;
   padding: 0;
   list-style: none;
 }
@@ -493,40 +556,75 @@ main:focus {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 9px;
-  padding: 10px 13px;
-  border-radius: 14px;
+  gap: 8px;
   color: var(--md-sys-color-outline);
-  background: var(--app-step-background);
 }
 
-.workflow-steps li > span {
+.workflow-steps li:not(:last-child) {
+  flex: 1 1 0;
+}
+
+.workflow-steps li:not(:last-child)::after {
+  content: "";
+  flex: 1 1 auto;
+  min-width: 16px;
+  height: 1px;
+  margin: 0 12px 0 4px;
+  background: var(--md-sys-color-outline-variant);
+}
+
+.workflow-index {
   display: grid;
   flex: 0 0 auto;
-  width: 25px;
-  height: 25px;
+  width: 22px;
+  height: 22px;
   place-items: center;
-  border: 1px solid currentColor;
+  border: 1.5px solid currentColor;
   border-radius: 50%;
-  font-size: 12px;
-  font-weight: 760;
+  font-size: 11px;
+  font-weight: 720;
+  line-height: 1;
+}
+
+.workflow-index .material-symbols-rounded {
+  font-size: 14px;
+  font-variation-settings: "FILL" 1, "wght" 600, "GRAD" 0, "opsz" 20;
 }
 
 .workflow-steps li strong {
   overflow: hidden;
   font-size: 13px;
+  font-weight: 620;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .workflow-steps li.active {
-  color: var(--md-sys-color-on-secondary-container);
-  background: var(--md-sys-color-secondary-container);
+  color: var(--app-heading);
+}
+
+.workflow-steps li.active .workflow-index {
+  border-color: var(--md-sys-color-primary);
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+}
+
+.workflow-steps li.active strong {
+  font-weight: 720;
 }
 
 .workflow-steps li.complete {
   color: var(--app-complete);
-  background: var(--app-complete-container);
+}
+
+.workflow-steps li.complete .workflow-index {
+  border-color: var(--app-complete);
+  background: var(--app-complete);
+  color: var(--md-sys-color-on-primary);
+}
+
+.workflow-steps li.complete::after {
+  background: var(--app-complete);
 }
 
 .workbook-controls[tabindex="-1"]:focus,
@@ -612,12 +710,15 @@ main:focus {
 }
 
 .file-drop-card.wails-drop-target-active,
-.source-card.wails-drop-target-active {
+.source-card.wails-drop-target-active,
+.file-drop-card.file-drop-target-active,
+.source-card.file-drop-target-active {
   border-color: var(--md-sys-color-primary);
   box-shadow: 0 0 0 4px var(--app-drop-active-ring), var(--app-shadow);
 }
 
-.file-drop-card.wails-drop-target-active {
+.file-drop-card.wails-drop-target-active,
+.file-drop-card.file-drop-target-active {
   background:
     radial-gradient(circle at 50% 30%, var(--app-drop-active-glow), transparent 16rem),
     var(--app-drop-active-background);
@@ -765,7 +866,7 @@ main:focus {
 .preview-section,
 .success-card,
 .error-notice {
-  scroll-margin-top: 96px;
+  scroll-margin-top: 16px;
 }
 
 .control-grid {
@@ -821,6 +922,10 @@ main:focus {
   color: var(--md-sys-color-on-surface-variant);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.field-hint {
+  color: var(--md-sys-color-on-surface-variant);
 }
 
 .field-error {
@@ -1099,7 +1204,7 @@ main:focus {
 .preview-heading {
   position: sticky;
   z-index: 5;
-  top: 84px;
+  top: 0;
   align-items: flex-end;
   margin: -10px -12px 14px;
   padding: 10px 12px;
@@ -1339,8 +1444,8 @@ th.proposed-column {
 
 .success-card {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
   gap: 18px;
   margin-top: 20px;
   padding: 22px;
@@ -1365,27 +1470,81 @@ th.proposed-column {
   font-variation-settings: "FILL" 1, "wght" 500, "GRAD" 0, "opsz" 30;
 }
 
+.success-copy {
+  min-width: 0;
+}
+
 .success-card p {
   margin: 5px 0 12px;
   color: var(--md-sys-color-on-surface-variant);
 }
 
-.success-card code {
+.saved-output {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+
+.saved-output > div {
+  min-width: 0;
+}
+
+.saved-output dt {
+  margin-bottom: 4px;
+}
+
+.saved-output dd {
+  margin: 0;
+}
+
+.saved-file-name,
+.saved-folder {
   display: block;
   max-width: 100%;
-  margin-top: 4px;
-  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.saved-file-name {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--app-heading);
+  font: inherit;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  text-align: left;
+  cursor: pointer;
+}
+
+.saved-file-name:hover,
+.saved-file-name:focus-visible {
+  color: var(--md-sys-color-primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.saved-file-name:disabled {
+  color: var(--app-heading);
+  cursor: default;
+  text-decoration: none;
+}
+
+.saved-folder {
   color: var(--app-success-path);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-family: "Cascadia Code", ui-monospace, monospace;
+  font-size: 13px;
 }
 
 .success-actions {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
-  min-width: 188px;
+  min-width: 0;
+  grid-column: 1 / -1;
 }
 
 .profile-list {
@@ -1399,7 +1558,7 @@ th.proposed-column {
 
 .profile-card {
   display: grid;
-  grid-template-columns: auto auto minmax(180px, 1fr) auto auto;
+  grid-template-columns: auto minmax(180px, 1fr) auto auto;
   align-items: center;
   gap: 12px;
   padding: 14px 16px;
@@ -1408,24 +1567,6 @@ th.proposed-column {
 
 .profile-card:hover {
   border-color: var(--md-sys-color-outline);
-}
-
-.profile-card.dragging {
-  z-index: 2;
-  opacity: 0.74;
-  border-color: var(--md-sys-color-primary);
-  box-shadow: 0 0 0 3px var(--app-drop-active-ring), var(--app-shadow);
-}
-
-.drag-handle {
-  cursor: grab;
-  color: var(--md-sys-color-outline);
-  touch-action: none;
-  user-select: none;
-}
-
-.drag-handle:active {
-  cursor: grabbing;
 }
 
 .priority-badge {
@@ -1734,7 +1875,7 @@ th.proposed-column {
   }
 
   .profile-card {
-    grid-template-columns: auto auto minmax(160px, 1fr) auto;
+    grid-template-columns: auto minmax(160px, 1fr) auto;
   }
 
   .profile-actions {
@@ -1758,7 +1899,7 @@ th.proposed-column {
   }
 
   .shell-body {
-    display: block;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .navigation-rail {
@@ -1854,12 +1995,6 @@ th.proposed-column {
     gap: 9px;
   }
 
-  .preview-heading,
-  .success-card {
-    align-items: flex-start;
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
   .preview-heading {
     position: static;
     width: 100%;
@@ -1876,13 +2011,8 @@ th.proposed-column {
     justify-content: flex-start;
   }
 
-  .success-actions {
-    grid-column: 1 / -1;
-    min-width: 0;
-  }
-
   .profile-card {
-    grid-template-columns: auto auto minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr);
   }
 
   .profile-order-actions {
@@ -1928,13 +2058,16 @@ th.proposed-column {
     grid-template-columns: 1fr;
   }
 
-  .workflow-steps li {
-    justify-content: center;
-    padding-inline: 8px;
+  .workflow-steps {
+    margin-bottom: 18px;
+  }
+
+  .workflow-steps li:not(:last-child)::after {
+    margin-inline: 8px 6px;
   }
 
   .workflow-steps li strong {
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .progress-latest {
@@ -1970,10 +2103,6 @@ th.proposed-column {
   .profile-card {
     grid-template-columns: auto minmax(0, 1fr);
     padding: 15px;
-  }
-
-  .drag-handle {
-    display: none;
   }
 
   .profile-main {

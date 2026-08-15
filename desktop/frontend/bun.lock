@@ -7,6 +7,7 @@
       "dependencies": {
         "@fontsource/material-symbols-rounded": "^5.2.25",
         "@material/web": "^2.4.1",
+        "@wailsio/runtime": "3.0.0-beta.7",
         "jspdf": "^4.2.1",
         "svelte": "^5.38.1",
       },
@@ -216,6 +217,8 @@
     "@vitest/spy": ["@vitest/spy@3.2.7", "", { "dependencies": { "tinyspy": "^4.0.3" } }, "sha512-Q2eQGI6d2L/hBtZ0qNuKcAGid68XK6cv1xsoaIma6PaJhHPoqcEJhYpXZ/5myCMqkNgtP6UKuBhbc0nHKnrkuQ=="],
 
     "@vitest/utils": ["@vitest/utils@3.2.7", "", { "dependencies": { "@vitest/pretty-format": "3.2.7", "loupe": "^3.1.4", "tinyrainbow": "^2.0.0" } }, "sha512-x6BDOd7dyo3PFLY3I9/HJ25X/6OurhGXk2/B9gOZNPF7XDVjeBK4k01lQE5uvDpbuheErh91qYuE1E2OEjK3Rw=="],
+
+    "@wailsio/runtime": ["@wailsio/runtime@3.0.0-beta.7", "", {}, "sha512-hY63rDkbDtr6ovTJA7llRE/j+iWstlPu6Hd890tjuV89rrGHibz12BZlCQtfbkRv020Hn9ngQUK0pPOQv1Ic7Q=="],
 
     "acorn": ["acorn@8.18.0", "", { "bin": { "acorn": "bin/acorn" } }, "sha512-lGq+9yr1/GuAWaVYIHRjvvySG5/4VfKIvC8EWxStPdcDh/Ka7FG3twP6v4d5BkravUilhIAsG4Qj83t02LWUPQ=="],
 

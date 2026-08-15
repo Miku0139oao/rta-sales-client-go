@@ -32,7 +32,7 @@ func (a *App) ListSalesAnalysisStores(request ProfileIDRequest) ([]SalesAnalysis
 	}
 	defer finish()
 
-	client, err := a.salesAnalysisClient(request.ProfileID)
+	client, err := a.salesAnalysisClient(request.ProfileID, request.SimulateStoreCount)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +82,7 @@ func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResul
 	}
 	defer finish()
 
-	client, err := a.salesAnalysisClient(request.ProfileID)
+	client, err := a.salesAnalysisClient(request.ProfileID, request.SimulateStoreCount)
 	if err != nil {
 		return SalesAnalysisResult{}, err
 	}
@@ -141,6 +141,7 @@ func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResul
 					EndDate:         period.to,
 					Category:        "全部商品",
 					SkipTrend:       !period.includeTrend,
+					Compact:         true,
 				})
 				outcomes[task.periodIndex][task.storeIndex] = storeOutcome{result: result, err: queryErr}
 				current := int(completed.Add(1))
@@ -184,14 +185,16 @@ func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResul
 		Periods:        make([]SalesAnalysisPeriodResult, 0, len(periods)),
 		Issues:         make([]SalesAnalysisIssue, 0),
 	}
+	packed := make(map[string]SalesAnalysisPackedItems, len(periods))
+	var currentTrend []storeTrendSeries
 	for periodIndex, period := range periods {
 		periodResult := SalesAnalysisPeriodResult{
 			Key: period.key, Label: period.label,
 			From: period.from.Format("2006-01-02"), To: period.to.Format("2006-01-02"),
 			Stores: make([]SalesAnalysisStoreSummary, 0, len(selected)),
-			Items:  make([]SalesAnalysisItem, 0),
 			Issues: make([]SalesAnalysisIssue, 0),
 		}
+		builder := newPackedPeriodBuilder()
 		for storeIndex, outcome := range outcomes[periodIndex] {
 			store := selected[storeIndex]
 			if outcome.err != nil {
@@ -200,7 +203,8 @@ func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResul
 				})
 				continue
 			}
-			items, totals, conversionErr := salesAnalysisRows(store, outcome.result)
+			totals, added, conversionErr := builder.appendStore(store, outcome.result)
+			outcomes[periodIndex][storeIndex].result = nil
 			if conversionErr != nil {
 				periodResult.Issues = append(periodResult.Issues, SalesAnalysisIssue{
 					PeriodKey: period.key, StoreID: store.BusinessID, StoreLabel: store.Label, Message: conversionErr.Error(),
@@ -208,15 +212,18 @@ func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResul
 				continue
 			}
 			periodResult.SuccessfulStores++
-			periodResult.Items = append(periodResult.Items, items...)
+			periodResult.ItemCount += added
 			periodResult.Stores = append(periodResult.Stores, SalesAnalysisStoreSummary{
 				BusinessID: store.BusinessID, Label: store.Label, Totals: totals,
 			})
 			addSalesAnalysisTotals(&periodResult.Totals, totals)
+			if period.key == "current" && outcome.result != nil {
+				currentTrend = append(currentTrend, storeTrendSeries{store: store, days: outcome.result.TrendDays})
+			}
 		}
 		periodResult.Complete = len(periodResult.Issues) == 0
 		finalizeSalesAnalysisTrendTotals(&periodResult.Totals, periodResult.Stores)
-		sortSalesAnalysisItems(periodResult.Items)
+		packed[period.key] = builder.finish(period.key)
 		analysis.Issues = append(analysis.Issues, periodResult.Issues...)
 		analysis.Periods = append(analysis.Periods, periodResult)
 	}
@@ -226,10 +233,15 @@ func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResul
 	analysis.SuccessfulStores = primary.SuccessfulStores
 	analysis.Totals = primary.Totals
 	analysis.Stores = primary.Stores
-	analysis.Items = primary.Items
+	for _, period := range periods {
+		if period.key == "current" {
+			analysis.Weeks = foldSalesAnalysisWeeks(period.from, period.to, currentTrend)
+			break
+		}
+	}
 	analysis.Complete = len(analysis.Issues) == 0
 	analysis.QueryDurationMS = time.Since(started).Milliseconds()
-	return analysis, nil
+	return a.rememberSalesAnalysis(analysis, packed), nil
 }
 
 type normalizedSalesAnalysisPeriod struct {
@@ -314,18 +326,6 @@ func finalizeSalesAnalysisTrendTotals(totals *SalesAnalysisTotals, stores []Sale
 	}
 }
 
-func sortSalesAnalysisItems(items []SalesAnalysisItem) {
-	sort.SliceStable(items, func(left, right int) bool {
-		if items[left].NetSalesAmount == items[right].NetSalesAmount {
-			if items[left].StoreID == items[right].StoreID {
-				return items[left].ArticleCode < items[right].ArticleCode
-			}
-			return items[left].StoreID < items[right].StoreID
-		}
-		return items[left].NetSalesAmount > items[right].NetSalesAmount
-	})
-}
-
 func (a *App) CancelSalesAnalysis(request OperationRequest) error {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
@@ -359,7 +359,7 @@ func (a *App) beginSalesAnalysisOperation(operationID string) (context.Context, 
 	}, nil
 }
 
-func (a *App) salesAnalysisClient(profileID string) (accountClient, error) {
+func (a *App) salesAnalysisClient(profileID string, simulateStoreCount int) (accountClient, error) {
 	profileID = strings.TrimSpace(profileID)
 	if !validProfileID(profileID) {
 		return nil, errors.New("invalid profile identifier")
@@ -391,7 +391,11 @@ func (a *App) salesAnalysisClient(profileID string) (accountClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	return a.clients.New(credential, cookies)
+	client, err := a.clients.New(credential, cookies)
+	if err != nil {
+		return nil, err
+	}
+	return maybeSimulateClient(client, simulateStoreCount), nil
 }
 
 func normalizeSalesAnalysisStoreIDs(values []string) []string {
@@ -426,11 +430,14 @@ func salesAnalysisRows(store rtasales.Store, result *rtasales.SalesResult) ([]Sa
 			Category4: source.PurchaseCategory4Name, Category4Code: source.PurchaseCategory4Code,
 			Category5: source.PurchaseCategory5Name, Category5Code: source.PurchaseCategory5Code,
 			ArticleCode: source.Matnr, ArticleName: source.ArticleName, BrandName: source.BrandName,
-			TransactionCount: source.TPTransactionCount,
-			SaleQuantity:     source.TPSaleQuantity, SaleAmount: source.TPSaleAmount,
-			ReturnTransactionCount: source.TPReturnTransactionCount,
-			ReturnQuantity:         source.TPReturnSaleQuantity, ReturnAmount: source.TPReturnSaleAmount,
-			NetQuantity: source.TPGrossSaleQuantity, NetSalesAmount: source.TPGrossSaleAmount,
+			TransactionCount:       countValue(source.TPTransactionCount),
+			SaleQuantity:           countValue(source.TPSaleQuantity),
+			SaleAmount:             source.TPSaleAmount,
+			ReturnTransactionCount: countValue(source.TPReturnTransactionCount),
+			ReturnQuantity:         countValue(source.TPReturnSaleQuantity),
+			ReturnAmount:           source.TPReturnSaleAmount,
+			NetQuantity:            countValue(source.TPGrossSaleQuantity),
+			NetSalesAmount:         source.TPGrossSaleAmount,
 		}
 		if !finiteSalesAnalysisItem(item) {
 			return nil, SalesAnalysisTotals{}, fmt.Errorf("article %q contains a non-finite sales value", source.Matnr)
@@ -447,7 +454,7 @@ func salesAnalysisRows(store rtasales.Store, result *rtasales.SalesResult) ([]Sa
 		if !finite(*result.TotalTransactionCount) {
 			return nil, SalesAnalysisTotals{}, errors.New("RTA returned a non-finite transaction count")
 		}
-		transactionCount := *result.TotalTransactionCount
+		transactionCount := countValue(*result.TotalTransactionCount)
 		totals.TransactionCount = &transactionCount
 	}
 	if result.TrendGrossSaleAmount != nil {
@@ -458,6 +465,10 @@ func salesAnalysisRows(store rtasales.Store, result *rtasales.SalesResult) ([]Sa
 		totals.TrendNetSalesAmount = &trendNetSalesAmount
 	}
 	return items, totals, nil
+}
+
+func countValue(value float64) float64 {
+	return math.Round(value)
 }
 
 func addSalesAnalysisTotals(destination *SalesAnalysisTotals, source SalesAnalysisTotals) {

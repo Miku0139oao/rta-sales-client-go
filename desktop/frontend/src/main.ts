@@ -12,6 +12,7 @@ import '@material/web/dialog/dialog.js';
 import { mount } from 'svelte';
 import App from './App.svelte';
 import './app.css';
+import './lib/wailsBridge';
 
 const target = document.getElementById('app');
 

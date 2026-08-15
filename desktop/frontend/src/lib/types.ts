@@ -163,6 +163,7 @@ export interface SalesAnalysisRequest {
   to?: string;
   periods?: SalesAnalysisPeriodRequest[];
   concurrency: number;
+  simulateStoreCount?: number;
 }
 
 export interface SalesAnalysisPeriodRequest {
@@ -232,8 +233,45 @@ export interface SalesAnalysisPeriodResult {
   successfulStores: number;
   totals: SalesAnalysisTotals;
   stores: SalesAnalysisStoreSummary[];
-  items: SalesAnalysisItem[];
+  items?: SalesAnalysisItem[];
+  itemCount?: number;
   issues?: SalesAnalysisIssue[];
+}
+
+export interface SalesAnalysisItemsRequest {
+  operationId: string;
+  periodKey: string;
+}
+
+export interface SalesAnalysisPackedRow {
+  s: number;
+  ac: number;
+  an: number;
+  br?: number;
+  c1?: number;
+  k1?: number;
+  c2?: number;
+  k2?: number;
+  c3?: number;
+  k3?: number;
+  c4?: number;
+  k4?: number;
+  c5?: number;
+  k5?: number;
+  t?: number;
+  sq?: number;
+  sa?: number;
+  rq?: number;
+  rt?: number;
+  ra?: number;
+  nq?: number;
+  ns?: number;
+}
+
+export interface SalesAnalysisPackedItems {
+  periodKey: string;
+  dict: string[];
+  rows: SalesAnalysisPackedRow[];
 }
 
 export interface SalesAnalysisResult {
@@ -245,10 +283,35 @@ export interface SalesAnalysisResult {
   successfulStores: number;
   totals: SalesAnalysisTotals;
   stores: SalesAnalysisStoreSummary[];
-  items: SalesAnalysisItem[];
+  items?: SalesAnalysisItem[];
   issues?: SalesAnalysisIssue[];
   periods?: SalesAnalysisPeriodResult[];
+  weeks?: SalesAnalysisWeek[];
   queryDurationMs: number;
+}
+
+export interface SalesAnalysisWeek {
+  from: string;
+  to: string;
+  stores: SalesAnalysisWeekStore[];
+  totals: SalesAnalysisWeekStore;
+}
+
+export interface SalesAnalysisWeekStore {
+  businessId?: string;
+  label?: string;
+  salesTw: number;
+  salesLw: number;
+  customersTw: number;
+  customersLw: number;
+  weekdaySalesTw: number;
+  weekdaySalesLw: number;
+  weekendSalesTw: number;
+  weekendSalesLw: number;
+  weekdayCustomersTw: number;
+  weekdayCustomersLw: number;
+  weekendCustomersTw: number;
+  weekendCustomersLw: number;
 }
 
 export interface SalesAnalysisProgress {
@@ -275,6 +338,7 @@ export interface AppSettings {
   accountConcurrency: number;
   useLocalMapping: boolean;
   mappingPath: string;
+  simulateStoreCount: number;
 }
 
 export interface BackendApi {
@@ -288,8 +352,10 @@ export interface BackendApi {
   deleteProfile(profileId: string): Promise<void>;
   reorderProfiles(profileIds: string[]): Promise<Profile[]>;
   setProfileEnabled(profileId: string, enabled: boolean): Promise<Profile>;
-  listSalesAnalysisStores(profileId: string): Promise<SalesAnalysisStore[]>;
+  listSalesAnalysisStores(profileId: string, simulateStoreCount?: number): Promise<SalesAnalysisStore[]>;
   runSalesAnalysis(request: SalesAnalysisRequest): Promise<SalesAnalysisResult>;
+  getSalesAnalysisItems(request: SalesAnalysisItemsRequest): Promise<SalesAnalysisPackedItems>;
+  clearSalesAnalysis(operationId: string): Promise<void>;
   cancelSalesAnalysis(operationId: string): Promise<void>;
   chooseSalesAnalysisPDFDirectory(): Promise<string>;
   writeSalesAnalysisPDF(request: SalesAnalysisPDFWriteRequest): Promise<string>;
@@ -299,6 +365,7 @@ export interface BackendApi {
   apply(request: ApplyRequest): Promise<ApplyResult>;
   openSavedWorkbook(path: string): Promise<void>;
   revealSavedWorkbook(path: string): Promise<void>;
+  openSavedFolder(path: string): Promise<void>;
   onProgress(listener: (progress: AnalysisProgress) => void): () => void;
   onSalesAnalysisProgress(listener: (progress: SalesAnalysisProgress) => void): () => void;
   onFileDrop(listener: (paths: string[]) => void): () => void;

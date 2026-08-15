@@ -23,8 +23,6 @@
   let testingId = '';
   let testOperationId = '';
   let cancellingTest = false;
-  let draggedId = '';
-  let dragState: { pointerId: number; profileId: string; original: Profile[]; handle: HTMLElement } | undefined;
   let testResults = new Map<string, ProfileTestResult>();
   let form: ProfileUpsertRequest = emptyForm();
   let formErrors: { displayName?: string; account?: string; password?: string } = {};
@@ -41,7 +39,7 @@
     dialogError = '';
   }
 
-  $: accountBusy = Boolean(testingId || saving || deletingBusy || enablePendingId || reorderBusy || dragState);
+  $: accountBusy = Boolean(testingId || saving || deletingBusy || enablePendingId || reorderBusy);
   $: activationLocked = !editing || !editing.hasCredentials || Boolean(form.account.trim() || form.password);
   $: onBusyChange(accountBusy);
 
@@ -190,7 +188,7 @@
   }
 
   async function removeProfile() {
-    if (!deleting || deletingBusy || testingId || saving || enablePendingId || reorderBusy || dragState) return;
+    if (!deleting || deletingBusy || testingId || saving || enablePendingId || reorderBusy) return;
     const profileId = deleting.id;
     deletingBusy = true;
     error = '';
@@ -227,56 +225,6 @@
     const reordered = [...profiles];
     [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
     await persistOrder(reordered, profiles);
-  }
-
-  function beginPointerDrag(event: PointerEvent, profileId: string) {
-    if (accountBusy || event.button !== 0) return;
-    const handle = event.currentTarget as HTMLElement;
-    event.preventDefault();
-    handle.setPointerCapture?.(event.pointerId);
-    draggedId = profileId;
-    dragState = {
-      pointerId: event.pointerId,
-      profileId,
-      original: profiles.map((profile) => ({ ...profile })),
-      handle,
-    };
-  }
-
-  function updatePointerDrag(event: PointerEvent) {
-    if (!dragState || event.pointerId !== dragState.pointerId) return;
-    event.preventDefault();
-    const moved = profiles.find((profile) => profile.id === dragState?.profileId);
-    if (!moved) return;
-
-    const remaining = profiles.filter((profile) => profile.id !== moved.id);
-    const cards = [...document.querySelectorAll<HTMLElement>('.profile-card[data-profile-id]')]
-      .filter((card) => card.dataset.profileId !== moved.id);
-    let insertionIndex = 0;
-    for (const card of cards) {
-      const bounds = card.getBoundingClientRect();
-      if (event.clientY > bounds.top + bounds.height / 2) insertionIndex += 1;
-    }
-    const reordered = [...remaining];
-    reordered.splice(insertionIndex, 0, moved);
-    if (reordered.every((profile, index) => profile.id === profiles[index]?.id)) return;
-    profiles = reordered.map((profile, index) => ({ ...profile, priority: index + 1 }));
-  }
-
-  async function finishPointerDrag(event: PointerEvent, shouldPersist: boolean) {
-    if (!dragState || event.pointerId !== dragState.pointerId) return;
-    const completed = dragState;
-    const reordered = profiles;
-    dragState = undefined;
-    draggedId = '';
-    if (completed.handle.hasPointerCapture?.(event.pointerId)) completed.handle.releasePointerCapture?.(event.pointerId);
-
-    const changed = reordered.some((profile, index) => profile.id !== completed.original[index]?.id);
-    if (!shouldPersist) {
-      profiles = completed.original;
-      return;
-    }
-    if (changed) await persistOrder(reordered, completed.original);
   }
 
   async function persistOrder(reordered: Profile[], previous: Profile[]) {
@@ -340,24 +288,8 @@
         <li
           class="surface-card profile-card"
           class:disabled-card={!profile.enabled}
-          class:dragging={draggedId === profile.id}
           data-profile-id={profile.id}
         >
-          <div
-            class="drag-handle"
-            role="button"
-            tabindex={accountBusy ? -1 : 0}
-            aria-label={t('accounts.drag')}
-            aria-disabled={accountBusy}
-            title={t('accounts.drag')}
-            onpointerdown={(event) => beginPointerDrag(event, profile.id)}
-            onpointermove={updatePointerDrag}
-            onpointerup={(event) => void finishPointerDrag(event, true)}
-            onpointercancel={(event) => void finishPointerDrag(event, false)}
-            onlostpointercapture={(event) => void finishPointerDrag(event, true)}
-          >
-            <span class="material-symbols-rounded">drag_indicator</span>
-          </div>
           <div class="priority-badge" aria-label={t('accounts.priority', { value: index + 1 })}>{index + 1}</div>
           <div class="profile-main">
             <div class="profile-title-row">

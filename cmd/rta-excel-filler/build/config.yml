@@ -1,0 +1,39 @@
+version: '3'
+
+info:
+  companyName: "Miku0139oao"
+  productName: "RTA Excel Filler"
+  productIdentifier: "miku0139oao.rta-excel-filler"
+  description: "Windows desktop workbook filler"
+  copyright: "Copyright (c) 2026 Miku0139oao"
+  comments: "Windows desktop workbook filler built with Wails v3.0.0-beta.8"
+  version: "0.1.0"
+
+dev_mode:
+  root_path: ../..
+  log_level: warn
+  debounce: 1000
+  ignore:
+    dir:
+      - .git
+      - node_modules
+      - desktop/frontend
+      - bin
+      - release
+      - output
+    file:
+      - .DS_Store
+      - .gitignore
+      - .gitkeep
+      - "*_test.go"
+    watched_extension:
+      - "*.go"
+    git_ignore: true
+  executes:
+    - cmd: go build -o cmd/rta-excel-filler/bin/RTA-Excel-Filler.exe ./cmd/rta-excel-filler
+      type: blocking
+    - cmd: bun run --cwd desktop/frontend dev
+      type: background
+    - cmd: cmd/rta-excel-filler/bin/RTA-Excel-Filler.exe
+      type: primary
+      workdir: cmd/rta-excel-filler

@@ -3,9 +3,11 @@
   import { backend } from '../backend';
   import { errorMessage } from '../i18n';
   import { buildFocusGroups, type FocusGroup } from '../analysisFocus';
+  import { periodKeysForView, unpackSalesAnalysisItems } from '../salesAnalysisItems';
   import {
     bytesToBase64,
     generateSalesAnalysisPDF,
+    ALL_STORES_REPORT_ID,
     listSuccessfulReportStores,
     salesAnalysisPDFFilename,
   } from '../sales-report-pdf';
@@ -20,6 +22,7 @@
     SalesAnalysisResult,
     SalesAnalysisStore,
     SalesAnalysisTotals,
+    SalesAnalysisWeek,
   } from '../types';
 
   export let t: Translator;
@@ -29,7 +32,7 @@
 
   type CategoryKey = 'category1' | 'category2' | 'category3' | 'category4' | 'category5';
   type FacetSelections = Record<CategoryKey, Set<string>>;
-  type ReportView = 'overview' | 'focus' | 'categories' | 'products' | 'stores';
+  type ReportView = 'overview' | 'weekly' | 'focus' | 'categories' | 'products' | 'stores';
   type PeriodMode = 'month' | 'range';
   type ValueFormat = 'money' | 'number';
   type FilteredTotals = SalesAnalysisTotals & { skuCount: number; basketValue?: number };
@@ -61,12 +64,17 @@
   let loadingProfiles = true;
   let loadingStores = false;
   let running = false;
+  let loadingItems = false;
   let cancelling = false;
   let exportingPDF = false;
   let pdfExportCurrent = 0;
   let pdfExportTotal = 0;
   let error = '';
   let exportNotice = '';
+  let exportDirectory = '';
+  let openingFolder = false;
+  let openFacet: CategoryKey | '' = '';
+  let storeQuery = '';
   let result: SalesAnalysisResult | undefined;
   let progress: SalesAnalysisProgress | undefined;
   let operationId = '';
@@ -100,16 +108,25 @@
   let storeRows: StoreComparisonRow[] = [];
   let focusGroups: FocusGroup[] = [];
   let focusPeriod: SalesAnalysisPeriodResult | undefined;
+  let weeklyKey = '';
   let page = 1;
   let pageCount = 1;
   let pageRows: SalesAnalysisItem[] = [];
+  let loadedSimulateCount: number | undefined;
 
-  $: busy = loadingProfiles || loadingStores || running || exportingPDF;
+  $: if (!loadingProfiles && profileId && loadedSimulateCount !== settings.simulateStoreCount) {
+    loadedSimulateCount = settings.simulateStoreCount;
+    void loadStores();
+  }
+  $: busy = loadingProfiles || loadingStores || running;
+  $: visibleStores = filterStores(stores, storeQuery);
   $: onBusyChange(busy);
   $: rangeInvalid = periodMode === 'range' && Boolean(from && to && from > to);
   $: reportPeriods = normalizePeriods(result);
   $: currentPeriod = periodByKey(reportPeriods, 'current') ?? reportPeriods[0];
-  $: filteredItems = currentPeriod ? currentPeriod.items.filter((item) => matchesFilters(item, selections, search)) : [];
+  $: neededPeriodKeys = periodKeysForView(activeView, [salesRankingKey, quantityRankingKey]);
+  $: if (result) void ensurePeriodItems(neededPeriodKeys);
+  $: filteredItems = (currentPeriod?.items ?? []).filter((item) => matchesFilters(item, selections, search));
   $: currentTotals = totalsForPeriod(currentPeriod, selections, search);
   $: previousTotals = totalsForPeriod(periodByKey(reportPeriods, 'previous'), selections, search);
   $: previous2Totals = totalsForPeriod(periodByKey(reportPeriods, 'previous2'), selections, search);
@@ -128,13 +145,18 @@
   $: focusPeriod = periodByKey(reportPeriods, 'yearAgoNext');
   $: focusGroups = focusPeriod
     ? buildFocusGroups(
-      focusPeriod.items.filter((item) => matchesFilters(item, selections, search)),
-      currentPeriod?.items.filter((item) => matchesFilters(item, selections, search)) ?? [],
+      (focusPeriod?.items ?? []).filter((item) => matchesFilters(item, selections, search)),
+      (currentPeriod?.items ?? []).filter((item) => matchesFilters(item, selections, search)),
     )
     : [];
   $: pageCount = Math.max(1, Math.ceil(filteredItems.length / pageSize));
   $: if (page > pageCount) page = pageCount;
   $: pageRows = filteredItems.slice((page - 1) * pageSize, page * pageSize);
+  $: weeklyPeriods = result?.weeks ?? [];
+  $: weeklyWeek = weeklyPeriods.find((week) => `${week.from}:${week.to}` === weeklyKey) ?? weeklyPeriods[0];
+  $: if (weeklyPeriods.length && !weeklyPeriods.some((week) => `${week.from}:${week.to}` === weeklyKey)) {
+    weeklyKey = `${weeklyPeriods[0]!.from}:${weeklyPeriods[0]!.to}`;
+  }
   $: progressPercent = progress?.total ? Math.round((progress.current / progress.total) * 100) : 0;
 
   onMount(() => {
@@ -142,8 +164,16 @@
       progress = next;
       operationId = next.operationId;
     });
+    const closeFacetMenus = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target?.closest('.facet-menu')) openFacet = '';
+    };
+    document.addEventListener('pointerdown', closeFacetMenus);
     void initialize();
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      document.removeEventListener('pointerdown', closeFacetMenus);
+    };
   });
 
   async function initialize() {
@@ -152,6 +182,7 @@
     try {
       profiles = (await backend.listProfiles()).filter((profile) => profile.enabled && profile.hasCredentials);
       profileId = profiles[0]?.id ?? '';
+      loadedSimulateCount = settings.simulateStoreCount;
       if (profileId) await loadStores();
     } catch (caught) {
       error = errorMessage(settings.locale, caught);
@@ -164,11 +195,11 @@
     if (!profileId) return;
     loadingStores = true;
     error = '';
-    result = undefined;
+    void discardResult();
     stores = [];
     selectedStoreIds = new Set<string>();
     try {
-      stores = await backend.listSalesAnalysisStores(profileId);
+      stores = await backend.listSalesAnalysisStores(profileId, settings.simulateStoreCount);
       selectedStoreIds = new Set(stores.map((store) => store.businessId));
     } catch (caught) {
       error = errorMessage(settings.locale, caught);
@@ -182,17 +213,28 @@
     if (next.has(storeId)) next.delete(storeId);
     else next.add(storeId);
     selectedStoreIds = next;
-    result = undefined;
+    void discardResult();
   }
 
   function selectAllStores() {
     selectedStoreIds = new Set(stores.map((store) => store.businessId));
-    result = undefined;
+    void discardResult();
   }
 
   function clearStores() {
     selectedStoreIds = new Set<string>();
+    void discardResult();
+  }
+
+  async function discardResult() {
+    const operationId = result?.operationId;
     result = undefined;
+    if (!operationId) return;
+    try {
+      await backend.clearSalesAnalysis(operationId);
+    } catch {
+      /* The next analysis overwrites any leftover cache. */
+    }
   }
 
   async function runAnalysis() {
@@ -202,17 +244,19 @@
     running = true;
     cancelling = false;
     error = '';
-    result = undefined;
+    void discardResult();
     progress = undefined;
     operationId = '';
     resetFilters();
     try {
-      result = await backend.runSalesAnalysis({
+      const summary = await backend.runSalesAnalysis({
         profileId,
         storeIds: [...selectedStoreIds],
         periods,
         concurrency: settings.accountConcurrency,
+        simulateStoreCount: settings.simulateStoreCount,
       });
+      result = summary;
       activeView = 'overview';
     } catch (caught) {
       error = errorMessage(settings.locale, caught);
@@ -220,6 +264,40 @@
       running = false;
       cancelling = false;
     }
+  }
+
+  async function ensurePeriodItems(keys: string[]) {
+    const summary = result;
+    if (!summary?.periods?.length) return;
+    const operationId = summary.operationId;
+    const keep = new Set(keys.filter((key) => summary.periods!.some((period) => period.key === key)));
+    let periods = summary.periods;
+    let changed = false;
+    const trimmed = periods.map((period) => {
+      if (keep.has(period.key) || !period.items?.length) return period;
+      changed = true;
+      return { ...period, items: undefined };
+    });
+    if (changed) periods = trimmed;
+    for (const key of keep) {
+      const period = periods.find((candidate) => candidate.key === key);
+      if (!period || (period.items?.length ?? 0) > 0) continue;
+      if (!operationId) continue;
+      loadingItems = true;
+      try {
+        const packed = await backend.getSalesAnalysisItems({ operationId, periodKey: key });
+        if (result?.operationId !== operationId) return;
+        const items = unpackSalesAnalysisItems(packed, period.stores);
+        if (items.length === 0 && (period.itemCount ?? 0) > 0) continue;
+        periods = periods.map((candidate) => candidate.key === key ? { ...candidate, items } : candidate);
+        changed = true;
+      } catch (caught) {
+        if (result?.operationId !== operationId) return;
+        error = errorMessage(settings.locale, caught);
+      }
+    }
+    if (changed && result?.operationId === operationId) result = { ...result, periods };
+    if (result?.operationId === operationId) loadingItems = false;
   }
 
   async function cancelAnalysis() {
@@ -234,7 +312,7 @@
   }
 
   async function exportPDF() {
-    if (!result || exportingPDF) return;
+    if (!result || exportingPDF || loadingItems) return;
     exportingPDF = true;
     pdfExportCurrent = 0;
     pdfExportTotal = 0;
@@ -245,19 +323,31 @@
       if (!directory) return;
       const reportStores = listSuccessfulReportStores(result);
       if (reportStores.length === 0) throw new Error('No successful store is available for PDF export');
-      pdfExportTotal = reportStores.length;
+      await ensurePeriodItems((result.periods ?? []).map((period) => period.key));
+      const report = result;
+      if (!report || !periodsHaveItems(report)) {
+        throw new Error(t('analysis.loadingItems'));
+      }
+      const reportIds = reportStores.length > 1
+        ? [ALL_STORES_REPORT_ID, ...reportStores.map((store) => store.businessId)]
+        : reportStores.map((store) => store.businessId);
+      pdfExportTotal = reportIds.length;
       const written: string[] = [];
-      for (const [index, store] of reportStores.entries()) {
+      for (const [index, storeId] of reportIds.entries()) {
         pdfExportCurrent = index + 1;
         await yieldToUI();
-        const data = await generateSalesAnalysisPDF(result, store.businessId, groupLevel, settings.locale);
+        const data = await generateSalesAnalysisPDF(report, storeId, groupLevel, settings.locale);
         written.push(await backend.writeSalesAnalysisPDF({
           directory,
-          filename: salesAnalysisPDFFilename(store.businessId, result.from, result.to),
+          filename: salesAnalysisPDFFilename(storeId, report.from, report.to),
           dataBase64: bytesToBase64(data),
         }));
       }
-      exportNotice = t('analysis.exportedPDF', { count: written.length, directory });
+      exportDirectory = directory;
+      exportNotice = reportStores.length > 1
+        ? t('analysis.exportedPDFWithCombined', { stores: reportStores.length })
+        : t('analysis.exportedPDF', { count: written.length });
+      await ensurePeriodItems(periodKeysForView(activeView, [salesRankingKey, quantityRankingKey]));
     } catch (caught) {
       error = errorMessage(settings.locale, caught);
     } finally {
@@ -336,8 +426,12 @@
     return [{
       key: 'current', label: t('analysis.currentPeriod'), from: value.from, to: value.to,
       complete: value.complete, successfulStores: value.successfulStores, totals: value.totals,
-      stores: value.stores, items: value.items, issues: value.issues,
+      stores: value.stores, items: value.items ?? [], issues: value.issues,
     }];
+  }
+
+  function periodsHaveItems(value: SalesAnalysisResult): boolean {
+    return (value.periods ?? []).every((period) => (period.itemCount ?? 0) === 0 || (period.items?.length ?? 0) > 0);
   }
 
   function periodByKey(periods: SalesAnalysisPeriodResult[], key: string): SalesAnalysisPeriodResult | undefined {
@@ -385,7 +479,7 @@
 
   function facetOptions(key: CategoryKey): string[] {
     if (!currentPeriod) return [];
-    return [...new Set(currentPeriod.items.filter((item) => matchesSelections(item, selections, key)).map((item) => categoryValue(item, key)))]
+    return [...new Set((currentPeriod?.items ?? []).filter((item) => matchesSelections(item, selections, key)).map((item) => categoryValue(item, key)))]
       .sort((left, right) => left.localeCompare(right, settings.locale));
   }
 
@@ -425,7 +519,7 @@
 
   function totalsForPeriod(period: SalesAnalysisPeriodResult | undefined, current: FacetSelections, searchTerm: string): FilteredTotals {
     if (!period) return emptyTotals();
-    const matching = period.items.filter((item) => matchesFilters(item, current, searchTerm));
+    const matching = (period?.items ?? []).filter((item) => matchesFilters(item, current, searchTerm));
     if (filtersActive(current, searchTerm)) return summarize(matching);
     const sku = new Set(matching.map((item) => item.articleCode || item.articleName));
     const totals: FilteredTotals = { ...period.totals, skuCount: sku.size };
@@ -452,7 +546,7 @@
     const grouped = new Map<string, CategoryComparisonRow>();
     for (const period of periods) {
       if (!['current', 'previous', 'previous2', 'yearAgo'].includes(period.key)) continue;
-      for (const item of period.items) {
+      for (const item of period.items ?? []) {
         if (!matchesFilters(item, current, searchTerm)) continue;
         const name = categoryValue(item, key);
         const code = categoryCode(item, key);
@@ -491,7 +585,7 @@
   ): CategoryRankingGroup[] {
     if (!period) return [];
     const grouped = new Map<string, { code: string; name: string; items: SalesAnalysisItem[]; amount: number; quantity: number }>();
-    for (const item of period.items) {
+    for (const item of period.items ?? []) {
       if (!matchesFilters(item, current, searchTerm)) continue;
       const code = categoryCode(item, key);
       const name = categoryValue(item, key);
@@ -511,6 +605,22 @@
       .slice(0, 6);
   }
 
+  function weeklyMetricCells(row: SalesAnalysisWeek['totals']): Array<{ text: string; className: string }> {
+    const salesChange = delta(row.salesTw, row.salesLw);
+    const weekdayChange = delta(row.weekdaySalesTw, row.weekdaySalesLw);
+    const weekendChange = delta(row.weekendSalesTw, row.weekendSalesLw);
+    const customerChange = delta(row.customersTw, row.customersLw);
+    return [
+      { text: formatMoney(row.salesTw), className: 'numeric emphasis' },
+      { text: formatMoney(row.salesLw), className: 'numeric' },
+      { text: formatMoney(row.salesTw - row.salesLw), className: `numeric ${deltaClass(salesChange)}` },
+      { text: formatPercent(salesChange), className: `numeric ${deltaClass(salesChange)}` },
+      { text: formatPercent(weekdayChange), className: `numeric ${deltaClass(weekdayChange)}` },
+      { text: formatPercent(weekendChange), className: `numeric ${deltaClass(weekendChange)}` },
+      { text: formatPercent(customerChange), className: `numeric ${deltaClass(customerChange)}` },
+    ];
+  }
+
   function buildStoreRows(periods: SalesAnalysisPeriodResult[]): StoreComparisonRow[] {
     const grouped = new Map<string, StoreComparisonRow>();
     for (const period of periods) {
@@ -522,6 +632,36 @@
       }
     }
     return [...grouped.values()].sort((left, right) => (right.current?.netSalesAmount ?? 0) - (left.current?.netSalesAmount ?? 0) || left.id.localeCompare(right.id));
+  }
+
+  function filterStores(list: SalesAnalysisStore[], query: string): SalesAnalysisStore[] {
+    const term = query.trim().toLocaleLowerCase();
+    if (!term) return list;
+    return list.filter((store) =>
+      store.businessId.toLocaleLowerCase().includes(term) || store.label.toLocaleLowerCase().includes(term),
+    );
+  }
+
+  function toggleFacetMenu(key: CategoryKey) {
+    openFacet = openFacet === key ? '' : key;
+  }
+
+  async function openExportFolder() {
+    if (!exportDirectory || openingFolder) return;
+    openingFolder = true;
+    error = '';
+    try {
+      await backend.openSavedFolder(exportDirectory);
+    } catch (caught) {
+      error = errorMessage(settings.locale, caught);
+    } finally {
+      openingFolder = false;
+    }
+  }
+
+  function dismissExportNotice() {
+    exportNotice = '';
+    exportDirectory = '';
   }
 
   function changeSearch(event: Event) {
@@ -544,7 +684,7 @@
   }
 
   function formatNumber(value: number): string {
-    return new Intl.NumberFormat(settings.locale, { maximumFractionDigits: 2 }).format(value);
+    return new Intl.NumberFormat(settings.locale, { maximumFractionDigits: 0 }).format(Math.round(value));
   }
 
   function formatPercent(value: number | undefined): string {
@@ -610,15 +750,15 @@
   }
 </script>
 
-<section class="page analysis-page" aria-labelledby="analysis-title">
+<section class="page analysis-page" class:has-results={Boolean(result && currentPeriod)} aria-labelledby="analysis-title">
   <div class="page-heading split-heading">
     <h1 id="analysis-title">{t('analysis.title')}</h1>
     {#if result}
       <div class="analysis-heading-actions">
-        <md-filled-button type="button" onclick={() => void exportPDF()} disabled={exportingPDF}>
+        <md-filled-button type="button" onclick={() => void exportPDF()} disabled={exportingPDF || loadingItems}>
           <span class="material-symbols-rounded" slot="icon" aria-hidden="true">picture_as_pdf</span>{exportingPDF ? t('analysis.exportingPDFProgress', { current: pdfExportCurrent, total: pdfExportTotal }) : t('analysis.exportPDF')}
         </md-filled-button>
-        <md-outlined-button type="button" onclick={() => { result = undefined; exportNotice = ''; resetFilters(); }} disabled={exportingPDF}>
+        <md-outlined-button type="button" onclick={() => { dismissExportNotice(); resetFilters(); void discardResult(); }} disabled={exportingPDF}>
           <span class="material-symbols-rounded" slot="icon" aria-hidden="true">tune</span>{t('analysis.changeQuery')}
         </md-outlined-button>
       </div>
@@ -629,7 +769,24 @@
     <div class="notice error-notice" role="alert"><span class="material-symbols-rounded" aria-hidden="true">error</span><span>{error}</span></div>
   {/if}
   {#if exportNotice}
-    <div class="notice success-notice" role="status"><span class="material-symbols-rounded" aria-hidden="true">check_circle</span><span>{exportNotice}</span></div>
+    <div class="notice success-notice export-notice" role="status">
+      <span class="material-symbols-rounded" aria-hidden="true">check_circle</span>
+      <div class="export-notice-copy">
+        <span>{exportNotice}</span>
+        {#if exportDirectory}<code title={exportDirectory}>{exportDirectory}</code>{/if}
+      </div>
+      {#if exportDirectory}
+        <md-outlined-button type="button" onclick={() => void openExportFolder()} disabled={openingFolder}>
+          {openingFolder ? t('analysis.openingFolder') : t('analysis.openFolder')}
+        </md-outlined-button>
+      {/if}
+      <md-icon-button type="button" aria-label={t('common.close')} onclick={dismissExportNotice}>
+        <span class="material-symbols-rounded" aria-hidden="true">close</span>
+      </md-icon-button>
+    </div>
+  {/if}
+  {#if loadingItems}
+    <div class="notice" role="status"><span class="material-symbols-rounded" aria-hidden="true">progress_activity</span><span>{t('analysis.loadingItems')}</span></div>
   {/if}
 
   {#if loadingProfiles}
@@ -677,9 +834,18 @@
         {:else if stores.length === 0}
           <div class="store-empty">{t('analysis.noStores')}</div>
         {:else}
-          <div class="store-grid">
-            {#each stores as store (store.businessId)}
+          {#if stores.length > 8}
+            <div class="analysis-search store-search">
+              <span class="material-symbols-rounded" aria-hidden="true">search</span>
+              <input aria-label={t('analysis.searchStores')} placeholder={t('analysis.searchStores')} bind:value={storeQuery} />
+              {#if storeQuery}<button type="button" aria-label={t('analysis.clear')} onclick={() => { storeQuery = ''; }}><span class="material-symbols-rounded" aria-hidden="true">close</span></button>{/if}
+            </div>
+          {/if}
+          <div class="store-grid pane-scroll">
+            {#each visibleStores as store (store.businessId)}
               <label class:checked={selectedStoreIds.has(store.businessId)}><input type="checkbox" checked={selectedStoreIds.has(store.businessId)} onchange={() => toggleStore(store.businessId)} /><span class="store-id">{store.businessId}</span><span class="store-name">{store.label}</span></label>
+            {:else}
+              <div class="store-empty">{t('analysis.noResults')}</div>
             {/each}
           </div>
         {/if}
@@ -709,20 +875,21 @@
 
   {#if result && currentPeriod}
     <section class="analysis-results">
+      <div class="analysis-toolbar">
       {#if !result.complete}<div class="notice warning-notice" role="status"><span class="material-symbols-rounded" aria-hidden="true">warning</span><span>{t('analysis.partialResult', { count: result.issues?.length ?? 0 })}</span></div>{/if}
 
-      <div class="period-strip surface-card" aria-label={t('analysis.periods')}>
-        {#each reportPeriods as period}<div class:current={period.key === 'current'}><strong>{period.label}</strong><span>{period.from} — {period.to}</span></div>{/each}
+      <div class="period-summary" aria-label={t('analysis.periods')}>
+        {#each reportPeriods as period}<span class:current={period.key === 'current'}><strong>{period.label}</strong> {period.from} — {period.to}</span>{/each}
       </div>
 
       <div class="analysis-filters surface-card">
         <div class="facet-row" aria-label={t('analysis.categoryFilters')}>
           {#each facets as facet}
-            <details class="facet-menu">
-              <summary class:active={selections[facet.key].size > 0}><span>{t(facet.label)}</span><strong>{selections[facet.key].size > 0 ? selections[facet.key].size : t('analysis.all')}</strong><span class="material-symbols-rounded" aria-hidden="true">expand_more</span></summary>
+            <details class="facet-menu" open={openFacet === facet.key}>
+              <summary class:active={selections[facet.key].size > 0} onclick={(event) => { event.preventDefault(); toggleFacetMenu(facet.key); }}><span>{t(facet.label)}</span><strong>{selections[facet.key].size > 0 ? selections[facet.key].size : t('analysis.all')}</strong><span class="material-symbols-rounded" aria-hidden="true">expand_more</span></summary>
               <div class="facet-popover">
                 <div class="facet-actions"><button type="button" onclick={() => selectFacetAll(facet.key)}>{t('analysis.selectAll')}</button><button type="button" onclick={() => clearFacet(facet.key)}>{t('analysis.clear')}</button></div>
-                <div class="facet-options">{#each facetOptions(facet.key) as option}<label><input aria-label={option} type="checkbox" checked={selections[facet.key].has(option)} onchange={() => toggleFacet(facet.key, option)} /><span>{option}</span></label>{/each}</div>
+                <div class="facet-options pane-scroll">{#each facetOptions(facet.key) as option}<label><input aria-label={option} type="checkbox" checked={selections[facet.key].has(option)} onchange={() => toggleFacet(facet.key, option)} /><span>{option}</span></label>{/each}</div>
               </div>
             </details>
           {/each}
@@ -733,6 +900,7 @@
       <div class="report-tabs" role="tablist" aria-label={t('analysis.reportViews')}>
         {#each [
           { key: 'overview', label: t('analysis.overview'), icon: 'space_dashboard' },
+          { key: 'weekly', label: t('analysis.weekly'), icon: 'calendar_view_week' },
           { key: 'focus', label: t('analysis.focus'), icon: 'upcoming' },
           { key: 'categories', label: t('analysis.categories'), icon: 'account_tree' },
           { key: 'products', label: t('analysis.products'), icon: 'inventory_2' },
@@ -741,7 +909,9 @@
           <button type="button" class:active={activeView === tab.key} role="tab" aria-selected={activeView === tab.key} onclick={() => { activeView = tab.key as ReportView; }}><span class="material-symbols-rounded" aria-hidden="true">{tab.icon}</span>{tab.label}</button>
         {/each}
       </div>
+      </div>
 
+      <div class="analysis-workspace pane-scroll">
       {#if activeView === 'overview'}
         <dl class="analysis-kpis">
           <div><dt>{t('analysis.netSales')}</dt><dd>{formatMoney(currentTotals.netSalesAmount)}</dd><span class={deltaClass(delta(currentTotals.netSalesAmount, yearAgoTotals.netSalesAmount))}>{formatPercent(delta(currentTotals.netSalesAmount, yearAgoTotals.netSalesAmount))} {t('analysis.vsYearAgo')}</span></div>
@@ -771,6 +941,59 @@
             <ol>{#each topQuantity as item, index}<li><span class="rank">{index + 1}</span><div><strong>{item.name}</strong><span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div><div class="top-metrics"><b>{formatNumber(item.quantity)} {t('analysis.units')}</b><span>{formatMoney(item.amount)}</span></div></li>{:else}<li class="empty-row">{t('analysis.noResults')}</li>{/each}</ol>
           </section>
         </div>
+      {:else if activeView === 'weekly'}
+        <section class="comparison-card surface-card" aria-labelledby="weekly-title">
+          <div class="ranking-heading">
+            <div>
+              <h2 id="weekly-title">{t('analysis.weeklyTitle')}</h2>
+              {#if weeklyWeek}<span>{weeklyWeek.from} — {weeklyWeek.to}</span>{/if}
+            </div>
+            {#if weeklyPeriods.length > 1}
+              <div class="ranking-period-tabs" role="tablist" aria-label={t('analysis.weekly')}>
+                {#each weeklyPeriods as week}
+                  <button type="button" class:active={`${week.from}:${week.to}` === weeklyKey} role="tab" aria-selected={`${week.from}:${week.to}` === weeklyKey} onclick={() => { weeklyKey = `${week.from}:${week.to}`; }}>{week.from.slice(5)}–{week.to.slice(5)}</button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+          {#if !weeklyWeek}
+            <div class="ranking-empty">{t('analysis.weeklyMissing')}</div>
+          {:else}
+            <p class="focus-note">{t('analysis.weeklyHint')}</p>
+            <div class="table-scroll store-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>{t('analysis.store')}</th>
+                    <th class="numeric">{t('analysis.thisWeek')}</th>
+                    <th class="numeric">{t('analysis.lastWeek')}</th>
+                    <th class="numeric">{t('analysis.variance')}</th>
+                    <th class="numeric">{t('analysis.variancePercent')}</th>
+                    <th class="numeric">{t('analysis.weekday')}</th>
+                    <th class="numeric">{t('analysis.weekend')}</th>
+                    <th class="numeric">{t('analysis.customers')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th><strong>{t('analysis.allStores')}</strong><span>{t('analysis.stores')}</span></th>
+                    {#each weeklyMetricCells(weeklyWeek.totals) as cell}
+                      <td class={cell.className}>{cell.text}</td>
+                    {/each}
+                  </tr>
+                  {#each weeklyWeek.stores as row}
+                    <tr>
+                      <th><strong>{row.businessId}</strong><span>{row.label}</span></th>
+                      {#each weeklyMetricCells(row) as cell}
+                        <td class={cell.className}>{cell.text}</td>
+                      {/each}
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {/if}
+        </section>
       {:else if activeView === 'focus'}
         <section class="focus-section surface-card" aria-labelledby="focus-title">
           <div class="focus-heading">
@@ -882,12 +1105,24 @@
           </table></div>
         </section>
       {/if}
+      </div>
     </section>
   {/if}
 </section>
 
 <style>
   .analysis-page { max-width: 1480px; }
+  .analysis-page.has-results { display: flex; flex: 1; min-height: 0; flex-direction: column; width: 100%; max-width: 1480px; }
+  .analysis-page.has-results .page-heading { flex: 0 0 auto; }
+  .export-notice { display: flex; align-items: center; gap: 12px; }
+  .export-notice-copy { display: grid; min-width: 0; flex: 1; gap: 2px; }
+  .export-notice-copy code { overflow: hidden; color: var(--md-sys-color-on-surface-variant); font-family: "Cascadia Code", ui-monospace, monospace; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+  .analysis-results { display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 12px; }
+  .analysis-toolbar { display: grid; flex: 0 0 auto; gap: 10px; }
+  .analysis-workspace { display: grid; flex: 1; min-height: 0; align-content: start; gap: 16px; overflow: auto; padding-right: 2px; }
+  .period-summary { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .period-summary .current { color: var(--md-sys-color-primary); font-weight: 650; }
+  .store-search { margin-top: 12px; }
   .analysis-heading-actions { display: flex; align-items: center; gap: 9px; }
   .analysis-loading { display: flex; min-height: 220px; align-items: center; justify-content: center; gap: 14px; }
   .analysis-loading md-circular-progress, .inline-loading md-circular-progress { width: 24px; height: 24px; }
@@ -898,7 +1133,7 @@
   .selection-heading > div, .facet-actions { display: flex; gap: 8px; }
   .selection-heading button, .facet-actions button, .analysis-search button { cursor: pointer; border: 0; color: var(--md-sys-color-primary); background: transparent; font-weight: 680; }
   .selection-heading button:disabled { cursor: default; opacity: .4; }
-  .store-grid { display: grid; max-height: 280px; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 9px; margin-top: 12px; overflow: auto; padding: 2px; }
+  .store-grid { display: grid; max-height: min(420px, 46vh); grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 9px; margin-top: 12px; overflow: auto; padding: 2px; }
   .store-grid label { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 10px; min-height: 50px; padding: 10px 12px; cursor: pointer; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 13px; background: var(--md-sys-color-surface-container-lowest); }
   .store-grid label.checked { border-color: var(--app-active-border); background: var(--md-sys-color-secondary-container); }
   .store-grid input, .facet-options input { width: 18px; height: 18px; accent-color: var(--md-sys-color-primary); }
@@ -915,13 +1150,6 @@
   .analysis-progress md-linear-progress { width: 100%; --md-linear-progress-track-height: 9px; --md-linear-progress-active-indicator-height: 9px; }
   .analysis-progress-footer { margin-top: 14px; }
   .analysis-progress-footer > strong { color: var(--md-sys-color-on-surface-variant); font-variant-numeric: tabular-nums; }
-  .analysis-results { display: grid; gap: 16px; }
-  .period-strip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); overflow: hidden; padding: 0; }
-  .period-strip > div { display: grid; gap: 3px; padding: 12px 14px; border-right: 1px solid var(--md-sys-color-outline-variant); }
-  .period-strip > div:last-child { border-right: 0; }
-  .period-strip > div.current { background: var(--md-sys-color-secondary-container); }
-  .period-strip > div.current strong { color: var(--md-sys-color-primary); }
-  .period-strip span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-variant-numeric: tabular-nums; }
   .analysis-filters { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
   .facet-row { display: flex; flex-wrap: wrap; gap: 8px; }
   .facet-menu { position: relative; }
@@ -958,9 +1186,8 @@
   .performance-card, .comparison-card { overflow: hidden; padding: 0; }
   .section-heading, .comparison-heading, .analysis-table-heading { padding: 19px 21px 14px; }
   .section-heading h2, .comparison-heading h2, .analysis-table-heading h2 { margin: 0; }
-  .performance-card .table-scroll, .comparison-card .table-scroll { max-height: min(620px, 62vh); }
-  .analysis-results .table-scroll { scrollbar-width: none; -ms-overflow-style: none; }
-  .analysis-results .table-scroll::-webkit-scrollbar { display: none; width: 0; height: 0; }
+  .performance-card .table-scroll { max-height: none; }
+  .comparison-card .table-scroll { max-height: none; }
   .performance-card th:first-child, .comparison-card th:first-child { text-align: left; }
   .emphasis { color: var(--app-summary-value); font-weight: 740; }
   .top-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -1045,8 +1272,6 @@
   }
 
   @media (max-width: 980px) {
-    .period-strip { grid-template-columns: 1fr 1fr; }
-    .period-strip > div:nth-child(2n) { border-right: 0; }
     .top-grid { grid-template-columns: 1fr; }
     .focus-columns { grid-template-columns: 1fr; }
     .focus-columns > div + div { border-top: 1px solid var(--app-table-border); border-left: 0; }
@@ -1060,9 +1285,7 @@
     .analysis-kpis { grid-template-columns: 1fr; }
     .analysis-kpis > div,
     .analysis-kpis > div:nth-child(n + 5) { grid-column: auto; }
-    .store-grid, .period-strip { grid-template-columns: 1fr; }
-    .period-strip > div { border-right: 0; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
-    .period-strip > div:last-child { border-bottom: 0; }
+    .store-grid { grid-template-columns: 1fr; }
     .analysis-query-actions, .analysis-progress-footer { align-items: stretch; flex-direction: column; }
     .group-tabs { width: 100%; }
     .group-tabs button { flex: 1; }

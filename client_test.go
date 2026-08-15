@@ -109,6 +109,11 @@ func (f *rtaFixture) serveHTTP(response http.ResponseWriter, request *http.Reque
 		if err := json.Unmarshal([]byte(request.Form.Get("queryParam")), &payload); err != nil {
 			f.testing.Errorf("decode sales query: %v", err)
 		}
+		if days := inclusiveDaysYYYYMMDD(payload.CurrentStartDay, payload.CurrentEndDay); days > salesMaxInclusiveDays {
+			f.testing.Errorf("sales query exceeds %d days: %s to %s (%d days)", salesMaxInclusiveDays, payload.CurrentStartDay, payload.CurrentEndDay, days)
+			http.Error(response, "date range too long", http.StatusGatewayTimeout)
+			return
+		}
 		var rawPayload map[string]any
 		if err := json.Unmarshal([]byte(request.Form.Get("queryParam")), &rawPayload); err != nil {
 			f.testing.Errorf("decode raw sales query: %v", err)
@@ -160,6 +165,11 @@ func (f *rtaFixture) serveHTTP(response http.ResponseWriter, request *http.Reque
 		var payload trendTransactionQueryPayload
 		if err := json.Unmarshal([]byte(request.Form.Get("queryParam")), &payload); err != nil {
 			f.testing.Errorf("decode Trend View query: %v", err)
+		}
+		if days := inclusiveDaysISODate(payload.CurrentStart, payload.CurrentEnd); days > salesMaxInclusiveDays {
+			f.testing.Errorf("Trend View query exceeds %d days: %s to %s (%d days)", salesMaxInclusiveDays, payload.CurrentStart, payload.CurrentEnd, days)
+			http.Error(response, "date range too long", http.StatusGatewayTimeout)
+			return
 		}
 		formCopy := make(url.Values, len(request.Form))
 		for key, values := range request.Form {
@@ -304,8 +314,11 @@ func TestSalesResolvesStorePaginatesAndAggregates(t *testing.T) {
 		t.Fatalf("Trend View payloads=%d forms=%d, want 1/1", len(fixture.transactionPayloads), len(fixture.transactionForms))
 	}
 	transactionPayload := fixture.transactionPayloads[0]
-	if transactionPayload.SiteCode != "STOREA" || transactionPayload.CurrentStart != "2026-06-25" || transactionPayload.CurrentEnd != "2026-06-26" || transactionPayload.DateType != "1" || transactionPayload.CalendarUnit != "one" {
+	if transactionPayload.SiteCode != "STOREA" || transactionPayload.CurrentStart != "2026-06-15" || transactionPayload.CurrentEnd != "2026-06-26" || transactionPayload.DateType != "1" || transactionPayload.CalendarUnit != "one" {
 		t.Fatalf("unexpected Trend View query payload: %+v", transactionPayload)
+	}
+	if len(result.TrendDays) != 2 || result.TrendDays[0].Date != "2026-06-25" || result.TrendDays[1].Date != "2026-06-26" {
+		t.Fatalf("Trend View days=%+v, want 25 and 26 June", result.TrendDays)
 	}
 	transactionForm := fixture.transactionForms[0]
 	for key, want := range map[string]string{
@@ -328,6 +341,34 @@ func TestSalesResolvesStorePaginatesAndAggregates(t *testing.T) {
 	}
 	if !containsString(columns, "show_date") || !containsString(columns, "group_sales_ticket_num") || !containsString(columns, "gross_sales_gross_sale_untaxed_amt") {
 		t.Fatalf("Trend View columns omit date, transaction, or gross sales fields: %v", columns)
+	}
+}
+
+func TestCompactSalesOmitsRawRowsAndCategoryItemCopies(t *testing.T) {
+	fixture := newRTAFixture(t)
+	client, _, _ := fixture.client(t, "")
+	result, err := client.Sales(context.Background(), SalesQuery{
+		BusinessStoreID: "STOREA",
+		StartDate:       time.Date(2026, 6, 25, 0, 0, 0, 0, time.Local),
+		EndDate:         time.Date(2026, 6, 25, 0, 0, 0, 0, time.Local),
+		SkipTrend:       true,
+		Compact:         true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) == 0 {
+		t.Fatal("compact sales dropped article rows")
+	}
+	for _, item := range result.Items {
+		if item.Raw != nil {
+			t.Fatal("compact sales kept a raw row map")
+		}
+	}
+	for _, category := range result.Categories {
+		if len(category.Items) != 0 {
+			t.Fatalf("compact sales copied %d category items", len(category.Items))
+		}
 	}
 }
 
@@ -448,6 +489,13 @@ func TestNewClientDoesNotRequireBusinessStoreBinding(t *testing.T) {
 	}
 }
 
+func TestDefaultHTTPTransportKeepsEnoughSocketsFor32StoreJobs(t *testing.T) {
+	transport := defaultHTTPTransport()
+	if transport.MaxIdleConns != 128 || transport.MaxIdleConnsPerHost != 64 || transport.MaxConnsPerHost != 64 {
+		t.Fatalf("idle=%d perHost=%d max=%d, want 128/64/64", transport.MaxIdleConns, transport.MaxIdleConnsPerHost, transport.MaxConnsPerHost)
+	}
+}
+
 func TestSavedCookiesAvoidAnotherLogin(t *testing.T) {
 	fixture := newRTAFixture(t)
 	cookieFile := filepath.Join(t.TempDir(), "rta.cookies.json")
@@ -509,6 +557,122 @@ func TestSalesFailsInsteadOfReturningPartialPages(t *testing.T) {
 	var upstream *UpstreamError
 	if !errors.As(err, &upstream) || upstream.StatusCode != http.StatusBadGateway {
 		t.Fatalf("unexpected error: %T %v", err, err)
+	}
+}
+
+func TestSalesSplitsRangesWiderThan90DaysAndMergesItems(t *testing.T) {
+	fixture := newRTAFixture(t)
+	client, _, _ := fixture.client(t, "")
+	result, err := client.Sales(context.Background(), SalesQuery{
+		BusinessStoreID: "STOREA",
+		StartDate:       time.Date(2026, 4, 2, 0, 0, 0, 0, time.UTC),
+		EndDate:         time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StartDate != "2026-04-02" || result.EndDate != "2026-07-01" {
+		t.Fatalf("merged result dates=%s to %s, want original range", result.StartDate, result.EndDate)
+	}
+	if len(result.Items) != 2 || result.Items[0].Matnr != "SKU-1" || result.Items[1].Matnr != "SKU-2" {
+		t.Fatalf("window items were not merged: %+v", result.Items)
+	}
+	if result.Items[0].TPSaleAmount != 21 || result.Items[1].TPSaleAmount != 41 {
+		t.Fatalf("merged item amounts=%v/%v, want 21/41", result.Items[0].TPSaleAmount, result.Items[1].TPSaleAmount)
+	}
+	if result.TotalAmount != 62 || result.GrossQuantity != 6 {
+		t.Fatalf("merged aggregates total=%v quantity=%v, want 62/6", result.TotalAmount, result.GrossQuantity)
+	}
+	if result.TrendGrossSaleAmount == nil || *result.TrendGrossSaleAmount != 5300.75 {
+		t.Fatalf("merged Trend View sales=%v, want 5300.75 from the window that contains June fixture rows", result.TrendGrossSaleAmount)
+	}
+	if result.TotalTransactionCount == nil || *result.TotalTransactionCount != 4431 {
+		t.Fatalf("merged Trend View transactions=%v, want 4431", result.TotalTransactionCount)
+	}
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	if len(fixture.payloads) != 4 {
+		t.Fatalf("article payloads=%d, want 4 (2 windows x 2 pages)", len(fixture.payloads))
+	}
+	gotWindows := make([]string, 0, 2)
+	seen := make(map[string]struct{})
+	for _, payload := range fixture.payloads {
+		key := payload.CurrentStartDay + "~" + payload.CurrentEndDay
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		gotWindows = append(gotWindows, key)
+	}
+	if len(gotWindows) != 2 || gotWindows[0] != "20260402~20260630" || gotWindows[1] != "20260701~20260701" {
+		t.Fatalf("article windows=%v, want 20260402~20260630 then 20260701~20260701", gotWindows)
+	}
+	if len(fixture.transactionPayloads) != 2 {
+		t.Fatalf("Trend View payloads=%d, want 2", len(fixture.transactionPayloads))
+	}
+	if fixture.transactionPayloads[0].CurrentStart != "2026-03-23" || fixture.transactionPayloads[0].CurrentEnd != "2026-06-20" {
+		t.Fatalf("first Trend View window=%+v", fixture.transactionPayloads[0])
+	}
+	if fixture.transactionPayloads[1].CurrentStart != "2026-06-21" || fixture.transactionPayloads[1].CurrentEnd != "2026-07-01" {
+		t.Fatalf("second Trend View window=%+v", fixture.transactionPayloads[1])
+	}
+	if len(result.TrendDays) != 3 {
+		t.Fatalf("merged Trend days=%d, want 25-27 June", len(result.TrendDays))
+	}
+}
+
+func TestSalesSplitsWideRangeWithoutTrendWhenSkipped(t *testing.T) {
+	fixture := newRTAFixture(t)
+	client, _, _ := fixture.client(t, "")
+	result, err := client.Sales(context.Background(), SalesQuery{
+		BusinessStoreID: "STOREA",
+		StartDate:       time.Date(2026, 4, 2, 0, 0, 0, 0, time.UTC),
+		EndDate:         time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		SkipTrend:       true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fixture.transactionRequests.Load() != 0 {
+		t.Fatalf("Trend View requests=%d, want 0", fixture.transactionRequests.Load())
+	}
+	if result.TrendGrossSaleAmount != nil || result.TotalTransactionCount != nil {
+		t.Fatalf("skipped Trend View returned totals: amount=%v transactions=%v", result.TrendGrossSaleAmount, result.TotalTransactionCount)
+	}
+	if len(result.Items) != 2 || result.TotalAmount != 62 {
+		t.Fatalf("skipped-trend merge failed: items=%d total=%v", len(result.Items), result.TotalAmount)
+	}
+}
+
+func TestSalesKeepsA90DayRangeAsOneRequest(t *testing.T) {
+	fixture := newRTAFixture(t)
+	client, _, _ := fixture.client(t, "")
+	_, err := client.Sales(context.Background(), SalesQuery{
+		BusinessStoreID: "STOREA",
+		StartDate:       time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:         time.Date(2026, 3, 31, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	if len(fixture.payloads) != 2 {
+		t.Fatalf("article payloads=%d, want 2 pages of one window", len(fixture.payloads))
+	}
+	for _, payload := range fixture.payloads {
+		if payload.CurrentStartDay != "20260101" || payload.CurrentEndDay != "20260331" {
+			t.Fatalf("90-day range was split: %+v", payload)
+		}
+	}
+	if len(fixture.transactionPayloads) != 2 {
+		t.Fatalf("Trend View payloads=%d, want 2 after weekly lookback", len(fixture.transactionPayloads))
+	}
+	if fixture.transactionPayloads[0].CurrentStart != "2025-12-22" || fixture.transactionPayloads[0].CurrentEnd != "2026-03-21" {
+		t.Fatalf("first Trend View lookback window=%+v", fixture.transactionPayloads[0])
+	}
+	if fixture.transactionPayloads[1].CurrentStart != "2026-03-22" || fixture.transactionPayloads[1].CurrentEnd != "2026-03-31" {
+		t.Fatalf("second Trend View window=%+v", fixture.transactionPayloads[1])
 	}
 }
 
@@ -638,4 +802,21 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func inclusiveDaysYYYYMMDD(start, end string) int {
+	return inclusiveDaysBetween(start, end, "20060102")
+}
+
+func inclusiveDaysISODate(start, end string) int {
+	return inclusiveDaysBetween(start, end, "2006-01-02")
+}
+
+func inclusiveDaysBetween(start, end, layout string) int {
+	parsedStart, startErr := time.Parse(layout, start)
+	parsedEnd, endErr := time.Parse(layout, end)
+	if startErr != nil || endErr != nil || parsedEnd.Before(parsedStart) {
+		return 0
+	}
+	return int(parsedEnd.Sub(parsedStart)/(24*time.Hour)) + 1
 }

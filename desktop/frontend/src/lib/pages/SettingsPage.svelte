@@ -19,7 +19,7 @@
     draft = { ...draft, theme: settings.theme };
   }
 
-  function updateNumber(key: 'maxJobs' | 'accountConcurrency', event: Event) {
+  function updateNumber(key: 'maxJobs' | 'accountConcurrency' | 'simulateStoreCount', event: Event) {
     draft = { ...draft, [key]: Number((event.currentTarget as HTMLInputElement | HTMLSelectElement).value) };
     saved = false;
   }
@@ -109,7 +109,11 @@
             <select
               id="locale"
               value={draft.locale}
-              onchange={(event) => { draft = { ...draft, locale: (event.currentTarget as HTMLSelectElement).value === 'en' ? 'en' : 'zh-TW' }; saved = false; }}
+              onchange={(event) => {
+                const locale = (event.currentTarget as HTMLSelectElement).value === 'en' ? 'en' : 'zh-TW';
+                draft = { ...draft, locale };
+                onChange({ ...settings, locale });
+              }}
             >
               <option value="zh-TW">{t('settings.zhTW')}</option>
               <option value="en">{t('settings.english')}</option>
@@ -156,6 +160,18 @@
       <div class="section-icon" aria-hidden="true"><span class="material-symbols-rounded">tune</span></div>
       <div class="settings-content">
         <h2 id="advanced-heading">{t('settings.advanced')}</h2>
+        <div class="field-group">
+          <label for="simulate-stores">{t('settings.simulateStores')}</label>
+          <select
+            id="simulate-stores"
+            value={draft.simulateStoreCount}
+            onchange={(event) => updateNumber('simulateStoreCount', event)}
+          >
+            <option value="0">{t('settings.simulateStoresOff')}</option>
+            <option value="16">{t('settings.simulateStores16')}</option>
+          </select>
+          <small class="field-hint">{t('settings.simulateStoresHint')}</small>
+        </div>
         <div class="setting-row">
           <strong>{t('settings.localMapping')}</strong>
           <md-switch

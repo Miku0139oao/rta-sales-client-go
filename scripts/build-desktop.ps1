@@ -26,8 +26,9 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $AppDir = Join-Path $RepoRoot 'cmd\rta-excel-filler'
 $FrontendDir = Join-Path $RepoRoot 'desktop\frontend'
 $ReleaseDir = Join-Path $RepoRoot 'release'
-$WailsVersion = 'v2.14.0'
-$WailsModule = "github.com/wailsapp/wails/v2/cmd/wails@$WailsVersion"
+$BinDir = Join-Path $AppDir 'build\bin'
+$WailsVersion = 'v3.0.0-beta.8'
+$WailsModule = "github.com/wailsapp/wails/v3/cmd/wails3@$WailsVersion"
 
 function Test-CommandExists {
     param([Parameter(Mandatory = $true)][string]$Name)
@@ -41,22 +42,22 @@ function Invoke-Checked {
     )
     Write-Host "== $Label =="
     & $Script
-    if ($LASTEXITCODE -ne 0) {
+    if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) {
         throw "$Label failed with exit code $LASTEXITCODE"
     }
 }
 
-function Get-WailsCommand {
-    $existing = Get-Command wails -ErrorAction SilentlyContinue
+function Get-Wails3Command {
+    $existing = Get-Command wails3 -ErrorAction SilentlyContinue
     if ($null -ne $existing) {
-        $reported = (& wails version 2>$null | Out-String)
+        $reported = (& wails3 version 2>$null | Out-String)
         if ($reported -match [regex]::Escape($WailsVersion)) {
             return @{ FilePath = $existing.Source; Prefix = @() }
         }
     }
 
     $goPath = (go env GOPATH).Trim()
-    $installed = Join-Path $goPath "bin\wails.exe"
+    $installed = Join-Path $goPath 'bin\wails3.exe'
     if (Test-Path -LiteralPath $installed) {
         $reported = (& $installed version 2>$null | Out-String)
         if ($reported -match [regex]::Escape($WailsVersion)) {
@@ -78,20 +79,19 @@ if (-not $SkipInstaller -and -not (Test-CommandExists 'makensis')) {
     throw 'NSIS (makensis) is not on PATH. Install NSIS 3.12, or pass -SkipInstaller.'
 }
 
-$WailsCommand = Get-WailsCommand
+$WailsCommand = Get-Wails3Command
 
-function Invoke-Wails {
+function Invoke-Wails3 {
     param([Parameter(Mandatory = $true)][string[]]$WailsArgs)
-    $command = $WailsCommand
-    $allArgs = @($command.Prefix + $WailsArgs)
-    Write-Host ("{0} {1}" -f $command.FilePath, ($allArgs -join ' '))
-    & $command.FilePath @allArgs
+    $allArgs = @($WailsCommand.Prefix + $WailsArgs)
+    Write-Host ("{0} {1}" -f $WailsCommand.FilePath, ($allArgs -join ' '))
+    & $WailsCommand.FilePath @allArgs
     if ($LASTEXITCODE -ne 0) {
-        throw "wails $($WailsArgs[0]) failed with exit code $LASTEXITCODE"
+        throw "wails3 $($WailsArgs[0]) failed with exit code $LASTEXITCODE"
     }
 }
 
-New-Item -ItemType Directory -Force -Path $ReleaseDir | Out-Null
+New-Item -ItemType Directory -Force -Path $ReleaseDir, $BinDir | Out-Null
 
 Push-Location $FrontendDir
 try {
@@ -102,49 +102,68 @@ finally {
     Pop-Location
 }
 
-$firstBuildUsesCleanFrontend = $true
+$exeName = 'RTA-Excel-Filler.exe'
+$builtExe = Join-Path $BinDir $exeName
+$syso = Join-Path $AppDir 'wails_windows_amd64.syso'
+
 Push-Location $AppDir
 try {
-    if (-not $SkipPortable) {
-        Invoke-Wails @(
-            'build', '-s', '-clean', '-trimpath',
-            '-platform', 'windows/amd64',
-            '-webview2', 'error',
-            '-o', 'RTA-Excel-Filler.exe'
-        )
-        $portableSource = Join-Path $AppDir 'build\bin\RTA-Excel-Filler.exe'
-        if (-not (Test-Path -LiteralPath $portableSource)) {
-            throw "Wails did not produce $portableSource"
-        }
-        Copy-Item -LiteralPath $portableSource -Destination (Join-Path $ReleaseDir 'RTA-Excel-Filler-portable.exe') -Force
-        $firstBuildUsesCleanFrontend = $false
-    }
+    Invoke-Wails3 @(
+        'generate', 'syso',
+        '-arch', 'amd64',
+        '-icon', 'build\windows\icon.ico',
+        '-manifest', 'build\windows\wails.exe.manifest',
+        '-info', 'build\windows\info.json',
+        '-out', $syso
+    )
 
-    if (-not $SkipInstaller) {
-        $installerArgs = @(
-            'build', '-s', '-trimpath',
-            '-platform', 'windows/amd64',
-            '-webview2', 'download',
-            '-nsis', '-installscope', 'user',
-            '-o', 'RTA-Excel-Filler.exe'
-        )
-        if ($firstBuildUsesCleanFrontend) {
-            $installerArgs = @('build', '-s', '-clean') + $installerArgs[2..($installerArgs.Length - 1)]
-        }
-        else {
-            $installerArgs = @('build', '-s', '-skipbindings') + $installerArgs[2..($installerArgs.Length - 1)]
-        }
-        Invoke-Wails $installerArgs
-
-        $installer = @(Get-ChildItem -LiteralPath (Join-Path $AppDir 'build\bin') -Filter '*-installer.exe' | Select-Object -First 1)
-        if ($installer.Count -eq 0) {
-            throw 'Wails did not produce an NSIS installer'
-        }
-        Copy-Item -LiteralPath $installer[0].FullName -Destination (Join-Path $ReleaseDir 'RTA-Excel-Filler-setup.exe') -Force
+    Invoke-Checked 'go build desktop' {
+        go build -tags production -trimpath -ldflags '-w -s -H windowsgui' -o $builtExe .
     }
 }
 finally {
+    if (Test-Path -LiteralPath $syso) {
+        Remove-Item -LiteralPath $syso -Force
+    }
     Pop-Location
+}
+
+if (-not (Test-Path -LiteralPath $builtExe)) {
+    throw "go build did not produce $builtExe"
+}
+
+if (-not $SkipPortable) {
+    Copy-Item -LiteralPath $builtExe -Destination (Join-Path $ReleaseDir 'RTA-Excel-Filler-portable.exe') -Force
+}
+
+if (-not $SkipInstaller) {
+    $nsisDir = Join-Path $AppDir 'build\windows\installer'
+    Invoke-Wails3 @('generate', 'webview2bootstrapper', '-dir', $nsisDir)
+    $generatedBootstrapper = Join-Path $nsisDir 'MicrosoftEdgeWebview2Setup.exe'
+    $bootstrapper = Join-Path $nsisDir 'tmp\MicrosoftEdgeWebview2Setup.exe'
+    New-Item -ItemType Directory -Force -Path (Split-Path $bootstrapper) | Out-Null
+    if (Test-Path -LiteralPath $generatedBootstrapper) {
+        Copy-Item -LiteralPath $generatedBootstrapper -Destination $bootstrapper -Force
+    }
+    if (-not (Test-Path -LiteralPath $bootstrapper)) {
+        throw "WebView2 bootstrapper was not generated at $bootstrapper"
+    }
+
+    Push-Location $nsisDir
+    try {
+        Invoke-Checked 'makensis installer' {
+            makensis -DREQUEST_EXECUTION_LEVEL=user -DWAILS_INSTALL_SCOPE=user "-DARG_WAILS_AMD64_BINARY=$builtExe" project.nsi
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    $installer = @(Get-ChildItem -LiteralPath $BinDir -Filter '*-installer.exe' | Select-Object -First 1)
+    if ($installer.Count -eq 0) {
+        throw 'makensis did not produce an NSIS installer'
+    }
+    Copy-Item -LiteralPath $installer[0].FullName -Destination (Join-Path $ReleaseDir 'RTA-Excel-Filler-setup.exe') -Force
 }
 
 $checksums = @(

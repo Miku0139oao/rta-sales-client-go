@@ -131,9 +131,17 @@ func TestSalesAnalysisUsesOneProfileForParallelStoresAndPreservesCategories(t *t
 		t.Fatal(answer.err)
 	}
 	result := answer.result
-	if !result.Complete || result.SelectedStores != 2 || result.SuccessfulStores != 2 || len(result.Items) != 2 {
-		t.Fatalf("unexpected analysis result: %#v", result)
+	if !result.Complete || result.SelectedStores != 2 || result.SuccessfulStores != 2 || len(result.Items) != 0 {
+		t.Fatalf("unexpected slim analysis result: %#v", result)
 	}
+	if len(result.Periods) != 1 || result.Periods[0].ItemCount != 2 || len(result.Periods[0].Items) != 0 {
+		t.Fatalf("slim period should omit item rows: %#v", result.Periods)
+	}
+	packed, err := app.GetSalesAnalysisItems(SalesAnalysisItemsRequest{OperationID: result.OperationID, PeriodKey: "current"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result.Items = unpackSalesAnalysisItems(packed, result.Stores)
 	if result.Totals.SaleAmount != 150 || result.Totals.ReturnAmount != 15 || result.Totals.NetSalesAmount != 135 {
 		t.Fatalf("unexpected totals: %#v", result.Totals)
 	}
@@ -178,8 +186,22 @@ func TestSalesAnalysisQueriesReportPeriodsInParallelAndIncludesTrend(t *testing.
 	client := &salesAnalysisFakeClient{
 		stores: []rtasales.Store{{BusinessID: "107", Label: "107 - First"}, {BusinessID: "108", Label: "108 - Second"}},
 		results: map[string]*rtasales.SalesResult{
-			"107": {TrendGrossSaleAmount: &trend107, TotalTransactionCount: &transactions, Items: []rtasales.SaleItem{{Matnr: "1", TPGrossSaleAmount: 10}}},
-			"108": {TrendGrossSaleAmount: &trend108, TotalTransactionCount: &transactions, Items: []rtasales.SaleItem{{Matnr: "2", TPGrossSaleAmount: 20}}},
+			"107": {
+				TrendGrossSaleAmount: &trend107, TotalTransactionCount: &transactions,
+				Items: []rtasales.SaleItem{{Matnr: "1", TPGrossSaleAmount: 10}},
+				TrendDays: []rtasales.TrendDay{
+					{Date: "2026-07-27", GrossSaleAmount: 5, TransactionCount: 2},
+					{Date: "2026-08-03", GrossSaleAmount: 7, TransactionCount: 3},
+				},
+			},
+			"108": {
+				TrendGrossSaleAmount: &trend108, TotalTransactionCount: &transactions,
+				Items: []rtasales.SaleItem{{Matnr: "2", TPGrossSaleAmount: 20}},
+				TrendDays: []rtasales.TrendDay{
+					{Date: "2026-07-27", GrossSaleAmount: 9, TransactionCount: 4},
+					{Date: "2026-08-03", GrossSaleAmount: 13, TransactionCount: 5},
+				},
+			},
 		},
 		started: make(chan struct{}, 4),
 		release: make(chan struct{}),
@@ -224,6 +246,9 @@ func TestSalesAnalysisQueriesReportPeriodsInParallelAndIncludesTrend(t *testing.
 	if result.Periods[0].Totals.TrendNetSalesAmount == nil || *result.Periods[0].Totals.TrendNetSalesAmount != 34 {
 		t.Fatalf("unexpected period Trend View net sales: %#v", result.Periods[0].Totals.TrendNetSalesAmount)
 	}
+	if len(result.Weeks) == 0 || result.Weeks[0].From != "2026-07-27" || result.Weeks[0].Totals.SalesTW != 14 {
+		t.Fatalf("weekly fold missing or wrong: %#v", result.Weeks)
+	}
 	client.mu.Lock()
 	queries := append([]rtasales.SalesQuery(nil), client.queries...)
 	maxActive := client.maxActive
@@ -249,7 +274,7 @@ func TestSalesAnalysisQueriesReportPeriodsInParallelAndIncludesTrend(t *testing.
 	}
 }
 
-func TestSalesAnalysisSupportsDefault16AndMaximum32ParallelTasksPerProfile(t *testing.T) {
+func TestSalesAnalysisSupportsDefaultAndMaximum32ParallelTasksPerProfile(t *testing.T) {
 	periods := []SalesAnalysisPeriodRequest{
 		{Key: "current", Label: "Current", From: "2026-08-15", To: "2026-08-15"},
 		{Key: "previous", Label: "Previous", From: "2026-07-15", To: "2026-07-15"},
@@ -262,7 +287,7 @@ func TestSalesAnalysisSupportsDefault16AndMaximum32ParallelTasksPerProfile(t *te
 		storeCount  int
 		wantActive  int
 	}{
-		{name: "default 16", concurrency: 0, storeCount: 5, wantActive: 16},
+		{name: "default 32", concurrency: 0, storeCount: 8, wantActive: 32},
 		{name: "maximum 32", concurrency: 32, storeCount: 8, wantActive: 32},
 	} {
 		t.Run(test.name, func(t *testing.T) {

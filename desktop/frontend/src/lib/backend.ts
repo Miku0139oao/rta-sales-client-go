@@ -16,6 +16,8 @@ import type {
   SalesAnalysisPDFWriteRequest,
   SalesAnalysisProgress,
   SalesAnalysisPeriodResult,
+  SalesAnalysisItemsRequest,
+  SalesAnalysisPackedItems,
   SalesAnalysisRequest,
   SalesAnalysisResult,
   SalesAnalysisStore,
@@ -132,10 +134,20 @@ const mockSalesAnalysisListeners = new Set<(progress: SalesAnalysisProgress) => 
 let mockCancelled = false;
 let mockSalesCancelled = false;
 
-const mockAnalysisStores: SalesAnalysisStore[] = [
-  { businessId: '107', label: '107 - Central' },
-  { businessId: '108', label: '108 - Harbour' },
+const mockStoreNames = [
+  'Central', 'Harbour', 'North', 'South', 'East', 'West', 'Park', 'Bay',
+  'Hill', 'Garden', 'Market', 'Plaza', 'Station', 'Bridge', 'Harbour East', 'Central West',
 ];
+
+function mockAnalysisStoresFor(count: number): SalesAnalysisStore[] {
+  const total = count > 0 ? count : 2;
+  return Array.from({ length: total }, (_, index) => ({
+    businessId: String(107 + index),
+    label: `${107 + index} - ${mockStoreNames[index % mockStoreNames.length]}`,
+  }));
+}
+
+const mockAnalysisStores: SalesAnalysisStore[] = mockAnalysisStoresFor(2);
 
 const mockAnalysisItems: SalesAnalysisItem[] = [
   {
@@ -173,7 +185,8 @@ function mockItemTotals(items: SalesAnalysisItem[]): SalesAnalysisTotals {
 async function mockRunSalesAnalysis(request: SalesAnalysisRequest): Promise<SalesAnalysisResult> {
   mockSalesCancelled = false;
   const operationId = `mock-sales-${Date.now()}`;
-  const selected = mockAnalysisStores.filter((store) => request.storeIds.includes(store.businessId));
+  const catalog = mockAnalysisStoresFor(request.simulateStoreCount || mockAnalysisStores.length);
+  const selected = catalog.filter((store) => request.storeIds.includes(store.businessId));
   const requestedPeriods = request.periods?.length ? request.periods : [{
     key: 'current', label: 'Current', from: request.from ?? '', to: request.to ?? '', includeTrend: false,
   }];
@@ -194,17 +207,23 @@ async function mockRunSalesAnalysis(request: SalesAnalysisRequest): Promise<Sale
   const scales: Record<string, number> = { current: 1, previous: 0.92, previous2: 0.84, yearAgo: 0.88 };
   const periods: SalesAnalysisPeriodResult[] = requestedPeriods.map((period) => {
     const scale = scales[period.key] ?? 1;
-    const items = mockAnalysisItems
-      .filter((item) => request.storeIds.includes(item.storeId))
-      .map((item) => ({
-        ...item,
-        saleQuantity: item.saleQuantity * scale,
-        saleAmount: item.saleAmount * scale,
-        returnQuantity: item.returnQuantity * scale,
-        returnAmount: item.returnAmount * scale,
-        netQuantity: item.netQuantity * scale,
-        netSalesAmount: item.netSalesAmount * scale,
-      }));
+    const templates = mockAnalysisItems.length > 0 ? mockAnalysisItems : [];
+    const items = selected.flatMap((store, storeIndex) => {
+      const source = templates[storeIndex % templates.length] ?? templates[0];
+      if (!source) return [];
+      const storeScale = scale * (0.55 + storeIndex * 0.05);
+      return [{
+        ...source,
+        storeId: store.businessId,
+        storeLabel: store.label,
+        saleQuantity: source.saleQuantity * storeScale,
+        saleAmount: source.saleAmount * storeScale,
+        returnQuantity: source.returnQuantity * storeScale,
+        returnAmount: source.returnAmount * storeScale,
+        netQuantity: source.netQuantity * storeScale,
+        netSalesAmount: source.netSalesAmount * storeScale,
+      }];
+    });
     const stores = selected.map((store, index) => {
       const totals = mockItemTotals(items.filter((item) => item.storeId === store.businessId));
       if (period.includeTrend) {
@@ -228,8 +247,51 @@ async function mockRunSalesAnalysis(request: SalesAnalysisRequest): Promise<Sale
   return {
     operationId, from: primary.from, to: primary.to, complete: true,
     selectedStores: selected.length, successfulStores: primary.successfulStores, totals: primary.totals,
-    stores: primary.stores, items: primary.items, issues: [], periods, queryDurationMs: 180,
+    stores: primary.stores, items: primary.items, issues: [], periods,
+    weeks: mockWeeklyPeriods(primary.from, primary.to, primary.stores),
+    queryDurationMs: 180,
   };
+}
+
+function mockWeeklyPeriods(from: string, to: string, stores: SalesAnalysisPeriodResult['stores']): import('./types').SalesAnalysisWeek[] {
+  if (!from || !to || from > to || stores.length === 0) return [];
+  const start = new Date(`${from}T00:00:00`);
+  const end = new Date(`${to}T00:00:00`);
+  const weekday = start.getDay() || 7;
+  start.setDate(start.getDate() - (weekday - 1));
+  const weeks: import('./types').SalesAnalysisWeek[] = [];
+  for (let cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 7)) {
+    const weekFrom = cursor.toISOString().slice(0, 10);
+    const weekToDate = new Date(cursor);
+    weekToDate.setDate(weekToDate.getDate() + 6);
+    const weekTo = weekToDate.toISOString().slice(0, 10);
+    const weekStores = stores.map((store, index) => {
+      const salesTw = 80_000 - index * 7_000;
+      const salesLw = salesTw * 0.92;
+      return {
+        businessId: store.businessId, label: store.label,
+        salesTw, salesLw, customersTw: 400 - index * 20, customersLw: 380 - index * 18,
+        weekdaySalesTw: salesTw * 0.58, weekdaySalesLw: salesLw * 0.62,
+        weekendSalesTw: salesTw * 0.42, weekendSalesLw: salesLw * 0.38,
+        weekdayCustomersTw: 240 - index * 10, weekdayCustomersLw: 230 - index * 9,
+        weekendCustomersTw: 160 - index * 10, weekendCustomersLw: 150 - index * 9,
+      };
+    });
+    const totals = weekStores.reduce((sum, row) => ({
+      salesTw: sum.salesTw + row.salesTw, salesLw: sum.salesLw + row.salesLw,
+      customersTw: sum.customersTw + row.customersTw, customersLw: sum.customersLw + row.customersLw,
+      weekdaySalesTw: sum.weekdaySalesTw + row.weekdaySalesTw, weekdaySalesLw: sum.weekdaySalesLw + row.weekdaySalesLw,
+      weekendSalesTw: sum.weekendSalesTw + row.weekendSalesTw, weekendSalesLw: sum.weekendSalesLw + row.weekendSalesLw,
+      weekdayCustomersTw: sum.weekdayCustomersTw + row.weekdayCustomersTw, weekdayCustomersLw: sum.weekdayCustomersLw + row.weekdayCustomersLw,
+      weekendCustomersTw: sum.weekendCustomersTw + row.weekendCustomersTw, weekendCustomersLw: sum.weekendCustomersLw + row.weekendCustomersLw,
+    }), {
+      salesTw: 0, salesLw: 0, customersTw: 0, customersLw: 0,
+      weekdaySalesTw: 0, weekdaySalesLw: 0, weekendSalesTw: 0, weekendSalesLw: 0,
+      weekdayCustomersTw: 0, weekdayCustomersLw: 0, weekendCustomersTw: 0, weekendCustomersLw: 0,
+    });
+    weeks.push({ from: weekFrom, to: weekTo, stores: weekStores, totals });
+  }
+  return weeks;
 }
 
 function mockResult(operationId = 'mock-analysis'): AnalysisResult {
@@ -359,11 +421,19 @@ export const backend: BackendApi = {
       return { ...found };
     }),
 
-  listSalesAnalysisStores: (profileId: string) =>
-    invoke(['ListSalesAnalysisStores'], [{ profileId }], async () => [...mockAnalysisStores]),
+  listSalesAnalysisStores: (profileId: string, simulateStoreCount = 0) =>
+    invoke(['ListSalesAnalysisStores'], [{ profileId, simulateStoreCount }], async () => mockAnalysisStoresFor(simulateStoreCount)),
 
   runSalesAnalysis: (request: SalesAnalysisRequest) =>
     invoke(['RunSalesAnalysis'], [request], () => mockRunSalesAnalysis(request)),
+
+  getSalesAnalysisItems: (request: SalesAnalysisItemsRequest) =>
+    invoke(['GetSalesAnalysisItems'], [request], async (): Promise<SalesAnalysisPackedItems> => ({
+      periodKey: request.periodKey, dict: [''], rows: [],
+    })),
+
+  clearSalesAnalysis: (operationId: string) =>
+    invoke(['ClearSalesAnalysis'], [{ operationId }], async () => undefined),
 
   cancelSalesAnalysis: (operationId: string) =>
     invoke(['CancelSalesAnalysis'], [{ operationId }], async () => { mockSalesCancelled = true; }),
@@ -401,6 +471,9 @@ export const backend: BackendApi = {
 
   revealSavedWorkbook: (path: string) =>
     invoke(['RevealSavedWorkbook'], [{ path }], async () => undefined),
+
+  openSavedFolder: (path: string) =>
+    invoke(['OpenSavedFolder'], [{ path }], async () => undefined),
 
   onProgress(listener: (progress: AnalysisProgress) => void): () => void {
     const source = eventSource();

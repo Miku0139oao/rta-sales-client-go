@@ -17,3 +17,14 @@ export function initialPreviewFilter(result: AnalysisResult): PreviewFilter {
   if ((result.changeCount ?? 0) > 0) return 'change';
   return 'all';
 }
+
+export function splitSavedPath(path: string): { fileName: string; folder: string } {
+  const trimmed = path.trim();
+  if (!trimmed) return { fileName: '', folder: '' };
+  const separatorIndex = Math.max(trimmed.lastIndexOf('\\'), trimmed.lastIndexOf('/'));
+  if (separatorIndex < 0) return { fileName: trimmed, folder: '' };
+  const fileName = trimmed.slice(separatorIndex + 1);
+  const folder = trimmed.slice(0, separatorIndex);
+  if (!fileName) return { fileName: trimmed, folder: '' };
+  return { fileName, folder };
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultWorkbookEndDate, initialPreviewFilter, localDateKey } from './excelWorkflow';
+import { defaultWorkbookEndDate, initialPreviewFilter, localDateKey, splitSavedPath } from './excelWorkflow';
 import type { AnalysisResult } from './types';
 
 function result(overrides: Partial<AnalysisResult> = {}): AnalysisResult {
@@ -25,5 +25,18 @@ describe('Excel workflow defaults', () => {
     expect(initialPreviewFilter(result({ issueCount: 1, changeCount: 2 }))).toBe('issue');
     expect(initialPreviewFilter(result({ changeCount: 2 }))).toBe('change');
     expect(initialPreviewFilter(result())).toBe('all');
+  });
+
+  it('splits a saved workbook into a visible file name and folder', () => {
+    expect(splitSavedPath('D:\\reports\\filled.xlsx')).toEqual({
+      fileName: 'filled.xlsx',
+      folder: 'D:\\reports',
+    });
+    expect(splitSavedPath('/tmp/reports/filled.xlsx')).toEqual({
+      fileName: 'filled.xlsx',
+      folder: '/tmp/reports',
+    });
+    expect(splitSavedPath('filled.xlsx')).toEqual({ fileName: 'filled.xlsx', folder: '' });
+    expect(splitSavedPath('')).toEqual({ fileName: '', folder: '' });
   });
 });

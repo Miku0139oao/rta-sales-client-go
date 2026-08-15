@@ -8,6 +8,8 @@ import type {
   SalesAnalysisResult,
   SalesAnalysisStore,
   SalesAnalysisTotals,
+  SalesAnalysisWeek,
+  SalesAnalysisWeekStore,
 } from './types';
 
 export type SalesReportCategoryLevel = 'category1' | 'category2' | 'category3' | 'category4' | 'category5';
@@ -73,11 +75,30 @@ interface Labels {
   amount: string;
   quantity: string;
   uncategorized: string;
+  allStores: string;
+  storeComparison: string;
+  store: string;
+  weeklyTitle: string;
+  thisWeek: string;
+  lastWeek: string;
+  variance: string;
+  variancePercent: string;
+  weekday: string;
+  weekend: string;
+  customers: string;
 }
+
+export const ALL_STORES_REPORT_ID = '__all__';
 
 const FONT = 'NotoSansTC';
 const PAGE_WIDTH = 297;
 const PAGE_HEIGHT = 210;
+const CONTENT_X = 10;
+const CONTENT_Y = 30;
+const CONTENT_WIDTH = 277;
+const CONTENT_HEIGHT = 166;
+const CARD_GAP = 4;
+const CATEGORY_CARDS_PER_PAGE = 6;
 const COLORS = {
   ink: [24, 39, 58] as RGB,
   navy: [24, 55, 82] as RGB,
@@ -123,12 +144,15 @@ function renderSalesAnalysisPDF(
   PDFDocument: typeof import('jspdf').jsPDF,
 ): Uint8Array {
   const labels = reportLabels(locale);
+  const combined = isAllStoresReport(storeId);
   const periods = storePeriods(result, storeId);
   const current = periodByKey(periods, 'current') ?? periods[0];
   if (!current) throw new Error('The selected store has no current sales period');
 
-  const store = listSuccessfulReportStores(result).find((candidate) => candidate.businessId === storeId);
-  const storeLabel = store?.label.trim() || storeId;
+  const stores = listSuccessfulReportStores(result);
+  const store = stores.find((candidate) => candidate.businessId === storeId);
+  const headerId = combined ? 'ALL' : storeId;
+  const storeLabel = combined ? `${labels.allStores} (${stores.length})` : (store?.label.trim() || storeId);
   const doc = new PDFDocument({
     orientation: 'landscape', unit: 'mm', format: 'a4', compress: true, putOnlyUsedFonts: true,
   });
@@ -137,35 +161,43 @@ function renderSalesAnalysisPDF(
   doc.addFont('NotoSansTC-Regular.ttf', FONT, 'bold');
   doc.setFont(FONT, 'normal');
   doc.setProperties({
-    title: `RTA Sales Analysis - ${storeId}`,
+    title: `RTA Sales Analysis - ${headerId}`,
     subject: `${current.from} - ${current.to}`,
     author: 'RTA Sales Analyzer',
     creator: 'RTA Sales Analyzer',
   });
 
-  drawSummaryPage(doc, periods, current, storeId, storeLabel, categoryLevel, labels, locale);
+  drawSummaryPage(doc, periods, current, headerId, storeLabel, categoryLevel, labels, locale);
+  for (const week of weeksForReport(result.weeks ?? [], storeId, combined)) {
+    doc.addPage();
+    drawWeeklyPage(doc, week, headerId, storeLabel, labels, locale);
+  }
+  if (combined && stores.length > 1) {
+    doc.addPage();
+    drawStoreComparisonPage(doc, result, headerId, storeLabel, labels, locale);
+  }
   doc.addPage();
-  drawOverallRankingsPage(doc, current, storeId, storeLabel, categoryLevel, labels, locale);
+  drawOverallRankingsPage(doc, current, headerId, storeLabel, categoryLevel, labels, locale);
   const yearAgoNext = periodByKey(periods, 'yearAgoNext');
   if (yearAgoNext) {
     doc.addPage();
-    drawFocusPage(doc, yearAgoNext, current, storeId, storeLabel, labels);
+    drawFocusPage(doc, yearAgoNext, current, headerId, storeLabel, labels);
   }
 
   for (const key of ['current', 'yearAgo', 'yearAgoNext']) {
     const period = periodByKey(periods, key);
     if (!period) continue;
     doc.addPage();
-    drawCategoryRankingPage(doc, period, storeId, storeLabel, categoryLevel, 'amount', labels, locale);
+    drawCategoryRankingPage(doc, period, headerId, storeLabel, categoryLevel, 'amount', labels, locale);
   }
   for (const key of ['current', 'previous', 'previous2']) {
     const period = periodByKey(periods, key);
     if (!period) continue;
     doc.addPage();
-    drawCategoryRankingPage(doc, period, storeId, storeLabel, categoryLevel, 'quantity', labels, locale);
+    drawCategoryRankingPage(doc, period, headerId, storeLabel, categoryLevel, 'quantity', labels, locale);
   }
 
-  addFooters(doc, storeId);
+  addFooters(doc, headerId);
   return new Uint8Array(doc.output('arraybuffer'));
 }
 
@@ -189,8 +221,12 @@ export function listSuccessfulReportStores(result: SalesAnalysisResult): SalesAn
   );
 }
 
+export function isAllStoresReport(storeId: string): boolean {
+  return storeId === ALL_STORES_REPORT_ID;
+}
+
 export function salesAnalysisPDFFilename(storeId: string, from: string, to: string): string {
-  const safeStore = storeId.trim().replace(/[^\p{L}\p{N}_-]+/gu, '-') || 'store';
+  const safeStore = isAllStoresReport(storeId) ? 'all' : (storeId.trim().replace(/[^\p{L}\p{N}_-]+/gu, '-') || 'store');
   const start = from.replaceAll('-', '') || 'report';
   const end = to.replaceAll('-', '');
   const period = end && end !== start ? `${start}-${end}` : start;
@@ -227,7 +263,13 @@ function normalizedPeriods(result: SalesAnalysisResult): SalesAnalysisPeriodResu
 
 function storePeriods(result: SalesAnalysisResult, storeId: string): StorePeriod[] {
   return normalizedPeriods(result).flatMap((period) => {
-    const items = period.items.filter((item) => item.storeId === storeId);
+    if (isAllStoresReport(storeId)) {
+      return [{
+        key: period.key, label: period.label, from: period.from, to: period.to,
+        totals: period.totals, items: period.items ?? [],
+      }];
+    }
+    const items = (period.items ?? []).filter((item) => item.storeId === storeId);
     const summary = period.stores.find((store) => store.businessId === storeId);
     if (!summary && items.length === 0 && period.key !== 'current') return [];
     return [{
@@ -280,8 +322,156 @@ function drawSummaryPage(
   const cardWidth = (277 - gap * 3) / 4;
   metrics.forEach((metric, index) => drawMetricCard(doc, 10 + index * (cardWidth + gap), 31, cardWidth, 24, metric.label, metric.value, metric.delta, labels.yearAgo));
 
-  drawComparisonPanel(doc, 10, 62, 132, 124, current, previous, yearAgo, labels);
-  drawCategoryPerformancePanel(doc, 147, 62, 140, 124, current, previous, yearAgo, level, labels, locale);
+  drawComparisonPanel(doc, 10, 59, 277, 48, current, previous, yearAgo, labels);
+  drawCategoryPerformancePanel(doc, 10, 111, 277, 75, current, previous, yearAgo, level, labels, locale);
+}
+
+function weeksForReport(weeks: SalesAnalysisWeek[], storeId: string, combined: boolean): SalesAnalysisWeek[] {
+  if (combined) return weeks;
+  return weeks.flatMap((week) => {
+    const store = week.stores.find((row) => row.businessId === storeId);
+    if (!store) return [];
+    return [{ ...week, stores: [store], totals: store }];
+  });
+}
+
+function drawWeeklyPage(
+  doc: jsPDF,
+  week: SalesAnalysisWeek,
+  storeId: string,
+  storeLabel: string,
+  labels: Labels,
+  _locale: Locale,
+): void {
+  drawPageHeader(doc, labels.weeklyTitle, `${week.from} - ${week.to}`, storeId, storeLabel);
+  const x = CONTENT_X;
+  const y = CONTENT_Y;
+  const width = CONTENT_WIDTH;
+  const height = CONTENT_HEIGHT;
+  card(doc, x, y, width, height);
+  const innerX = x + 4;
+  const tableY = y + 12;
+  const innerWidth = width - 8;
+  const columns = [52, 32, 32, 30, 26, 26, 26, innerWidth - 224];
+  drawTableHeader(doc, innerX, tableY, columns, [
+    labels.store, labels.thisWeek, labels.lastWeek, labels.variance, labels.variancePercent,
+    labels.weekday, labels.weekend, labels.customers,
+  ]);
+  const rows: Array<{ label: string; detail: string; values: SalesAnalysisWeekStore }> = [
+    { label: labels.allStores, detail: '', values: week.totals },
+    ...week.stores.map((store) => ({
+      label: store.businessId || store.label || labels.store,
+      detail: store.label && store.label !== store.businessId ? store.label : '',
+      values: store,
+    })),
+  ];
+  const rowHeight = Math.min(7.4, (height - 22) / Math.max(rows.length, 1));
+  rows.forEach((row, index) => {
+    const rowY = tableY + 8 + index * rowHeight;
+    if (index % 2 === 0) {
+      setFill(doc, COLORS.surface);
+      doc.roundedRect(innerX, rowY - 4.2, innerWidth, rowHeight - 0.6, 1.2, 1.2, 'F');
+    }
+    setText(doc, COLORS.ink, 7.2, 'bold');
+    doc.text(fitText(doc, row.label, columns[0] - 3), innerX + 2, rowY);
+    if (row.detail) {
+      setText(doc, COLORS.slate, 5.2, 'normal');
+      doc.text(fitText(doc, row.detail, columns[0] - 3), innerX + 2, rowY + 2.4);
+    }
+    const salesChange = delta(row.values.salesTw, row.values.salesLw);
+    const cells: Array<{ text: string; color: RGB; bold?: boolean }> = [
+      { text: formatMoney(row.values.salesTw), color: COLORS.ink, bold: true },
+      { text: formatMoney(row.values.salesLw), color: COLORS.slate },
+      { text: formatMoney(row.values.salesTw - row.values.salesLw), color: changeColor(salesChange), bold: true },
+      percentCell(salesChange),
+      percentCell(delta(row.values.weekdaySalesTw, row.values.weekdaySalesLw)),
+      percentCell(delta(row.values.weekendSalesTw, row.values.weekendSalesLw)),
+      percentCell(delta(row.values.customersTw, row.values.customersLw)),
+    ];
+    let cellX = innerX + columns[0];
+    cells.forEach((cell, cellIndex) => {
+      setText(doc, cell.color, 6.8, cell.bold ? 'bold' : 'normal');
+      doc.text(cell.text, cellX + columns[cellIndex + 1] - 2, rowY, { align: 'right' });
+      cellX += columns[cellIndex + 1];
+    });
+  });
+}
+
+function changeColor(change: number | undefined): RGB {
+  if (change === undefined || change === 0) return COLORS.slate;
+  return change > 0 ? COLORS.positive : COLORS.negative;
+}
+
+function drawStoreComparisonPage(
+  doc: jsPDF,
+  result: SalesAnalysisResult,
+  storeId: string,
+  storeLabel: string,
+  labels: Labels,
+  locale: Locale,
+): void {
+  const periods = normalizedPeriods(result);
+  const current = periods.find((period) => period.key === 'current') ?? periods[0];
+  if (!current) return;
+  drawPageHeader(doc, labels.storeComparison, `${current.from} - ${current.to}`, storeId, storeLabel);
+
+  const previous = periods.find((period) => period.key === 'previous');
+  const yearAgo = periods.find((period) => period.key === 'yearAgo');
+  const rows = listSuccessfulReportStores(result).map((store) => {
+    const currentTotals = current.stores.find((item) => item.businessId === store.businessId)?.totals;
+    const previousTotals = previous?.stores.find((item) => item.businessId === store.businessId)?.totals;
+    const yearAgoTotals = yearAgo?.stores.find((item) => item.businessId === store.businessId)?.totals;
+    return {
+      id: store.businessId,
+      label: store.label,
+      current: currentTotals?.netSalesAmount,
+      previous: previousTotals?.netSalesAmount,
+      yearAgo: yearAgoTotals?.netSalesAmount,
+      transactions: currentTotals?.transactionCount,
+      basket: basketNumber(currentTotals),
+    };
+  }).sort((left, right) => (right.current ?? 0) - (left.current ?? 0) || left.id.localeCompare(right.id, locale, { numeric: true }));
+
+  const x = CONTENT_X;
+  const y = CONTENT_Y;
+  const width = CONTENT_WIDTH;
+  const height = CONTENT_HEIGHT;
+  card(doc, x, y, width, height);
+  panelTitle(doc, x, y, width, labels.storeComparison);
+  const innerX = x + 4;
+  const tableY = y + 18;
+  const innerWidth = width - 8;
+  const columns = [70, 32, 32, 32, 26, 30, 26, innerWidth - 248];
+  drawTableHeader(doc, innerX, tableY, columns, [
+    labels.store, labels.current, labels.previous, labels.yearAgo, labels.vsPrevious, labels.vsYearAgo, labels.transactions, labels.basket,
+  ]);
+  const rowHeight = Math.min(7.2, Math.max(5.4, (height - 28) / Math.max(rows.length, 1)));
+  rows.forEach((row, index) => {
+    const rowY = tableY + 8.4 + index * rowHeight;
+    if (rowY > y + height - 6) return;
+    if (index % 2 === 0) {
+      setFill(doc, COLORS.surface);
+      doc.roundedRect(innerX, rowY - 4.2, innerWidth, rowHeight - 0.6, 1.2, 1.2, 'F');
+    }
+    const name = row.label && row.label !== row.id ? `${row.id}  ${row.label}` : row.id;
+    setText(doc, COLORS.ink, 6.6, 'bold');
+    doc.text(fitText(doc, name, columns[0] - 3), innerX + 2, rowY);
+    let cellX = innerX + columns[0];
+    const values: Array<{ text: string; color: RGB; bold?: boolean }> = [
+      { text: row.current === undefined ? '-' : formatMoney(row.current), color: COLORS.ink, bold: true },
+      { text: row.previous === undefined ? '-' : formatMoney(row.previous), color: COLORS.slate },
+      { text: row.yearAgo === undefined ? '-' : formatMoney(row.yearAgo), color: COLORS.slate },
+      percentCell(delta(row.current, row.previous)),
+      percentCell(delta(row.current, row.yearAgo)),
+      { text: row.transactions === undefined ? '-' : formatQuantity(row.transactions), color: COLORS.slate },
+      { text: row.basket === undefined ? '-' : formatMoney(row.basket), color: COLORS.slate },
+    ];
+    values.forEach((value, valueIndex) => {
+      setText(doc, value.color, 6.4, value.bold ? 'bold' : 'normal');
+      doc.text(value.text, cellX + columns[valueIndex + 1] - 2, rowY, { align: 'right' });
+      cellX += columns[valueIndex + 1];
+    });
+  });
 }
 
 function drawOverallRankingsPage(
@@ -309,26 +499,66 @@ function drawCategoryRankingPage(
   locale: Locale,
 ): void {
   const title = `${period.label} - ${metric === 'amount' ? labels.salesRanking : labels.quantityRanking}`;
-  drawPageHeader(doc, title, `${period.from} - ${period.to}`, storeId, storeLabel);
-  const groups = categoryGroups(period.items, level, metric, labels.uncategorized).slice(0, 6);
-  const gap = 4;
-  const cardWidth = (277 - gap * 2) / 3;
-  const cardHeight = 76.5;
-  for (let index = 0; index < 6; index += 1) {
-    const column = index % 3;
-    const row = Math.floor(index / 3);
-    drawCategoryCard(
-      doc,
-      10 + column * (cardWidth + gap),
-      30 + row * (cardHeight + 4),
-      cardWidth,
-      cardHeight,
-      groups[index],
-      metric,
-      labels,
-      locale,
-    );
+  const groups = categoryGroups(period.items, level, metric, labels.uncategorized);
+  if (groups.length === 0) {
+    drawPageHeader(doc, title, `${period.from} - ${period.to}`, storeId, storeLabel);
+    return;
   }
+  for (let offset = 0; offset < groups.length; offset += CATEGORY_CARDS_PER_PAGE) {
+    if (offset > 0) doc.addPage();
+    drawPageHeader(doc, title, `${period.from} - ${period.to}`, storeId, storeLabel);
+    const pageGroups = groups.slice(offset, offset + CATEGORY_CARDS_PER_PAGE);
+    const slots = categoryRankingCardSlots(pageGroups.length);
+    pageGroups.forEach((group, index) => {
+      const slot = slots[index];
+      if (!slot) return;
+      drawCategoryCard(doc, slot.x, slot.y, slot.width, slot.height, group, metric, labels, locale);
+    });
+  }
+}
+
+export function categoryRankingCardSlots(count: number): Array<{ x: number; y: number; width: number; height: number }> {
+  if (count <= 0) return [];
+  const { x, y, width, height } = { x: CONTENT_X, y: CONTENT_Y, width: CONTENT_WIDTH, height: CONTENT_HEIGHT };
+  if (count <= 3) {
+    const cardWidth = (width - CARD_GAP * (count - 1)) / count;
+    return Array.from({ length: count }, (_, index) => ({
+      x: x + index * (cardWidth + CARD_GAP),
+      y,
+      width: cardWidth,
+      height,
+    }));
+  }
+  if (count === 4) {
+    const cardWidth = (width - CARD_GAP) / 2;
+    const cardHeight = (height - CARD_GAP) / 2;
+    return Array.from({ length: 4 }, (_, index) => ({
+      x: x + (index % 2) * (cardWidth + CARD_GAP),
+      y: y + Math.floor(index / 2) * (cardHeight + CARD_GAP),
+      width: cardWidth,
+      height: cardHeight,
+    }));
+  }
+  const firstRow = 3;
+  const secondRow = count - firstRow;
+  const topWidth = (width - CARD_GAP * 2) / 3;
+  const cardHeight = (height - CARD_GAP) / 2;
+  const slots = Array.from({ length: firstRow }, (_, index) => ({
+    x: x + index * (topWidth + CARD_GAP),
+    y,
+    width: topWidth,
+    height: cardHeight,
+  }));
+  const bottomWidth = (width - CARD_GAP * (secondRow - 1)) / secondRow;
+  for (let index = 0; index < secondRow; index += 1) {
+    slots.push({
+      x: x + index * (bottomWidth + CARD_GAP),
+      y: y + cardHeight + CARD_GAP,
+      width: bottomWidth,
+      height: cardHeight,
+    });
+  }
+  return slots;
 }
 
 function drawPageHeader(doc: jsPDF, title: string, period: string, storeId: string, storeLabel: string): void {
@@ -364,10 +594,10 @@ function drawComparisonPanel(doc: jsPDF, x: number, y: number, width: number, he
   card(doc, x, y, width, height);
   panelTitle(doc, x, y, width, labels.comparison);
   const innerX = x + 4;
-  const tableY = y + 19;
+  const tableY = y + 18;
   const innerWidth = width - 8;
-  const columns = [32, 23, 23, 23, innerWidth - 101];
-  drawTableHeader(doc, innerX, tableY, columns, [labels.metric, labels.current, labels.previous, labels.yearAgo, labels.vsPrevious]);
+  const columns = [40, 48, 46, 46, 42, innerWidth - 222];
+  drawTableHeader(doc, innerX, tableY, columns, [labels.metric, labels.current, labels.previous, labels.yearAgo, labels.vsPrevious, labels.vsYearAgo]);
   const rows = [
     { label: labels.netSales, current: current.totals.netSalesAmount, previous: previous?.totals.netSalesAmount, yearAgo: yearAgo?.totals.netSalesAmount, format: formatMoney },
     { label: labels.netQuantity, current: current.totals.netQuantity, previous: previous?.totals.netQuantity, yearAgo: yearAgo?.totals.netQuantity, format: formatQuantity },
@@ -375,24 +605,27 @@ function drawComparisonPanel(doc: jsPDF, x: number, y: number, width: number, he
     { label: labels.basket, current: basketNumber(current.totals), previous: basketNumber(previous?.totals), yearAgo: basketNumber(yearAgo?.totals), format: formatMoney },
   ];
   rows.forEach((row, index) => {
-    const rowY = tableY + 10 + index * 21;
+    const rowY = tableY + 8.2 + index * 6.6;
     if (index % 2 === 0) {
       setFill(doc, COLORS.surface);
-      doc.roundedRect(innerX, rowY - 6, innerWidth, 17, 1.5, 1.5, 'F');
+      doc.roundedRect(innerX, rowY - 4.2, innerWidth, 6.2, 1.2, 1.2, 'F');
     }
     let cellX = innerX;
     setText(doc, COLORS.ink, 7.4, 'bold');
-    doc.text(fitText(doc, row.label, columns[0] - 3), cellX + 2, rowY + 3);
+    doc.text(fitText(doc, row.label, columns[0] - 3), cellX + 2, rowY);
     cellX += columns[0];
-    const values = [row.current, row.previous, row.yearAgo];
-    values.forEach((value, valueIndex) => {
-      setText(doc, valueIndex === 0 ? COLORS.ink : COLORS.slate, 7.1, valueIndex === 0 ? 'bold' : 'normal');
-      doc.text(value === undefined ? '-' : row.format(value), cellX + columns[valueIndex + 1] - 2, rowY + 3, { align: 'right' });
+    const amounts = [row.current, row.previous, row.yearAgo];
+    amounts.forEach((value, valueIndex) => {
+      setText(doc, valueIndex === 0 ? COLORS.ink : COLORS.slate, 7.2, valueIndex === 0 ? 'bold' : 'normal');
+      doc.text(value === undefined ? '-' : row.format(value), cellX + columns[valueIndex + 1] - 2, rowY, { align: 'right' });
       cellX += columns[valueIndex + 1];
     });
-    const change = delta(row.current, row.previous);
-    setText(doc, change === undefined ? COLORS.slate : change >= 0 ? COLORS.positive : COLORS.negative, 7.1, 'bold');
-    doc.text(change === undefined ? '-' : formatPercent(change), innerX + innerWidth - 2, rowY + 3, { align: 'right' });
+    [delta(row.current, row.previous), delta(row.current, row.yearAgo)].forEach((change, changeIndex) => {
+      const columnWidth = columns[4 + changeIndex];
+      setText(doc, change === undefined ? COLORS.slate : change >= 0 ? COLORS.positive : COLORS.negative, 7.2, 'bold');
+      doc.text(change === undefined ? '-' : formatPercent(change), cellX + columnWidth - 2, rowY, { align: 'right' });
+      cellX += columnWidth;
+    });
   });
 }
 
@@ -403,31 +636,31 @@ function drawCategoryPerformancePanel(doc: jsPDF, x: number, y: number, width: n
   const previousMap = categoryGroupMap(previous?.items ?? [], level, labels.uncategorized);
   const yearAgoMap = categoryGroupMap(yearAgo?.items ?? [], level, labels.uncategorized);
   const innerX = x + 4;
-  const tableY = y + 19;
+  const tableY = y + 18;
   const innerWidth = width - 8;
-  const columns = [innerWidth - 108, 24, 20, 24, 20, 20];
+  const columns = [92, 38, 38, 32, 38, innerWidth - 238];
   drawTableHeader(doc, innerX, tableY, columns, [labels.category, labels.current, labels.previous, labels.vsPrevious, labels.yearAgo, labels.vsYearAgo]);
   currentGroups.forEach((group, index) => {
-    const rowY = tableY + 10 + index * 14;
+    const rowY = tableY + 9.4 + index * 8.6;
     if (index % 2 === 0) {
       setFill(doc, COLORS.surface);
-      doc.roundedRect(innerX, rowY - 5.5, innerWidth, 11.5, 1.5, 1.5, 'F');
+      doc.roundedRect(innerX, rowY - 5, innerWidth, 8, 1.2, 1.2, 'F');
     }
-    setText(doc, COLORS.ink, 6.6, 'bold');
-    doc.text(fitText(doc, categoryLabel(group, locale), columns[0] - 3), innerX + 2, rowY + 1.7);
+    setText(doc, COLORS.ink, 7.6, 'bold');
+    doc.text(fitText(doc, categoryLabel(group, locale), columns[0] - 4), innerX + 2, rowY);
     const previousAmount = previousMap.get(group.id)?.amount;
     const yearAgoAmount = yearAgoMap.get(group.id)?.amount;
     const values: Array<{ text: string; color: RGB; bold?: boolean }> = [
-      { text: compactMoney(group.amount), color: COLORS.ink, bold: true },
-      { text: previousAmount === undefined ? '-' : compactMoney(previousAmount), color: COLORS.slate },
+      { text: formatMoney(group.amount), color: COLORS.ink, bold: true },
+      { text: previousAmount === undefined ? '-' : formatMoney(previousAmount), color: COLORS.slate },
       percentCell(delta(group.amount, previousAmount)),
-      { text: yearAgoAmount === undefined ? '-' : compactMoney(yearAgoAmount), color: COLORS.slate },
+      { text: yearAgoAmount === undefined ? '-' : formatMoney(yearAgoAmount), color: COLORS.slate },
       percentCell(delta(group.amount, yearAgoAmount)),
     ];
     let cellX = innerX + columns[0];
     values.forEach((value, valueIndex) => {
-      setText(doc, value.color, 6.3, value.bold ? 'bold' : 'normal');
-      doc.text(value.text, cellX + columns[valueIndex + 1] - 2, rowY + 1.7, { align: 'right' });
+      setText(doc, value.color, 7.1, value.bold ? 'bold' : 'normal');
+      doc.text(value.text, cellX + columns[valueIndex + 1] - 2, rowY, { align: 'right' });
       cellX += columns[valueIndex + 1];
     });
   });
@@ -558,13 +791,8 @@ function drawRankingPanel(doc: jsPDF, x: number, y: number, width: number, heigh
   });
 }
 
-function drawCategoryCard(doc: jsPDF, x: number, y: number, width: number, height: number, group: CategoryGroup | undefined, metric: Metric, labels: Labels, locale: Locale): void {
+function drawCategoryCard(doc: jsPDF, x: number, y: number, width: number, height: number, group: CategoryGroup, metric: Metric, labels: Labels, locale: Locale): void {
   card(doc, x, y, width, height);
-  if (!group) {
-    setText(doc, COLORS.slate, 8, 'normal');
-    doc.text('-', x + width / 2, y + height / 2, { align: 'center' });
-    return;
-  }
   setFill(doc, COLORS.tealSoft);
   doc.roundedRect(x, y, width, 11, 2, 2, 'F');
   setText(doc, COLORS.ink, 7.7, 'bold');
@@ -572,6 +800,7 @@ function drawCategoryCard(doc: jsPDF, x: number, y: number, width: number, heigh
   setText(doc, COLORS.teal, 6.6, 'bold');
   doc.text(metric === 'amount' ? compactMoney(group.amount) : formatQuantity(group.quantity), x + width - 3, y + 7.1, { align: 'right' });
 
+  const metrics = categoryCardRowMetrics(height);
   const innerX = x + 2.5;
   const columns = [6, width - 50, 23, 16];
   const headerY = y + 15;
@@ -583,23 +812,36 @@ function drawCategoryCard(doc: jsPDF, x: number, y: number, width: number, heigh
   setDraw(doc, COLORS.line);
   doc.line(innerX, headerY + 1.6, x + width - 2.5, headerY + 1.6);
 
-  group.items.slice(0, 15).forEach((item, index) => {
-    const rowY = headerY + 5.2 + index * 3.72;
+  group.items.slice(0, metrics.limit).forEach((item, index) => {
+    const rowY = headerY + 5.2 + index * metrics.row;
     if (index % 2 === 0) {
       setFill(doc, COLORS.surface);
-      doc.rect(innerX, rowY - 2.5, width - 5, 3.55, 'F');
+      doc.rect(innerX, rowY - 2.5, width - 5, metrics.row - 0.17, 'F');
     }
     setText(doc, index < 3 ? COLORS.teal : COLORS.slate, 5.5, 'bold');
     doc.text(String(index + 1), innerX + 1, rowY);
-    setText(doc, COLORS.ink, 5.7, 'normal');
+    setText(doc, COLORS.ink, metrics.nameSize, 'normal');
     doc.text(fitText(doc, item.name || item.code || '-', columns[1] - 2), innerX + columns[0] + 1, rowY);
     const primary = metric === 'amount' ? compactMoney(item.amount) : formatQuantity(item.quantity);
     const secondary = metric === 'amount' ? formatQuantity(item.quantity) : compactMoney(item.amount);
-    setText(doc, COLORS.ink, 5.6, 'bold');
+    setText(doc, COLORS.ink, metrics.numberSize, 'bold');
     doc.text(primary, innerX + columns[0] + columns[1] + columns[2] - 1, rowY, { align: 'right' });
     setText(doc, COLORS.slate, 5.3, 'normal');
     doc.text(secondary, innerX + columns.reduce((sum, value) => sum + value, 0) - 1, rowY, { align: 'right' });
   });
+}
+
+export function categoryCardRowMetrics(height: number): { row: number; nameSize: number; numberSize: number; limit: number } {
+  const compact = height < 100;
+  const row = compact ? 3.72 : 4.35;
+  const nameSize = compact ? 5.7 : 6.4;
+  const numberSize = compact ? 5.6 : 6.2;
+  return {
+    row,
+    nameSize,
+    numberSize,
+    limit: Math.max(0, Math.floor(1 + (height - 23.45) / row)),
+  };
 }
 
 function panelTitle(doc: jsPDF, x: number, y: number, width: number, title: string): void {
@@ -713,6 +955,9 @@ function reportLabels(locale: Locale): Labels {
       categoryPerformance: 'Category performance', category: 'Category',
       topSales: 'Top 15 by sales', topQuantity: 'Top 15 by quantity', salesRanking: 'Category sales ranking',
       quantityRanking: 'Category quantity ranking', product: 'Product', amount: 'Sales', quantity: 'Qty', uncategorized: 'Uncategorized',
+      allStores: 'All stores', storeComparison: 'Store comparison', store: 'Store',
+      weeklyTitle: 'Weekly sales change', thisWeek: 'This week', lastWeek: 'Last week',
+      variance: 'Var', variancePercent: 'Var %', weekday: 'Weekday', weekend: 'Weekend', customers: 'Txns',
     };
   }
   return {
@@ -725,6 +970,9 @@ function reportLabels(locale: Locale): Labels {
     categoryPerformance: '分類表現', category: '分類',
     topSales: '銷售額 Top 15', topQuantity: '銷量 Top 15', salesRanking: '分類商品銷售排行',
     quantityRanking: '分類商品銷量排行', product: '商品', amount: '銷售額', quantity: '銷量', uncategorized: '未分類',
+    allStores: '全部門店', storeComparison: '門店比較', store: '門店',
+    weeklyTitle: '每週銷售變化', thisWeek: '本週', lastWeek: '上週',
+    variance: '差異', variancePercent: '差異 %', weekday: '平日', weekend: '週末', customers: '交易',
   };
 }
 
@@ -763,7 +1011,7 @@ function compactMoney(value: number): string {
 }
 
 function formatQuantity(value: number): string {
-  return formatFixed(value, Math.abs(value - Math.round(value)) < 1e-9 ? 0 : 2);
+  return formatFixed(Math.round(value), 0);
 }
 
 function optionalQuantity(value: number | undefined): string {

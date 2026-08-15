@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { backend } from '../backend';
-  import { defaultWorkbookEndDate, initialPreviewFilter } from '../excelWorkflow';
+  import { defaultWorkbookEndDate, initialPreviewFilter, splitSavedPath } from '../excelWorkflow';
   import { errorMessage, type Translator } from '../i18n';
   import { modal } from '../modal';
   import type {
@@ -72,6 +72,7 @@
   $: progressValue = progress && progress.total > 0 ? Math.min(1, progress.current / progress.total) : 0;
   $: progressPercent = Math.round(progressValue * 100);
   $: progressRemaining = Math.max(0, (progress?.total ?? 0) - (progress?.current ?? 0));
+  $: savedOutput = applyResult ? splitSavedPath(applyResult.outputPath) : { fileName: '', folder: '' };
   $: invalidRange = Boolean(fromDate && toDate && fromDate > toDate);
   $: canAnalyze = Boolean(scan && sheetName && fromDate && toDate && !invalidRange && scan.accounts > 0 && !workflowBusy && !analysis);
   $: partialOverrideAllowed = Boolean(
@@ -452,8 +453,10 @@
 
   <ol class="workflow-steps" aria-label={t('excel.workflow')}>
     {#each [1, 2, 3] as step}
-      <li class:active={workflowStep === step} class:complete={workflowStep > step}>
-        <span>{workflowStep > step ? '✓' : step}</span>
+      <li class:active={workflowStep === step} class:complete={workflowStep > step} aria-current={workflowStep === step ? 'step' : undefined}>
+        <span class="workflow-index" aria-hidden="true">
+          {#if workflowStep > step}<span class="material-symbols-rounded">check</span>{:else}{step}{/if}
+        </span>
         <strong>{t(`excel.step.${step}`)}</strong>
       </li>
     {/each}
@@ -469,6 +472,7 @@
   {#if !inputPath}
     <section
       class="file-drop-card surface-card workbook-drop-target"
+      data-file-drop-target
       class:drop-disabled={workflowBusy}
       aria-label={t('excel.open')}
     >
@@ -486,6 +490,7 @@
     <section
       class="source-card surface-card workbook-drop-target"
       class:drop-disabled={workflowBusy}
+      data-file-drop-target
       aria-labelledby="source-title"
     >
       <div class="source-icon"><span class="material-symbols-rounded" aria-hidden="true">description</span></div>
@@ -640,6 +645,7 @@
               <span class="state-pill" class:profile-enabled={overwrite}>{overwrite ? t('common.on') : t('common.off')}</span>
             </div>
           </div>
+          <small class="field-hint">{t('excel.overwriteLocked')}</small>
           <div class="divider"></div>
           <div class="write-option">
             <strong>{t('excel.partialLabel')}</strong>
@@ -699,18 +705,38 @@
     {#if applyResult}
       <section bind:this={successSection} class="success-card surface-card" aria-labelledby="saved-title" aria-live="polite" tabindex="-1">
         <div class="success-symbol"><span class="material-symbols-rounded" aria-hidden="true">task_alt</span></div>
-        <div>
+        <div class="success-copy">
           <h2 id="saved-title">{t('excel.savedTitle')}</h2>
           <p>{t('excel.savedBody', { changed: applyResult.changedCells, skipped: applyResult.skippedRows })}</p>
-          <span class="label">{t('excel.savedPath')}</span>
-          <code title={applyResult.outputPath}>{applyResult.outputPath}</code>
+          <dl class="saved-output">
+            <div>
+              <dt class="label">{t('excel.savedFileName')}</dt>
+              <dd>
+                <button
+                  type="button"
+                  class="saved-file-name"
+                  title={t('excel.openSaved')}
+                  disabled={openingSaved || revealingSaved || !applyResult.outputPath}
+                  onclick={openSavedFile}
+                >{savedOutput.fileName || applyResult.outputPath}</button>
+              </dd>
+            </div>
+            {#if savedOutput.folder}
+              <div>
+                <dt class="label">{t('excel.savedFolder')}</dt>
+                <dd>
+                  <code class="saved-folder" title={applyResult.outputPath}>{savedOutput.folder}</code>
+                </dd>
+              </div>
+            {/if}
+          </dl>
         </div>
         <div class="success-actions">
-          <md-filled-button onclick={openSavedFile} disabled={openingSaved || revealingSaved}>
+          <md-filled-button onclick={openSavedFile} disabled={openingSaved || revealingSaved || !applyResult.outputPath}>
             <span class="material-symbols-rounded" slot="icon">file_open</span>
             {openingSaved ? t('excel.openingSaved') : t('excel.openSaved')}
           </md-filled-button>
-          <md-outlined-button onclick={revealSavedFile} disabled={openingSaved || revealingSaved}>
+          <md-outlined-button onclick={revealSavedFile} disabled={openingSaved || revealingSaved || !applyResult.outputPath}>
             <span class="material-symbols-rounded" slot="icon">folder_open</span>
             {revealingSaved ? t('excel.revealingSaved') : t('excel.showInFolder')}
           </md-outlined-button>

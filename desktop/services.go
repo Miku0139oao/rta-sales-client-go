@@ -7,6 +7,10 @@ import (
 	"github.com/Miku0139oao/rta-sales-client-go/securestore"
 )
 
+// FileDropEventName is emitted when the user drops files onto a window
+// drop target. The payload is []string of absolute paths.
+const FileDropEventName = "rta:file-drop"
+
 type fileDialogOptions struct {
 	Title            string
 	DefaultDirectory string
@@ -68,5 +72,8 @@ func (rtaClientFactory) New(credential securestore.Credential, cookieStore rtasa
 		CaptchaSolvers: []rtasales.CaptchaSolver{rtasales.NewEmbeddedOCRSolver(rtasales.EmbeddedOCRConfig{})},
 		CookieStore:    cookieStore,
 		LoginAttempts:  4,
+		// Store jobs already run up to 32-wide. Keep page fan-out off so one
+		// multi-page store does not multiply that load against RTA.
+		PageConcurrency: 1,
 	})
 }

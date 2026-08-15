@@ -48,6 +48,14 @@ afterEach(() => {
 });
 
 describe('Excel safety workflow', () => {
+  it('marks the first workflow step as current before a file is opened', () => {
+    render(ExcelPage, {
+      props: { t: translator('zh-TW'), settings: defaultSettings, onGoToAccounts: vi.fn() },
+    });
+    expect(screen.getByText('選擇範圍').closest('li')).toHaveAttribute('aria-current', 'step');
+    expect(screen.getByText('檢查結果').closest('li')).not.toHaveAttribute('aria-current');
+  });
+
   it('scans a dropped .xlsx workbook and rejects unsupported drops', async () => {
     let dropListener: ((paths: string[]) => void) | undefined;
     const scanWorkbook = vi.fn(async (input: unknown) => {
@@ -314,8 +322,8 @@ describe('Excel safety workflow', () => {
         OpenWorkbook: vi.fn(async () => 'D:\\sales.xlsx'),
         ScanWorkbook: vi.fn(async () => scan),
         Analyze: vi.fn(async () => result()),
-        SaveWorkbook: vi.fn(async () => 'D:\\filled.xlsx'),
-        Apply: vi.fn(async () => ({ outputPath: 'D:\\filled.xlsx', changedCells: 2, skippedRows: 0 })),
+        SaveWorkbook: vi.fn(async () => 'D:\\reports\\filled.xlsx'),
+        Apply: vi.fn(async () => ({ outputPath: 'D:\\reports\\filled.xlsx', changedCells: 2, skippedRows: 0 })),
         OpenSavedWorkbook: openSavedWorkbook,
         RevealSavedWorkbook: revealSavedWorkbook,
       },
@@ -328,12 +336,17 @@ describe('Excel safety workflow', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: '檢查分析結果' })).toBeInTheDocument());
     await fireEvent.click(button(container, '另存並寫入'));
     await waitFor(() => expect(screen.getByRole('heading', { name: '已建立新檔案' })).toBeInTheDocument());
-    expect(screen.getByText('D:\\filled.xlsx')).toBeInTheDocument();
+    expect(screen.getByText('檔案名稱')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'filled.xlsx' })).toBeInTheDocument();
+    expect(screen.getByText('位置')).toBeInTheDocument();
+    expect(screen.getByText('D:\\reports')).toBeInTheDocument();
 
+    await fireEvent.click(screen.getByRole('button', { name: 'filled.xlsx' }));
+    await waitFor(() => expect(openSavedWorkbook).toHaveBeenCalledWith({ path: 'D:\\reports\\filled.xlsx' }));
     await fireEvent.click(button(container, '開啟檔案'));
-    await waitFor(() => expect(openSavedWorkbook).toHaveBeenCalledWith({ path: 'D:\\filled.xlsx' }));
+    await waitFor(() => expect(openSavedWorkbook).toHaveBeenCalledTimes(2));
     await fireEvent.click(button(container, '在資料夾中顯示'));
-    await waitFor(() => expect(revealSavedWorkbook).toHaveBeenCalledWith({ path: 'D:\\filled.xlsx' }));
+    await waitFor(() => expect(revealSavedWorkbook).toHaveBeenCalledWith({ path: 'D:\\reports\\filled.xlsx' }));
   });
 
   it('does not infer retry work when the backend explicitly returns zero', async () => {

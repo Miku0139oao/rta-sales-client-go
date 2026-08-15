@@ -129,11 +129,14 @@ describe('desktop application shell', () => {
 
   it('moves focus and scroll position immediately after page navigation', async () => {
     render(App);
+    const main = document.querySelector('#main-content') as HTMLElement;
+    main.scrollTop = 240;
     document.documentElement.scrollTop = 240;
     await fireEvent.click(screen.getAllByRole('button', { name: /帳號/ })[0]);
     await waitFor(() => expect(screen.getByRole('heading', { name: '帳號設定檔' })).toBeInTheDocument());
 
+    expect(main.scrollTop).toBe(0);
     expect(document.documentElement.scrollTop).toBe(0);
-    expect(document.activeElement).toBe(document.querySelector('#main-content'));
+    expect(document.activeElement).toBe(main);
   });
 });

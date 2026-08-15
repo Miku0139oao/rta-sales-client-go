@@ -47,6 +47,20 @@ const analysisResult: SalesAnalysisResult = {
   ],
   issues: [],
   queryDurationMs: 100,
+  weeks: [{
+    from: '2026-08-03', to: '2026-08-09',
+    totals: {
+      salesTw: 200, salesLw: 100, customersTw: 20, customersLw: 10,
+      weekdaySalesTw: 120, weekdaySalesLw: 70, weekendSalesTw: 80, weekendSalesLw: 30,
+      weekdayCustomersTw: 12, weekdayCustomersLw: 6, weekendCustomersTw: 8, weekendCustomersLw: 4,
+    },
+    stores: [{
+      businessId: '107', label: '107 - Central',
+      salesTw: 200, salesLw: 100, customersTw: 20, customersLw: 10,
+      weekdaySalesTw: 120, weekdaySalesLw: 70, weekendSalesTw: 80, weekendSalesLw: 30,
+      weekdayCustomersTw: 12, weekdayCustomersLw: 6, weekendCustomersTw: 8, weekendCustomersLw: 4,
+    }],
+  }],
 };
 
 analysisResult.periods = [
@@ -64,6 +78,62 @@ afterEach(() => {
 });
 
 describe('sales analysis page', () => {
+  it('lists sixteen simulated stores when the testing option is enabled', async () => {
+    const listStores = vi.fn(async (_request: unknown) => (
+      Array.from({ length: 16 }, (_, index) => ({
+        businessId: index === 0 ? '107' : `107~sim${String(index + 1).padStart(2, '0')}`,
+        label: index === 0 ? '107 - Central' : `107 - Central · 模擬 ${String(index + 1).padStart(2, '0')}`,
+      }))
+    ));
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [{
+        id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
+      }]),
+      ListSalesAnalysisStores: listStores,
+    } });
+    render(AnalysisPage, {
+      props: { t: translator('zh-TW'), settings: { ...defaultSettings, simulateStoreCount: 16 } },
+    });
+
+    await waitFor(() => expect(screen.getByText('已選 16 間門店')).toBeInTheDocument());
+    expect(listStores).toHaveBeenCalledWith({ profileId: 'profile-1', simulateStoreCount: 16 });
+    expect(screen.getByText('107 - Central · 模擬 16')).toBeInTheDocument();
+  });
+
+  it('loads packed product rows after a slim analysis summary', async () => {
+    const getSalesAnalysisItems = vi.fn(async () => ({
+      periodKey: 'current',
+      dict: ['', '552646', 'Mask', 'A-HEALTH & BEAUTY', 'A', 'BEAUTY CARE', 'A02', 'SKIN CARE', 'A0201', 'FACIAL', 'MASQUE'],
+      rows: [{ s: 0, ac: 1, an: 2, c1: 3, k1: 4, c2: 5, k2: 6, c3: 7, k3: 8, c4: 9, c5: 10, t: 2, sq: 3, sa: 110, nq: 2, ns: 100 }],
+    }));
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [{
+        id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
+      }]),
+      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      RunSalesAnalysis: vi.fn(async () => ({
+        operationId: 'slim-1', from: '2026-08-01', to: '2026-08-31', complete: true,
+        selectedStores: 1, successfulStores: 1, queryDurationMs: 10,
+        totals: analysisResult.totals, stores: [{ businessId: '107', label: '107 - Central', totals: analysisResult.totals }],
+        periods: [{
+          key: 'current', label: '本期', from: '2026-08-01', to: '2026-08-31', complete: true,
+          successfulStores: 1, itemCount: 1, totals: analysisResult.totals,
+          stores: [{ businessId: '107', label: '107 - Central', totals: analysisResult.totals }],
+        }],
+      })),
+      GetSalesAnalysisItems: getSalesAnalysisItems,
+      ClearSalesAnalysis: vi.fn(async () => undefined),
+    } });
+    render(AnalysisPage, {
+      props: { t: translator('zh-TW'), settings: defaultSettings },
+    });
+    await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
+    await fireEvent.click(screen.getByText('開始分析'));
+    await waitFor(() => expect(getSalesAnalysisItems).toHaveBeenCalledWith({ operationId: 'slim-1', periodKey: 'current' }));
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' }).closest('section')).toHaveTextContent('Mask'));
+    expect(screen.queryByText('沒有符合條件的資料')).not.toBeInTheDocument();
+  });
+
   it('queries multiple stores through one profile and filters all five category levels locally', async () => {
     const runSalesAnalysis = vi.fn(async (..._args: unknown[]) => analysisResult);
     const chooseSalesAnalysisPDFDirectory = vi.fn(async () => 'D:\\RTA Reports');
@@ -71,6 +141,7 @@ describe('sales analysis page', () => {
       const request = args[0] as { directory: string; filename: string; dataBase64: string };
       return `${request.directory}\\${request.filename}`;
     });
+    const openSavedFolder = vi.fn(async () => undefined);
     configureBackend({ methods: {
       ListProfiles: vi.fn(async () => [{
         id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
@@ -80,8 +151,21 @@ describe('sales analysis page', () => {
         { businessId: '108', label: '108 - Harbour' },
       ]),
       RunSalesAnalysis: runSalesAnalysis,
+      ClearSalesAnalysis: vi.fn(async () => undefined),
+      GetSalesAnalysisItems: vi.fn(async (request: unknown) => {
+        const { periodKey } = request as { periodKey: string };
+        return {
+          periodKey,
+          dict: ['', '552646', 'Mask', 'A-HEALTH & BEAUTY', 'A', 'BEAUTY CARE', 'A02', 'SKIN CARE', 'A0201', 'FACIAL', 'MASQUE', '900001', 'Wipes', 'B-NON FOOD', 'HOUSEHOLD', 'CLEANING', 'SURFACE', 'WIPES'],
+          rows: [
+            { s: 0, ac: 1, an: 2, c1: 3, k1: 4, c2: 5, k2: 6, c3: 7, k3: 8, c4: 9, c5: 10, t: 2, sq: 3, sa: 110, nq: 2, ns: 100 },
+            { s: 1, ac: 11, an: 12, c1: 13, c2: 14, c3: 15, c4: 16, c5: 17, t: 1, sq: 2, sa: 80, nq: 2, ns: 80 },
+          ],
+        };
+      }),
       ChooseSalesAnalysisPDFDirectory: chooseSalesAnalysisPDFDirectory,
       WriteSalesAnalysisPDF: writeSalesAnalysisPDF,
+      OpenSavedFolder: openSavedFolder,
     } });
     const { container } = render(AnalysisPage, {
       props: { t: translator('zh-TW'), settings: { ...defaultSettings, accountConcurrency: 4 } },
@@ -107,17 +191,22 @@ describe('sales analysis page', () => {
     expect(topSales?.querySelector('.top-metrics')).toHaveTextContent('2 件');
     expect(topQuantity?.querySelector('.top-metrics')).toHaveTextContent('2 件');
     expect(topQuantity?.querySelector('.top-metrics')).toHaveTextContent('100.00');
-    await fireEvent.click(screen.getByText('匯出門店 PDF'));
-    await waitFor(() => expect(writeSalesAnalysisPDF).toHaveBeenCalledTimes(2));
+    await fireEvent.click(screen.getByText('匯出 PDF（總報告 + 分店）'));
+    await waitFor(() => expect(writeSalesAnalysisPDF).toHaveBeenCalledTimes(3));
     expect(chooseSalesAnalysisPDFDirectory).toHaveBeenCalledOnce();
     const firstPDF = writeSalesAnalysisPDF.mock.calls[0]![0] as { directory: string; filename: string; dataBase64: string };
     expect(firstPDF).toMatchObject({
-      directory: 'D:\\RTA Reports', filename: 'RTA-Sales-107-20260801-20260831.pdf',
+      directory: 'D:\\RTA Reports', filename: 'RTA-Sales-all-20260801-20260831.pdf',
     });
     expect(firstPDF.dataBase64).toBe(btoa('%PDF-1.7\nmock report'));
-    expect(screen.getByRole('status')).toHaveTextContent('已匯出 2 份報告至 D:\\RTA Reports');
+    expect(writeSalesAnalysisPDF.mock.calls[1]?.[0]).toMatchObject({ filename: 'RTA-Sales-107-20260801-20260831.pdf' });
+    expect(writeSalesAnalysisPDF.mock.calls[2]?.[0]).toMatchObject({ filename: 'RTA-Sales-108-20260801-20260831.pdf' });
+    expect(screen.getByRole('status')).toHaveTextContent(/已匯出 1 份總報告與 2 份分店報告/);
+    expect(screen.getByRole('status')).toHaveTextContent('D:\\RTA Reports');
+    await fireEvent.click(screen.getByText('開啟資料夾'));
+    await waitFor(() => expect(openSavedFolder).toHaveBeenCalledWith({ path: 'D:\\RTA Reports' }));
     expect(runSalesAnalysis).toHaveBeenCalledWith({
-      profileId: 'profile-1', storeIds: ['107', '108'], concurrency: 4,
+      profileId: 'profile-1', storeIds: ['107', '108'], concurrency: 4, simulateStoreCount: 0,
       periods: [
         { key: 'current', label: '本期', from: '2026-08-01', to: '2026-08-31', includeTrend: true },
         { key: 'previous', label: '上期', from: '2026-07-01', to: '2026-07-31', includeTrend: true },
@@ -126,10 +215,14 @@ describe('sales analysis page', () => {
         { key: 'yearAgoNext', label: '去年下月', from: '2025-09-01', to: '2025-09-30', includeTrend: false },
       ],
     });
+    await fireEvent.click(screen.getByRole('tab', { name: '每週變化' }));
+    expect(screen.getByRole('heading', { name: '每週銷售變化' })).toBeInTheDocument();
+    expect(screen.getByText('本週')).toBeInTheDocument();
+    expect(screen.getByText('上週')).toBeInTheDocument();
     await fireEvent.click(screen.getByRole('tab', { name: '關注' }));
     expect(screen.getByRole('heading', { name: '接下來關注' })).toBeInTheDocument();
     expect(screen.getByText('去年下月熱賣，用來準備接下來要補貨或推廣的商品。')).toBeInTheDocument();
-    expect(screen.getByText('護膚')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('護膚')).toBeInTheDocument());
     expect(screen.getAllByText('Mask').length).toBeGreaterThan(0);
     await fireEvent.click(screen.getByRole('tab', { name: '商品' }));
     expect(screen.getByText('Mask')).toBeInTheDocument();

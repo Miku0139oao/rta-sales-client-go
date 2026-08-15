@@ -6,9 +6,10 @@ export const defaultSettings: AppSettings = {
   locale: 'zh-TW',
   theme: 'system',
   maxJobs: 2000,
-  accountConcurrency: 16,
+  accountConcurrency: 32,
   useLocalMapping: false,
   mappingPath: '',
+  simulateStoreCount: 0,
 };
 
 function clampInteger(value: unknown, fallback: number, min: number, max: number): number {
@@ -24,6 +25,7 @@ export function normalizeSettings(value: Partial<AppSettings>): AppSettings {
     accountConcurrency: clampInteger(value.accountConcurrency, defaultSettings.accountConcurrency, 1, 32),
     useLocalMapping: value.useLocalMapping === true,
     mappingPath: typeof value.mappingPath === 'string' ? value.mappingPath : '',
+    simulateStoreCount: clampInteger(value.simulateStoreCount, defaultSettings.simulateStoreCount, 0, 32),
   };
 }
 

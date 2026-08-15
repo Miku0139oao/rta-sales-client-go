@@ -18,6 +18,10 @@ const salesPageSize = 1000
 
 const trendTransactionPageSize = 50
 
+// salesMaxInclusiveDays is RTA's inclusive calendar-date limit. Wider ranges
+// must be split into multiple requests and merged locally.
+const salesMaxInclusiveDays = 90
+
 var trendTransactionColumns = []string{
 	"show_date",
 	"base_currency",
@@ -32,7 +36,8 @@ var trendTransactionColumns = []string{
 }
 
 // SalesQuery selects an inclusive calendar-date range for one business store.
-// ItemCodes is optional; an empty slice queries all products.
+// ItemCodes is optional; an empty slice queries all products. Ranges wider
+// than 90 calendar days are split into multiple RTA requests and merged.
 type SalesQuery struct {
 	BusinessStoreID string
 	StartDate       time.Time
@@ -42,6 +47,9 @@ type SalesQuery struct {
 	// SkipTrend avoids the additional whole-store Trend View request when the
 	// caller only needs Article View rows and category metrics.
 	SkipTrend bool
+	// Compact skips the unused raw-row map and per-category item copies so
+	// multi-store desktop analysis does not keep three copies of every SKU.
+	Compact bool
 }
 
 // SaleItem preserves the typed RTA sales fields and the complete raw row.
@@ -94,11 +102,22 @@ type SalesResult struct {
 	// TotalTransactionCount is the Trend View transaction total for the
 	// selected calendar-date range. It is never derived from item rows because
 	// one transaction can contain multiple items.
-	TotalTransactionCount *float64            `json:"total_transaction_count,omitempty"`
-	GrossQuantity         float64             `json:"gross_quantity"`
-	Items                 []SaleItem          `json:"items"`
-	Categories            []CategoryAggregate `json:"categories"`
-	QueryDuration         time.Duration       `json:"query_duration"`
+	TotalTransactionCount *float64 `json:"total_transaction_count,omitempty"`
+	// TrendDays is the dated Trend View series. It includes a prior full week
+	// so callers can compute this-week vs last-week without another request.
+	// Totals above still cover only StartDate through EndDate.
+	TrendDays     []TrendDay          `json:"trend_days,omitempty"`
+	GrossQuantity float64             `json:"gross_quantity"`
+	Items         []SaleItem          `json:"items"`
+	Categories    []CategoryAggregate `json:"categories"`
+	QueryDuration time.Duration       `json:"query_duration"`
+}
+
+// TrendDay is one calendar day's whole-store Trend View totals.
+type TrendDay struct {
+	Date              string  `json:"date"`
+	GrossSaleAmount   float64 `json:"gross_sale_amount"`
+	TransactionCount  float64 `json:"transaction_count"`
 }
 
 type salesQueryPayload struct {
@@ -174,11 +193,19 @@ type trendTransactionDataEnvelope struct {
 type trendTotals struct {
 	grossSaleAmount  *float64
 	transactionCount *float64
+	days             []TrendDay
+}
+
+type salesDateWindow struct {
+	start time.Time
+	end   time.Time
 }
 
 // Sales resolves the requested business store through RTA's authenticated
 // authorized-store list, fetches every result page, and returns raw rows plus
 // deterministic aggregates. RTA's query-only store values remain private.
+// Inclusive ranges longer than 90 calendar days are queried as adjacent
+// windows and merged so callers can request a wider span than RTA accepts.
 func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, error) {
 	started := time.Now()
 	query, err := validateSalesQuery(query)
@@ -189,32 +216,11 @@ func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, err
 	if err != nil {
 		return nil, err
 	}
-	payload := newSalesPayload(query)
-	payload.StoreID = store.upstreamID
-	payload.StoreIDString = store.filterText
-	firstItems, totalPages, err := c.fetchSalesPage(ctx, payload, 1)
+	items, trend, err := c.fetchSalesWindows(ctx, query, store)
 	if err != nil {
 		return nil, err
 	}
-	pages := make([][]SaleItem, totalPages)
-	pages[0] = firstItems
-	if totalPages > 1 {
-		if err := c.fetchRemainingSalesPages(ctx, payload, pages); err != nil {
-			return nil, err
-		}
-	}
-	items := make([]SaleItem, 0)
-	for _, page := range pages {
-		items = append(items, page...)
-	}
-	trend := trendTotals{}
-	if !query.SkipTrend {
-		trend, err = c.fetchTrendTotals(ctx, query, store)
-		if err != nil {
-			return nil, err
-		}
-	}
-	total, quantity, categories := aggregateSales(items)
+	total, quantity, categories := aggregateSales(items, query.Compact)
 	return &SalesResult{
 		Store:                 store.Store,
 		StartDate:             query.StartDate.Format("2006-01-02"),
@@ -224,6 +230,7 @@ func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, err
 		TotalAmount:           total,
 		TrendGrossSaleAmount:  trend.grossSaleAmount,
 		TotalTransactionCount: trend.transactionCount,
+		TrendDays:             trend.days,
 		GrossQuantity:         quantity,
 		Items:                 items,
 		Categories:            categories,
@@ -231,74 +238,250 @@ func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, err
 	}, nil
 }
 
+func (c *Client) fetchSalesWindows(ctx context.Context, query SalesQuery, store storeRecord) ([]SaleItem, trendTotals, error) {
+	windows := splitSalesDateRange(query.StartDate, query.EndDate)
+	type trendFetch struct {
+		trend trendTotals
+		err   error
+	}
+	var trendDone chan trendFetch
+	if !query.SkipTrend {
+		trendDone = make(chan trendFetch, 1)
+		go func() {
+			trend, err := c.fetchTrendSeries(ctx, query, store)
+			trendDone <- trendFetch{trend: trend, err: err}
+		}()
+	}
+	var items []SaleItem
+	for _, window := range windows {
+		windowQuery := query
+		windowQuery.StartDate = window.start
+		windowQuery.EndDate = window.end
+		payload := newSalesPayload(windowQuery)
+		payload.StoreID = store.upstreamID
+		payload.StoreIDString = store.filterText
+		windowItems, err := c.fetchArticleItems(ctx, payload, query.Compact)
+		if err != nil {
+			if trendDone != nil {
+				<-trendDone
+			}
+			return nil, trendTotals{}, err
+		}
+		items = append(items, windowItems...)
+	}
+	if len(windows) > 1 {
+		items = mergeSaleItems(items)
+	}
+	if trendDone == nil {
+		return items, trendTotals{}, nil
+	}
+	fetched := <-trendDone
+	if fetched.err != nil {
+		return nil, trendTotals{}, fetched.err
+	}
+	return items, fetched.trend, nil
+}
+
+func (c *Client) fetchSalesViews(ctx context.Context, query SalesQuery, payload salesQueryPayload, store storeRecord) ([]SaleItem, trendTotals, error) {
+	if query.SkipTrend {
+		items, err := c.fetchArticleItems(ctx, payload, query.Compact)
+		return items, trendTotals{}, err
+	}
+	type articleFetch struct {
+		items []SaleItem
+		err   error
+	}
+	articles := make(chan articleFetch, 1)
+	go func() {
+		items, err := c.fetchArticleItems(ctx, payload, query.Compact)
+		articles <- articleFetch{items: items, err: err}
+	}()
+	trend, trendErr := c.fetchTrendTotals(ctx, query, store)
+	article := <-articles
+	if article.err != nil {
+		return nil, trendTotals{}, article.err
+	}
+	if trendErr != nil {
+		return nil, trendTotals{}, trendErr
+	}
+	return article.items, trend, nil
+}
+
+func (c *Client) fetchArticleItems(ctx context.Context, payload salesQueryPayload, compact bool) ([]SaleItem, error) {
+	firstItems, totalPages, err := c.fetchSalesPage(ctx, payload, 1, compact)
+	if err != nil {
+		return nil, err
+	}
+	pages := make([][]SaleItem, totalPages)
+	pages[0] = firstItems
+	if totalPages > 1 {
+		if err := c.fetchRemainingSalesPages(ctx, payload, pages, compact); err != nil {
+			return nil, err
+		}
+	}
+	items := make([]SaleItem, 0)
+	for _, page := range pages {
+		items = append(items, page...)
+	}
+	return items, nil
+}
+
+func (c *Client) fetchTrendSeries(ctx context.Context, query SalesQuery, store storeRecord) (trendTotals, error) {
+	originStart := calendarDate(query.StartDate)
+	originEnd := calendarDate(query.EndDate)
+	lookbackStart := startOfISOWeek(originStart.AddDate(0, 0, -7))
+	var days []TrendDay
+	for _, window := range splitSalesDateRange(lookbackStart, originEnd) {
+		windowDays, err := c.fetchTrendDays(ctx, window.start, window.end, store)
+		if err != nil {
+			return trendTotals{}, err
+		}
+		days = append(days, windowDays...)
+	}
+	days = mergeTrendDays(days)
+	originStartKey := originStart.Format("2006-01-02")
+	originEndKey := originEnd.Format("2006-01-02")
+	salesTotal := 0.0
+	ticketTotal := 0.0
+	found := false
+	for _, day := range days {
+		if day.Date < originStartKey || day.Date > originEndKey {
+			continue
+		}
+		salesTotal += day.GrossSaleAmount
+		ticketTotal += day.TransactionCount
+		found = true
+	}
+	if len(days) == 0 {
+		return trendTotals{}, nil
+	}
+	result := trendTotals{days: days}
+	if found {
+		result.grossSaleAmount = &salesTotal
+		result.transactionCount = &ticketTotal
+	}
+	return result, nil
+}
+
 func (c *Client) fetchTrendTotals(ctx context.Context, query SalesQuery, store storeRecord) (trendTotals, error) {
+	days, err := c.fetchTrendDays(ctx, query.StartDate, query.EndDate, store)
+	if err != nil {
+		return trendTotals{}, err
+	}
+	if len(days) == 0 {
+		return trendTotals{}, nil
+	}
+	salesTotal := 0.0
+	ticketTotal := 0.0
+	for _, day := range days {
+		salesTotal += day.GrossSaleAmount
+		ticketTotal += day.TransactionCount
+	}
+	return trendTotals{grossSaleAmount: &salesTotal, transactionCount: &ticketTotal, days: days}, nil
+}
+
+func (c *Client) fetchTrendDays(ctx context.Context, start, end time.Time, store storeRecord) ([]TrendDay, error) {
 	payload := trendTransactionQueryPayload{
 		SiteCode:     store.BusinessID,
 		DateType:     "1",
-		CurrentStart: query.StartDate.Format("2006-01-02"),
-		CurrentEnd:   query.EndDate.Format("2006-01-02"),
+		CurrentStart: start.Format("2006-01-02"),
+		CurrentEnd:   end.Format("2006-01-02"),
 		CalendarUnit: "one",
 	}
 	queryJSON, err := json.Marshal(payload)
 	if err != nil {
-		return trendTotals{}, err
+		return nil, err
 	}
 	columnsJSON, err := json.Marshal(trendTransactionColumns)
 	if err != nil {
-		return trendTotals{}, err
+		return nil, err
 	}
-	transactionTotal := 0.0
-	grossSaleTotal := 0.0
-	found := false
-	startKey := query.StartDate.Format("20060102")
-	endKey := query.EndDate.Format("20060102")
+	startKey := calendarDate(start).Format("20060102")
+	endKey := calendarDate(end).Format("20060102")
+	days := make([]TrendDay, 0)
 	for page := 1; ; page++ {
 		rows, count, err := c.fetchTrendTransactionPage(ctx, queryJSON, columnsJSON, page)
 		if err != nil {
-			return trendTotals{}, err
+			return nil, err
 		}
 		for _, row := range rows {
 			dateText := strings.TrimSpace(stringFrom(row["show_date"]))
 			if dateText == "" {
 				continue
 			}
-			dateKey, err := trendDateKey(dateText)
+			parsed, err := parseTrendDate(dateText)
 			if err != nil {
-				return trendTotals{}, &ProtocolError{Operation: "fetch Trend View totals", Message: "a Trend View row has an invalid date", Err: err}
+				return nil, &ProtocolError{Operation: "fetch Trend View totals", Message: "a Trend View row has an invalid date", Err: err}
 			}
+			dateKey := parsed.Format("20060102")
 			if dateKey < startKey || dateKey > endKey {
 				continue
 			}
 			transactionCount := optionalFloatFrom(row["group_sales_ticket_num"])
 			if transactionCount == nil {
-				return trendTotals{}, &ProtocolError{Operation: "fetch Trend View totals", Message: "a dated Trend View row has no valid transaction count"}
+				return nil, &ProtocolError{Operation: "fetch Trend View totals", Message: "a dated Trend View row has no valid transaction count"}
 			}
 			grossSaleAmount := optionalFloatFrom(row["gross_sales_gross_sale_untaxed_amt"])
 			if grossSaleAmount == nil {
-				return trendTotals{}, &ProtocolError{Operation: "fetch Trend View totals", Message: "a dated Trend View row has no valid gross sales amount"}
+				return nil, &ProtocolError{Operation: "fetch Trend View totals", Message: "a dated Trend View row has no valid gross sales amount"}
 			}
-			transactionTotal += *transactionCount
-			grossSaleTotal += *grossSaleAmount
-			found = true
+			days = append(days, TrendDay{
+				Date:             parsed.Format("2006-01-02"),
+				GrossSaleAmount:  *grossSaleAmount,
+				TransactionCount: *transactionCount,
+			})
 		}
 		if page*trendTransactionPageSize >= count || len(rows) == 0 {
 			break
 		}
 	}
-	if !found {
-		return trendTotals{}, nil
-	}
-	return trendTotals{grossSaleAmount: &grossSaleTotal, transactionCount: &transactionTotal}, nil
+	return days, nil
 }
 
 func trendDateKey(value string) (string, error) {
+	parsed, err := parseTrendDate(value)
+	if err != nil {
+		return "", err
+	}
+	return parsed.Format("20060102"), nil
+}
+
+func parseTrendDate(value string) (time.Time, error) {
 	for _, layout := range []string{"02-01-2006", "2006-01-02"} {
 		parsed, err := time.Parse(layout, value)
 		if err == nil {
-			return parsed.Format("20060102"), nil
+			return parsed, nil
 		}
 	}
-	return "", fmt.Errorf("unsupported date %q", value)
+	return time.Time{}, fmt.Errorf("unsupported date %q", value)
+}
+
+func startOfISOWeek(value time.Time) time.Time {
+	value = calendarDate(value)
+	weekday := int(value.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	return value.AddDate(0, 0, -(weekday - 1))
+}
+
+func mergeTrendDays(days []TrendDay) []TrendDay {
+	if len(days) < 2 {
+		return days
+	}
+	indexByDate := make(map[string]int, len(days))
+	merged := make([]TrendDay, 0, len(days))
+	for _, day := range days {
+		if index, exists := indexByDate[day.Date]; exists {
+			merged[index].GrossSaleAmount += day.GrossSaleAmount
+			merged[index].TransactionCount += day.TransactionCount
+			continue
+		}
+		indexByDate[day.Date] = len(merged)
+		merged = append(merged, day)
+	}
+	sort.Slice(merged, func(left, right int) bool { return merged[left].Date < merged[right].Date })
+	return merged
 }
 
 func (c *Client) fetchTrendTransactionPage(ctx context.Context, queryJSON, columnsJSON []byte, page int) ([]map[string]any, int, error) {
@@ -379,6 +562,90 @@ func validateSalesQuery(query SalesQuery) (SalesQuery, error) {
 	return query, nil
 }
 
+func splitSalesDateRange(start, end time.Time) []salesDateWindow {
+	start = calendarDate(start)
+	end = calendarDate(end)
+	windows := make([]salesDateWindow, 0, 1)
+	for !start.After(end) {
+		windowEnd := start.AddDate(0, 0, salesMaxInclusiveDays-1)
+		if windowEnd.After(end) {
+			windowEnd = end
+		}
+		windows = append(windows, salesDateWindow{start: start, end: windowEnd})
+		start = windowEnd.AddDate(0, 0, 1)
+	}
+	return windows
+}
+
+func calendarDate(value time.Time) time.Time {
+	year, month, day := value.Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, value.Location())
+}
+
+func mergeSaleItems(items []SaleItem) []SaleItem {
+	if len(items) < 2 {
+		return items
+	}
+	indexByMatnr := make(map[string]int, len(items))
+	merged := make([]SaleItem, 0, len(items))
+	for _, item := range items {
+		key := strings.TrimSpace(item.Matnr)
+		if key == "" {
+			merged = append(merged, item)
+			continue
+		}
+		if index, exists := indexByMatnr[key]; exists {
+			merged[index] = addSaleItems(merged[index], item)
+			continue
+		}
+		indexByMatnr[key] = len(merged)
+		merged = append(merged, item)
+	}
+	return merged
+}
+
+func addSaleItems(left, right SaleItem) SaleItem {
+	left.TPTransactionCount += right.TPTransactionCount
+	left.TPTransactionCountAgg = addOptionalFloats(left.TPTransactionCountAgg, right.TPTransactionCountAgg)
+	left.TPSaleQuantity += right.TPSaleQuantity
+	left.TPSaleAmount += right.TPSaleAmount
+	left.TPReturnTransactionCount += right.TPReturnTransactionCount
+	left.TPReturnTransactionCountAgg = addOptionalFloats(left.TPReturnTransactionCountAgg, right.TPReturnTransactionCountAgg)
+	left.TPReturnSaleQuantity += right.TPReturnSaleQuantity
+	left.TPReturnSaleAmount += right.TPReturnSaleAmount
+	left.TPGrossSaleQuantity += right.TPGrossSaleQuantity
+	left.TPGrossSaleAmount += right.TPGrossSaleAmount
+	if strings.TrimSpace(left.ArticleName) == "" {
+		left.ArticleName = right.ArticleName
+	}
+	if strings.TrimSpace(left.BrandName) == "" {
+		left.BrandName = right.BrandName
+	}
+	return left
+}
+
+func addTrendTotals(left, right trendTotals) trendTotals {
+	return trendTotals{
+		grossSaleAmount:  addOptionalFloats(left.grossSaleAmount, right.grossSaleAmount),
+		transactionCount: addOptionalFloats(left.transactionCount, right.transactionCount),
+		days:             mergeTrendDays(append(append([]TrendDay(nil), left.days...), right.days...)),
+	}
+}
+
+func addOptionalFloats(left, right *float64) *float64 {
+	if left == nil && right == nil {
+		return nil
+	}
+	sum := 0.0
+	if left != nil {
+		sum += *left
+	}
+	if right != nil {
+		sum += *right
+	}
+	return &sum
+}
+
 func newSalesPayload(query SalesQuery) salesQueryPayload {
 	start := query.StartDate.Format("20060102")
 	end := query.EndDate.Format("20060102")
@@ -398,7 +665,7 @@ func newSalesPayload(query SalesQuery) salesQueryPayload {
 	}
 }
 
-func (c *Client) fetchSalesPage(ctx context.Context, payload salesQueryPayload, page int) ([]SaleItem, int, error) {
+func (c *Client) fetchSalesPage(ctx context.Context, payload salesQueryPayload, page int, compact bool) ([]SaleItem, int, error) {
 	queryJSON, err := json.Marshal(payload)
 	if err != nil {
 		return nil, 0, err
@@ -437,7 +704,7 @@ func (c *Client) fetchSalesPage(ctx context.Context, payload salesQueryPayload, 
 	}
 	items := make([]SaleItem, 0, len(data.ExecuteResult.Result))
 	for _, row := range data.ExecuteResult.Result {
-		items = append(items, saleItemFromRow(row))
+		items = append(items, saleItemFromRow(row, compact))
 	}
 	totalPages := 1
 	if page == 1 && len(data.CountResult.Result) > 0 {
@@ -453,7 +720,7 @@ func (c *Client) fetchSalesPage(ctx context.Context, payload salesQueryPayload, 
 	return items, totalPages, nil
 }
 
-func (c *Client) fetchRemainingSalesPages(ctx context.Context, payload salesQueryPayload, pages [][]SaleItem) error {
+func (c *Client) fetchRemainingSalesPages(ctx context.Context, payload salesQueryPayload, pages [][]SaleItem, compact bool) error {
 	workContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	jobs := make(chan int)
@@ -469,7 +736,7 @@ func (c *Client) fetchRemainingSalesPages(ctx context.Context, payload salesQuer
 		go func() {
 			defer waitGroup.Done()
 			for page := range jobs {
-				items, _, err := c.fetchSalesPage(workContext, payload, page)
+				items, _, err := c.fetchSalesPage(workContext, payload, page, compact)
 				if err != nil {
 					errorOnce.Do(func() {
 						firstError = err
@@ -506,10 +773,13 @@ func fixedSalesForm(page int) url.Values {
 	}
 }
 
-func saleItemFromRow(row map[string]any) SaleItem {
-	raw := make(map[string]any, len(row))
-	for key, value := range row {
-		raw[key] = value
+func saleItemFromRow(row map[string]any, compact bool) SaleItem {
+	var raw map[string]any
+	if !compact {
+		raw = make(map[string]any, len(row))
+		for key, value := range row {
+			raw[key] = value
+		}
 	}
 	return SaleItem{
 		PurchaseCategory1Name:       stringFrom(row["purchase_category1_name"]),
@@ -548,7 +818,7 @@ func firstStringFrom(row map[string]any, keys ...string) string {
 	return ""
 }
 
-func aggregateSales(items []SaleItem) (float64, float64, []CategoryAggregate) {
+func aggregateSales(items []SaleItem, compact bool) (float64, float64, []CategoryAggregate) {
 	total := 0.0
 	quantity := 0.0
 	byName := make(map[string]*CategoryAggregate)
@@ -563,7 +833,9 @@ func aggregateSales(items []SaleItem) (float64, float64, []CategoryAggregate) {
 		}
 		aggregate.TotalAmount += item.TPSaleAmount
 		aggregate.GrossQuantity += item.TPGrossSaleQuantity
-		aggregate.Items = append(aggregate.Items, item)
+		if !compact {
+			aggregate.Items = append(aggregate.Items, item)
+		}
 	}
 	categories := make([]CategoryAggregate, 0, len(byName))
 	for _, aggregate := range byName {

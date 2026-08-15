@@ -24,8 +24,10 @@ desktop/frontend/coverage/
 desktop/frontend/dist/*
 !desktop/frontend/dist/.gitkeep
 desktop/frontend/src/lib/wails/
+desktop/frontend/bindings/
 desktop/frontend/package.json.md5
 cmd/rta-excel-filler/build/bin/
+cmd/rta-excel-filler/bin/
 
 # Editors and operating systems
 .idea/

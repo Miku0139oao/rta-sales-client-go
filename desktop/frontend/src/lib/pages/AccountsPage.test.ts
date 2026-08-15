@@ -283,7 +283,7 @@ describe('account safety workflow', () => {
     expect(dialog).toBeInTheDocument();
   });
 
-  it('reorders across card midpoints and persists once on pointer release', async () => {
+  it('reorders with the up and down buttons and has no drag handle', async () => {
     const profiles: Profile[] = [
       { ...profile, id: 'a', displayName: 'A', priority: 1 },
       { ...profile, id: 'b', displayName: 'B', priority: 2 },
@@ -299,25 +299,9 @@ describe('account safety workflow', () => {
     } });
     const { container } = render(AccountsPage, { props: { t: translator('zh-TW'), locale: 'zh-TW' } });
     await waitFor(() => expect(screen.getByText('C')).toBeInTheDocument());
-    [...container.querySelectorAll<HTMLElement>('.profile-card')].forEach((card, index) => {
-      card.getBoundingClientRect = () => ({ top: index * 100, bottom: index * 100 + 100, height: 100, left: 0, right: 600, width: 600, x: 0, y: index * 100, toJSON: () => ({}) });
-    });
-    const handle = container.querySelector<HTMLElement>('[data-profile-id="a"] .drag-handle')!;
-
-    const pointer = (type: string, values: Record<string, number>) => {
-      const event = new Event(type, { bubbles: true, cancelable: true });
-      Object.defineProperties(event, Object.fromEntries(Object.entries(values).map(([key, value]) => [key, { value }])));
-      return event;
-    };
-    await fireEvent(handle, pointer('pointerdown', { pointerId: 7, button: 0, clientY: 20 }));
-    await fireEvent(handle, pointer('pointermove', { pointerId: 7, clientY: 280 }));
-    await fireEvent(handle, pointer('pointermove', { pointerId: 7, clientY: 280 }));
-    expect(reorder).not.toHaveBeenCalled();
-    expect([...container.querySelectorAll('.profile-card h2')].map((heading) => heading.textContent)).toEqual(['B', 'C', 'A']);
-
-    await fireEvent(handle, pointer('pointerup', { pointerId: 7, clientY: 280 }));
-    await waitFor(() => expect(reorder).toHaveBeenCalledTimes(1));
-    expect(reorder).toHaveBeenCalledWith({ profileIds: ['b', 'c', 'a'] });
+    expect(container.querySelector('.drag-handle')).toBeNull();
+    await fireEvent.click(container.querySelector('[aria-label="下移 A"]')!);
+    await waitFor(() => expect(reorder).toHaveBeenCalledWith({ profileIds: ['b', 'a', 'c'] }));
   });
 
   it('rolls the visible order back when persistence fails', async () => {

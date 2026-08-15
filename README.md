@@ -1,247 +1,243 @@
-# rta-sales-client-go
+# RTA Sales Analyzer
 
 English | [繁體中文](README.zh-TW.md)
 
-The Windows app is **RTA Sales Analyzer** (`0.1.1`). It signs in to RTA, solves the captcha, loads the account's stores, can export per-store PDFs, and can fill the two manual daily cells in the existing company workbook.
+A **Windows desktop app** for store, area, and operations staff.  
+After install you only need the mouse. **No programming and no command line.**
 
-The same repo also has:
+It can:
 
-- a CLI, `go run ./cmd/rta-xlsx-fill`, for the workbook job without a window
-- a Go library other programs can import
+1. **Sign in to RTA** and solve the captcha for you
+2. **Show store sales**, compared with last month and the same month last year
+3. **Export PDF reports** (one combined file plus one file per store)
+4. **Fill today's sales amount and transaction count** into the company's existing Excel workbook
 
-The exe is still named `RTA-Excel-Filler.exe`. That filename was left alone so installers and CI artifacts did not have to move. The window title is the new name.
+The Start menu and shortcut name is **RTA 銷售分析**.  
+The installer is still called `RTA-Excel-Filler-setup.exe`. That is the old filename; it is the same app.
 
-## Install the desktop app
+---
 
-64-bit Windows 10 or 11. CI publishes `RTA-Excel-Filler-windows-amd64` with three files:
+## What you need
 
-- `RTA-Excel-Filler-setup.exe` — use this. It downloads WebView2 if the machine does not have it.
-- `RTA-Excel-Filler-portable.exe` — no installer. [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) must already be installed.
-- `SHA256SUMS.txt` — checksums.
+- **64-bit Windows 10 or 11**
+- A network connection that can reach RTA
+- One or more RTA accounts that can see the stores you care about
 
-```powershell
-(Get-FileHash -Algorithm SHA256 .\RTA-Excel-Filler-setup.exe).Hash.ToLowerInvariant()
-Get-Content .\SHA256SUMS.txt
-```
+Most people should use the installer. If the PC does not already have WebView2, the installer downloads it.
 
-After setup, open **RTA Sales Analyzer** from the Start menu. The portable build is just the exe. Only one window can run at a time.
+---
 
-Uninstall keeps accounts. Profiles, encrypted cookies, and Credential Manager entries stay under `%AppData%\RTA Excel Filler` (old folder name on purpose, so existing data still loads). To wipe saved RTA accounts, delete each profile in the app first.
+## Install
 
-## Using the desktop app
+1. Download the latest files from [Releases](https://github.com/Miku0139oao/rta-sales-client-go/releases).
+2. Run **`RTA-Excel-Filler-setup.exe`**.
+3. Open the Start menu, search for **RTA 銷售分析**, and launch it.
 
-Add an account first, then use **Sales analysis** or **Excel fill**. The UI defaults to Traditional Chinese. Settings can switch to English and change the theme.
+Only one window can run at a time. If a click seems to do nothing, check the taskbar — it may already be open.
+
+### The other files
+
+| File | When to use it |
+| --- | --- |
+| `RTA-Excel-Filler-setup.exe` | **Use this** |
+| `RTA-Excel-Filler-portable.exe` | No installer; double-click to run. The PC must already have [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) |
+| `SHA256SUMS.txt` | For IT to check the file was not altered. Everyday users can ignore it |
+
+---
+
+## First launch: add an account
+
+Open **Accounts** on the left, then **Add account**.
+
+Fill in:
+
+- **Display name** — a nickname for yourself, such as “Main” or “North”
+- **Account** — the RTA login
+- **Password** — the RTA password
+
+Prefer **Test and enable**. The app really signs in, so captcha and store access are checked.  
+Disabled accounts are ignored by Sales analysis and Excel fill.
 
 ![Accounts](release/account-pool-desktop-verified.png)
 
-### Accounts
+### If you have more than one account
 
-**Accounts** → **Add account**. Display name, RTA login, password. Use **Test** or **Test and enable** — that actually signs in, so captcha and permissions are checked. Disabled profiles are ignored by analysis and Excel fill.
+The list order is priority, top to bottom.  
+If two enabled accounts can see the same store, the one higher in the list is used.
 
-List order is store ownership. If two enabled profiles can see the same store, the one higher in the list wins. Drag, or use move up / move down.
+Use **Move up** / **Move down** on each row to change the order.
 
-Passwords go in Windows Credential Manager. Cookies are DPAPI-encrypted, then written under the user's app data. `profiles.json` is display metadata only. Workbook previews, sales figures, and analysis plans stay in memory. Deleting a profile deletes its password and cookies too.
+Passwords go in Windows Credential Manager. They are not stored as plain text.  
+Deleting an account also deletes its password.
 
-### Sales analysis
+---
 
-Pick one enabled multi-store profile, tick stores, choose a month comparison or a date range, then **Analyze**. Job concurrency is in Settings (default 32, max 32).
+## Sales analysis
 
-A month run loads five periods: current, previous, two periods ago, same month last year, and the following month last year. If the selected month is still in progress, the first four periods stop on today's day-of-month (or the last day of a short month). Last year's following month is always the full month.
+Use this to review a month, compare it with last year, and export PDFs for a manager.
 
-After the query you can switch overview, focus, categories, products, and store comparison. Product and category numbers follow Article View. Whole-store transactions and basket value come from Trend View (`net sales / transaction count`). They are hidden when a category or product filter is on, because Trend View has no number at that grain.
+1. Open **Sales analysis**.
+2. Pick an enabled account.
+3. Tick the stores (Select all is fine).
+4. Choose a period:
+   - **Month comparison** (usual choice): pick one month
+   - **Date range**: set your own start and end dates
+5. Click **Run analysis** and wait.
 
-**Export store PDFs** asks for a folder and writes one landscape report per successful store. A numeric suffix is added if the name already exists.
+![Sales analysis overview](release/sales-analysis-overview.png)
 
-### Excel fill
+### What a month comparison includes
 
-Default sheet name is `Dairly` (that spelling is in the real workbook):
+If you pick August, the app loads five periods:
 
-- `C` — business store id
-- `F` — calendar date
-- `L` — that day's Trend View gross sales (sales less returns)
-- `AB` — that day's Trend View transaction count
+| Label | Meaning |
+| --- | --- |
+| Current | The month you picked |
+| Previous | The month before that |
+| Two periods ago | The month before previous |
+| Same month last year | August last year |
+| Following month last year | September last year (useful when planning what to restock or promote next) |
 
-![Range](release/excel-range-desktop.png)
+If the selected month is still in progress, the first four periods stop on today's day-of-month, so the comparison stays fair.  
+On 16 August, previous stops on 16 July, and last year stops on 16 August last year.  
+Last year's following month is always the full month.
 
-Open or drop an `.xlsx`, pick the sheet and inclusive dates, check the scan counts. The ceiling is 2,000 unique date/store jobs unless you change it in Settings. **Analyze** queries each pair once, one calendar day per request.
+### After the query
 
-**Save as** always writes a new file. The source is never overwritten. Before writing, the app checks SHA-256, size, and mtime; if you touched the source, it refuses.
+- **Overview** — net sales, sales amount, returns, transactions, basket value, top products
+- **Weekly** — how each week and store moved inside the current period
+- **Focus** — products that sold well in last year's following month
+- **Categories** — how each category moved across periods
+- **Products** — line items; narrow them with the category filters or search
+- **Store comparison** — each store's current, previous, and year-ago totals
 
-Different existing values need **Overwrite existing values**. Formula cells in `L` or `AB` are left alone. If you cancel after a plan exists, or a temporary job dies after retries, use **Retry failed/pending**. If you cancelled during login or store load, there is no plan yet — run **Analyze** again. An incomplete plan cannot be written.
+Transactions and basket value are whole-store figures.  
+If you filter to one category or one product, those two numbers are hidden, because the source has no figure at that grain.
 
-Partial write (skip issue rows, keep their original values) is only offered after a finished analysis, and it asks for confirmation.
+### Export PDFs
 
-If column `C` is not an RTA business id, turn on the private JSON/CSV mapping in Settings. Do not commit a file that contains real store codes.
+Click **Export PDFs (combined + stores)** and pick a folder.
 
-![Preview](release/excel-results-desktop.png)
+You get:
 
-### Settings you will actually touch
+- 1 combined report for every successful store
+- 1 report per successful store
 
-Concurrency defaults to 32. Max jobs per run defaults to 2,000. Optional local mapping. Those apply to both analysis and Excel fill.
+The success banner shows the folder. Click **Open folder** to jump there.  
+If a file name already exists, a number is added. **Old files are not overwritten.**
 
-## Using the CLI
+---
 
-Put this in a repo-root `.env` (Git ignores it):
+## Fill numbers into Excel
 
-```dotenv
-RTA_ACCOUNT=your-account
-RTA_PASSWORD=your-password
-RTA_COOKIE_FILE=.rta-sales.cookies.json
-```
+Use this for the company's daily workbook.  
+The app only writes two columns, and it **always saves a new file. The original Excel file is never changed.**
 
-Dry-run first (no `-write`):
+The default sheet name is `Dairly` (that spelling is in the real workbook):
 
-```powershell
-go run ./cmd/rta-xlsx-fill -input "C:\path\source.xlsx" -date 2026-08-13
-```
+| Column | Contents |
+| --- | --- |
+| C | Store id |
+| F | Date |
+| L | That day's sales amount (sales less returns) |
+| AB | That day's transaction count |
 
-A range is `-from` and `-to`, not combined with `-date`. After a clean dry-run:
+### Three steps
 
-```powershell
-go run ./cmd/rta-xlsx-fill `
-  -input "C:\path\source.xlsx" `
-  -output "C:\path\source.filled.xlsx" `
-  -date 2026-08-13 `
-  -write
-```
+**1. Select the range**
 
-Other flags worth knowing: `-sheet` (default `Dairly`), `-overwrite`, `-allow-partial`, `-max-jobs` (2000), `-concurrency` (32), `-mapping`, `-timeout 20m`. `-row` is diagnostic and cannot be used with `-write`.
+- Click **Open Excel file**, or drop an `.xlsx` onto the window (`.xls` is not supported)
+- Pick the sheet and the inclusive dates
+- Check the scan summary: store count, date count, and available accounts
+- Click **Start analysis**
 
-Stdout is a JSON report. `matched_rows` are rows for the date, `selected_rows` are ones this account may query, `skipped_store_rows` belong to other accounts. If nothing matches an authorized store, the command fails instead of writing an unchanged book. The report has row numbers and issue codes, not passwords or amounts.
+![Select Excel range](release/excel-range-desktop.png)
 
-## Using the library
+**2. Review the results**
 
-Go 1.25 or newer:
+Each row is marked:
 
-```bash
-go get github.com/Miku0139oao/rta-sales-client-go@latest
-```
+- **Will change** — a new number will be written
+- **Unchanged** — already matches RTA
+- **Issue / Query failed** — this row will not be written until you fix or skip it
 
-Keep credentials in the environment. One `Client` is one account. It logs in on the first request and refreshes an expired session.
+![Review Excel results](release/excel-results-desktop.png)
 
-```go
-client, err := rtasales.NewClient(rtasales.Config{
-	Account:    os.Getenv("RTA_ACCOUNT"),
-	Password:   os.Getenv("RTA_PASSWORD"),
-	CookieFile: "state/rta.cookies.json",
-	CaptchaSolvers: []rtasales.CaptchaSolver{
-		rtasales.NewEmbeddedOCRSolver(rtasales.EmbeddedOCRConfig{}),
-	},
-})
-stores, err := client.Stores(ctx)
-result, err := client.Sales(ctx, rtasales.SalesQuery{
-	BusinessStoreID: stores[0].BusinessID,
-	StartDate:       day,
-	EndDate:         day,
-})
-```
+**3. Save a copy**
 
-Select stores by the exact `BusinessID` from `Stores`. Dates are the calendar y/m/d on the `time.Time`; there is no timezone conversion. Call `RefreshStores` if permissions may have changed.
+When the preview looks right, click **Save and write** and choose where the new file should go.  
+The success card shows the **file name** and **folder** separately.  
+Click **Open file** to open it in Excel, or **Show in folder**.
 
-`SalesQuery` also accepts `ItemCodes` and `SkipTrend`. `TotalAmount` is Article View (filterable). `TrendGrossSaleAmount` and `TotalTransactionCount` are whole-store Trend View values, summed across the inclusive range.
+![Save finished](release/excel-success-desktop.png)
 
-Workbook filling is two steps: `xlsxfill.Analyze` never writes, `RetryFailed` resumes a cancelled or flaky run, `Apply` writes only a complete plan whose source file has not changed. Transport / 408 / 429 / 5xx retries twice (1s, 3s). Missing data, auth, mapping, and format errors do not retry.
+### Before you write
 
-```go
-plan, err := xlsxfill.Analyze(ctx, client, xlsxfill.BatchRequest{
-	InputPath:               `C:\reports\august.xlsx`,
-	From:                    from,
-	To:                      to,
-	AllowedBusinessStoreIDs: allowedStoreIDs,
-	MaxJobs:                 2000,
-	Concurrency:             32,
-})
-report, err := xlsxfill.Apply(ctx, plan, xlsxfill.ApplyRequest{
-	OutputPath: `C:\reports\august.filled.xlsx`,
-})
-```
+- **The source file is never overwritten.**
+- If a cell already has a different number, turn on **Overwrite all differing values**, or those rows stay as issues.
+- Formula cells are left alone.
+- If some queries fail, use **Retry failed items**.
+- If you cancelled before login finished, run **Start analysis** again.
+- An unfinished analysis cannot be saved.
+- To skip issue rows and write the rest: wait until analysis has finished, then turn on **Skip all issue rows and write the rest**. The app asks for confirmation.
 
-`PageConcurrency` defaults to 4, `LoginAttempts` to 4 (max 10). `CookieStore` and `CookieFile` cannot both be set. Use a separate client and cookie path per account.
+If column C is not an RTA store id, turn on the local mapping file in Settings (JSON or CSV). Do not share a mapping that contains real store codes.
 
-The embedded OCR is CPU-only. Uncertain glyphs are not submitted; the client asks for a new captcha or the next solver (`NewTwoCaptchaSolver` if you want a remote fallback). Typed errors work with `errors.As`. A failed page fails the whole sales call.
+---
 
-## Development setup
+## Settings you may actually change
 
-Desktop work is Windows-only. Library tests also run on the Linux CI runners.
+Open **Settings**.
 
-Install:
+| Setting | Typical use |
+| --- | --- |
+| Theme and language | Switch to Traditional Chinese, or change light / dark. **Applies immediately** — no Save click |
+| Max jobs per run | Default 2,000. A very wide date range times many stores will stop here |
+| Query concurrency | Default 32. If the network is flaky, try 8 or 4 |
+| Local mapping | Only if Excel store codes are not RTA store ids |
 
-- Go 1.25+ (CI uses 1.25.12 and 1.26.6)
-- [Bun 1.3.14](https://bun.sh) — the frontend is pinned to Bun, not npm
-- Git and PowerShell
-- WebView2, or the desktop window will not start
-- NSIS 3.12 only if you want the installer: `choco install nsis --version 3.12.0`
+After changing workload or mapping, click **Save**.
 
-Wails is pinned at `v2.14.0`. You do not have to install it yourself; the scripts `go run` that version. To install it globally:
+---
 
-```powershell
-go install github.com/wailsapp/wails/v2/cmd/wails@v2.14.0
-```
+## Common questions
 
-No GPU, CGO, or Tesseract. Tests use synthetic images and a local HTTP fixture. They never call RTA.
+**The app will not start, or the window flashes and disappears**  
+Use the installer `RTA-Excel-Filler-setup.exe`. The portable build needs WebView2 already installed.
 
-Layout: repo root is the library; `cmd/rta-excel-filler` is the desktop entry; `desktop/frontend` is Svelte; `cmd/rta-xlsx-fill` is the CLI; `scripts` is the local tooling.
+**A second window closes immediately**  
+That is expected. Only one copy can run.
 
-## Build from source
+**Account test keeps failing on captcha**  
+Wait a minute and test again. If it still fails, check the password, and try signing in to RTA in a browser.
 
-Clone, then work from the repo root.
+**Sales analysis says there are no stores**  
+On Accounts, confirm the profile is enabled and the last test succeeded. Some logins genuinely have no store access.
 
-```powershell
-git clone https://github.com/Miku0139oao/rta-sales-client-go.git
-cd rta-sales-client-go
+**Many Excel rows say the store could not be mapped**  
+Column C does not match an RTA store id. Fix the workbook, or add a mapping file in Settings.
 
-cd desktop\frontend
-bun install --frozen-lockfile
-cd ..\..
-```
+**Save says the source file changed**  
+Do not edit the source workbook in Excel after analysis starts. Scan and analyze again.
 
-Checks before you compile:
+**After uninstall, the accounts are still there on the next install**  
+Uninstall keeps accounts on purpose. To remove them, delete each profile in the Accounts page first.
 
-```powershell
-./scripts/verify.ps1
-```
+**Are passwords stored safely?**  
+They are kept by Windows Credential Manager. Sales figures and Excel previews stay in memory for this session only.
 
-That is Go test (including race), vet, build, then the frontend lint / typecheck / Vitest / `vite build`. Faster loop:
+---
 
-```powershell
-./scripts/verify.ps1 -SkipRace
-```
+## Where account data lives
 
-CLI only:
+Saved accounts and encrypted login state are here (the folder still uses the old product name, so existing data still loads):
 
-```powershell
-go build -o rta-xlsx-fill.exe ./cmd/rta-xlsx-fill
-.\rta-xlsx-fill.exe -input "C:\path\source.xlsx" -date 2026-08-13
-```
+`C:\Users\<your user name>\AppData\Roaming\RTA Excel Filler`
 
-`go run ./cmd/rta-xlsx-fill ...` is fine too.
+You do not need to edit this folder. To wipe a PC completely: delete every account in the app, then delete the folder.
 
-Desktop with hot reload (UI reloads; Go binding changes restart the window):
+---
 
-```powershell
-./scripts/dev.ps1
-```
+## For developers
 
-Ship an exe. Portable only, if you do not have NSIS:
-
-```powershell
-./scripts/build-desktop.ps1 -SkipInstaller
-```
-
-Portable plus installer:
-
-```powershell
-./scripts/build-desktop.ps1
-```
-
-Output lands in `release\`. The script builds the frontend first (and empties `dist` so old hashed files are not embedded), then runs the pinned Wails CLI twice: portable fails loudly without WebView2; the installer may download it.
-
-Change the product name or version in `cmd/rta-excel-filler/wails.json`. Editing only `build/windows/info.json` is pointless — the next `wails build` overwrites it.
-
-CI tests on Ubuntu, then builds on Windows with the same `build-desktop.ps1`. Local verify does not package the app or run `govulncheck`.
-
-## Do not commit
-
-`.env`, cookies, populated mappings, `*.filled.xlsx`, `cmd/rta-excel-filler/build/bin/`. Generated Wails bindings under `desktop/frontend/src/lib/wails/` are ignored too.
-
-Do not log cookies, passwords, full upstream bodies, or `SaleItem.Raw`.
+CLI, Go library, and building from source are in [DEVELOPMENT.md](DEVELOPMENT.md).

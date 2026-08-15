@@ -13,11 +13,14 @@ describe('Wails backend adapter', () => {
     const enable = vi.fn(async ({ profileId, enabled }) => ({
       id: profileId, displayName: 'Primary', enabled, priority: 1, hasCredentials: true,
     }));
-    configureBackend({ methods: { CreateOrUpdateProfile: createOrUpdate, Reorder: reorder, Enable: enable } });
+    const openSavedFolder = vi.fn(async () => undefined);
+    configureBackend({ methods: { CreateOrUpdateProfile: createOrUpdate, Reorder: reorder, Enable: enable, OpenSavedFolder: openSavedFolder } });
 
     await backend.saveProfile({ displayName: 'Primary', account: 'user', password: 'secret', enabled: true });
     await backend.reorderProfiles(['p1']);
     await backend.setProfileEnabled('p1', false);
+    await backend.openSavedFolder('D:\\RTA Reports');
+    expect(openSavedFolder).toHaveBeenCalledWith({ path: 'D:\\RTA Reports' });
 
     expect(createOrUpdate).toHaveBeenCalledWith(expect.objectContaining({ displayName: 'Primary' }));
     expect(reorder).toHaveBeenCalledWith({ profileIds: ['p1'] });

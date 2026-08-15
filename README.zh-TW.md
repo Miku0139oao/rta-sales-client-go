@@ -1,247 +1,243 @@
-# rta-sales-client-go
+# RTA 銷售分析
 
 [English](README.md) | 繁體中文
 
-Windows 上用的是桌面程式 **RTA 銷售分析**（安裝清單裡寫 RTA Sales Analyzer，現在是 `0.1.1`）。登入 RTA、認驗證碼、查門店銷售、匯出 PDF，也可以把數字填進公司那份既有的 Excel。
+這是給門市、區督、營運同事用的 **Windows 桌面程式**。  
+裝好之後用滑鼠操作即可，**不用寫程式、不用開命令列**。
 
-同一個 repo 裡還有：
+它可以幫你：
 
-- 命令列：`go run ./cmd/rta-xlsx-fill`，不開視窗，做同一件事
-- Go library：給別的程式呼叫
+1. **自動登入 RTA**（驗證碼也會自己處理）
+2. **看各門店銷售**，比較這個月、上個月、去年同期
+3. **匯出 PDF 報告**（一份總報告 + 每間店一份）
+4. **把當天銷售金額、交易次數填進公司既有的 Excel**
 
-執行檔還是叫 `RTA-Excel-Filler.exe`，這是舊檔名，沒改是為了少動安裝與 CI。畫面標題已經換成新名字。
+開始選單與捷徑名稱是 **RTA 銷售分析**。  
+安裝檔還是叫 `RTA-Excel-Filler-setup.exe`，這是舊檔名，功能就是這一支程式。
 
-## 下載後怎麼開
+---
 
-64-bit 的 Windows 10 或 11。CI 產物叫 `RTA-Excel-Filler-windows-amd64`，裡面三個檔：
+## 電腦需要什麼
 
-- `RTA-Excel-Filler-setup.exe`：一般人裝這個。沒有 WebView2 它會幫你下載。
-- `RTA-Excel-Filler-portable.exe`：免安裝。電腦上要先有 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)。
-- `SHA256SUMS.txt`：核對用。
+- 64 位元的 **Windows 10 或 Windows 11**
+- 可以連到 RTA 的網路
+- 一組（或多組）有權限的 **RTA 帳號密碼**
 
-```powershell
-(Get-FileHash -Algorithm SHA256 .\RTA-Excel-Filler-setup.exe).Hash.ToLowerInvariant()
-Get-Content .\SHA256SUMS.txt
-```
+一般同事請裝「安裝檔」。電腦沒有 WebView2 時，安裝程式會幫忙下載。
 
-裝完從開始選單開「RTA Sales Analyzer」。可攜版直接雙擊 exe。同時只能開一個視窗。
+---
 
-解除安裝不會清帳號。設定、加密 Cookie、Windows 認證都還在 `%AppData%\RTA Excel Filler`（資料夾沿用舊名，免得舊資料找不到）。真的要清掉，先到程式裡把帳號一筆一筆刪除。
+## 怎麼安裝
 
-## 桌面版怎麼用
+1. 到 [Releases](https://github.com/Miku0139oao/rta-sales-client-go/releases) 下載最新一版。
+2. 在壓縮檔或資料夾裡找到 **`RTA-Excel-Filler-setup.exe`**，雙擊安裝。
+3. 裝完後，按鍵盤上的 **Windows 鍵**，搜尋 **RTA 銷售分析**，打開即可。
 
-先加帳號，再去做「銷售分析」或「Excel 填入」。預設繁中，設定裡可改英文、改亮暗色。
+同一時間只能開一個視窗。如果點了沒反應，先看工作列是不是已經開著。
 
-![帳號](release/account-pool-desktop-verified.png)
+### 另外兩個檔是什麼
 
-### 帳號
+| 檔案 | 什麼時候用 |
+| --- | --- |
+| `RTA-Excel-Filler-setup.exe` | **一般請用這個** |
+| `RTA-Excel-Filler-portable.exe` | 不想安裝、直接雙擊就能跑。電腦必須已經有 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) |
+| `SHA256SUMS.txt` | 給資訊人員核對檔案有沒有被改過，一般使用可略過 |
 
-進「帳號」→「新增帳號」，填顯示名稱、RTA 帳號、密碼。先按「測試」或「測試並啟用」，程式會真的登入，確認驗證碼跟權限沒問題。沒啟用的帳號，分析跟填 Excel 都不會用到。
+---
 
-清單由上到下是門店歸屬順序。兩本帳號都能進同一間店時，用上面那本。可以拖、也可以按上移下移。
+## 第一次使用：先加帳號
 
-密碼放在 Windows 認證管理員。Cookie 用 DPAPI 加密後再存。`profiles.json` 只有顯示名稱之類的東西。銷售數字、活頁簿預覽、分析 plan 都只在記憶體。刪帳號會連密碼和 Cookie 一起刪。
+左邊選 **「帳號」** → 右上角 **「新增帳號」**。
 
-### 銷售分析
+填這三個欄位：
 
-選一個已啟用、而且有多間店的帳號，勾門店，選「月份比較」或自己指定日期，按「開始分析」。並行數在設定裡，預設 32。
+- **顯示名稱**：給自己看的暱稱，例如「主要帳號」、「北區」
+- **帳號**：RTA 登入帳號
+- **密碼**：RTA 登入密碼
 
-月份比較一次查五段：本期、上期、前期、去年同期、去年下月。若這個月還沒過完，前四段會切到跟今天同一天（二月這種短月就切到月底）；去年下月仍是整月。
+建議按 **「測試並啟用」**。程式會真的去登入，確認帳密、驗證碼、門店權限都沒問題。  
+沒啟用的帳號，後面「銷售分析」和「Excel 填入」都不會用到。
 
-查完可以切概覽、關注、分類、商品、門店比較。商品跟五層分類都跟 Article View 下載檔同一套口徑。全店交易次數跟客單價來自 Trend View，不是把商品列的交易次數加總。篩了分類或商品之後，這兩項會藏起來，因為 Trend View 沒有那麼細。
+![帳號頁](release/account-pool-desktop-verified.png)
 
-「匯出門店 PDF」選一個資料夾，成功查到的店各出一份橫向報告。檔名重複就自動加後綴，不會蓋掉舊檔。
+### 有好幾本帳號時
 
-### Excel 填入
+清單 **由上到下是優先順序**。  
+同一間門店如果兩本帳號都能進，程式會用比較上面的那一本。
 
-公司活頁簿預設工作表叫 `Dairly`（中間那個拼法是原本檔案就這樣）：
+用每列右邊的 **上移 / 下移** 調整順序。
 
-- `C`：門店編號
-- `F`：日期
-- `L`：當天總銷售（銷售減退貨，Trend View）
-- `AB`：當天交易次數（同一個 Trend View）
+密碼存在 Windows 自己的「認證管理員」，不會明文出現在畫面或檔案裡。  
+刪除一筆帳號時，密碼也會一起刪掉。
 
-![選範圍](release/excel-range-desktop.png)
+---
 
-打開或把 `.xlsx` 拖進去，選工作表跟日期，看一下掃描摘要。預設最多 2000 個「日期 × 門店」，設定裡可改。按「開始分析」，每個組合只查一天。
+## 銷售分析
 
-預覽沒問題再「另存並寫入」，一定是新檔，來源不會被改。寫之前會再對一次檔案的雜湊、大小、修改時間，你中間若改過來源，它會拒絕。
+適合：看這個月賣得怎麼樣、跟去年比、匯出給主管的 PDF。
 
-`L` / `AB` 已經有不同數字時，要勾「允許覆寫全部不同值」才會改。格子裡是公式的話，一律不碰。分析做到一半取消、或暫時失敗，有 plan 才能按「重試失敗項目」；連登入都還沒跑完就取消，沒有 plan，只能重新分析。沒跑完的結果不能寫檔。
+1. 左邊選 **「銷售分析」**。
+2. 選一本已啟用的帳號。
+3. 勾要看的門店（可全選）。
+4. 分析期間選一種：
+   - **月份比較**（最常用）：選一個月份即可
+   - **日期範圍**：自己指定起迄日
+5. 按 **「開始分析」**，等資料跑完。
 
-若一定要略過問題列、只寫其他列，等分析完整結束後再勾「略過全部問題列並寫入其他列」，它會再問一次。
+![銷售分析概覽](release/sales-analysis-overview.png)
 
-`C` 欄若不是 RTA 門店編號，到設定打開本機 JSON／CSV 對照。那種檔不要提交進 Git。
+### 月份比較在比什麼
 
-![預覽](release/excel-results-desktop.png)
+選 8 月時，程式會一次查出五段時間：
 
-### 設定裡常改的
+| 名稱 | 意思 |
+| --- | --- |
+| 本期 | 你選的這個月 |
+| 上期 | 上個月 |
+| 前期 | 再上個月 |
+| 去年同期 | 去年的同一個月份 |
+| 去年下月 | 去年的下一個月（用來準備接下來要補貨、主推的商品） |
 
-並行預設 32，最高也是 32。每次最多查 2000 個工作。對照檔可選。這些數字對分析和填 Excel 都有效。
+如果這個月還沒過完，前四段會算到「跟今天同一天」為止，這樣比較才公平。  
+例如今天是 8 月 16 日，上期就看到 7 月 16 日，去年同期看到去年 8 月 16 日。  
+「去年下月」仍看完整一個月。
 
-## 命令列怎麼叫
+### 查完可以看哪些頁
 
-根目錄放 `.env`（Git 會忽略）：
+- **概覽**：淨銷售、銷售金額、退款、交易次數、客單價、熱賣商品
+- **每週變化**：這一期裡各週、各店怎麼走
+- **關注**：去年下月賣得好的商品，方便準備下個月
+- **分類**：各分類這幾期差多少
+- **商品**：商品明細，可用上面的分類或搜尋縮小範圍
+- **門店比較**：各店本期、上期、去年同期
 
-```dotenv
-RTA_ACCOUNT=你的帳號
-RTA_PASSWORD=你的密碼
-RTA_COOKIE_FILE=.rta-sales.cookies.json
-```
+交易次數、客單價是「全店」數字。  
+如果上面篩了某一個分類或某一個商品，這兩項會先藏起來，因為系統沒有那麼細的全店數字。
 
-先不要加 `-write`，只看它打算改什麼：
+### 匯出 PDF
 
-```powershell
-go run ./cmd/rta-xlsx-fill -input "C:\path\來源.xlsx" -date 2026-08-13
-```
+按 **「匯出 PDF（總報告 + 分店）」**，選一個資料夾。
 
-一整段日期用 `-from`、`-to`，不要跟 `-date` 一起用。確認沒問題再另存：
+成功查到的結果會產出：
 
-```powershell
-go run ./cmd/rta-xlsx-fill `
-  -input "C:\path\來源.xlsx" `
-  -output "C:\path\來源.filled.xlsx" `
-  -date 2026-08-13 `
-  -write
-```
+- 1 份全部門店的總報告
+- 每一間成功的店各 1 份
 
-常用的還有：`-sheet`（預設 `Dairly`）、`-overwrite`、`-allow-partial`、`-max-jobs`（預設 2000）、`-concurrency`（預設 32）、`-mapping`、`-timeout 20m`。`-row` 只拿來查某一列，不能跟 `-write` 一起。
+畫面上會顯示資料夾位置。按 **「開啟資料夾」** 就能直接打開。  
+檔名重複時會自動加數字，**不會蓋掉舊檔**。
 
-螢幕上會印 JSON。`matched_rows` 是符合日期的列，`selected_rows` 是這本帳號有權的，`skipped_store_rows` 是別人的店。一個授權門店都對不上就會失敗，不會默默存一份沒改過的檔。報告裡沒有帳密和銷售數字。
+---
 
-## 在自己的 Go 程式裡怎麼叫
+## 把數字填進 Excel
 
-Go 1.25 以上：
+適合：公司每天要填的那份活頁簿。  
+程式只會改兩個欄位，而且 **一定另存新檔，原本的 Excel 不會被改掉**。
 
-```bash
-go get github.com/Miku0139oao/rta-sales-client-go@latest
-```
+公司檔預設工作表名稱是 `Dairly`（中間那個拼法是原本檔案就這樣，不是打錯）：
 
-帳密用環境變數。一個 `Client` 對應一本帳號，第一次查詢時才會登入，cookie 過期會自己再登。
+| 欄 | 內容 |
+| --- | --- |
+| C | 門店編號 |
+| F | 日期 |
+| L | 當天銷售金額（銷售減退貨） |
+| AB | 當天交易次數 |
 
-```go
-client, err := rtasales.NewClient(rtasales.Config{
-	Account:    os.Getenv("RTA_ACCOUNT"),
-	Password:   os.Getenv("RTA_PASSWORD"),
-	CookieFile: "state/rta.cookies.json",
-	CaptchaSolvers: []rtasales.CaptchaSolver{
-		rtasales.NewEmbeddedOCRSolver(rtasales.EmbeddedOCRConfig{}),
-	},
-})
-stores, err := client.Stores(ctx)
-result, err := client.Sales(ctx, rtasales.SalesQuery{
-	BusinessStoreID: stores[0].BusinessID,
-	StartDate:       day,
-	EndDate:         day,
-})
-```
+### 三個步驟
 
-店一定要用 `Stores` 回傳的完整 `BusinessID`，不要拿店名去對。日期用畫面上的年月日，套件不會先轉時區。權限改了就 `RefreshStores`。
+**1. 選擇範圍**
 
-`SalesQuery` 還能帶 `ItemCodes`（SKU／ManCode）或 `SkipTrend`（只要商品明細、不要再打一槍全店 Trend View）。`TotalAmount` 是 Article View，可以跟商品篩選走；`TrendGrossSaleAmount` 跟 `TotalTransactionCount` 是 Trend View 全店數字，跨日會加總。
+- 按 **「開啟 Excel 檔案」**，或直接把 `.xlsx` 拖進視窗（只支援 `.xlsx`，舊的 `.xls` 不行）
+- 選工作表、開始日期、結束日期
+- 看一下「掃描摘要」：門市數、日期數、可用帳號是否合理
+- 按 **「開始分析」**
 
-填 Excel 用兩段：先 `xlsxfill.Analyze`（不改檔），必要時 `RetryFailed`，最後 `Apply` 寫到另一個路徑。來源中間被改過，Apply 會拒絕。暫時性的網路／408／429／5xx 會隔 1 秒、3 秒再試；沒資料、沒權限、格式不對不會重試。
+![選擇 Excel 範圍](release/excel-range-desktop.png)
 
-```go
-plan, err := xlsxfill.Analyze(ctx, client, xlsxfill.BatchRequest{
-	InputPath:               `C:\reports\august.xlsx`,
-	From:                    from,
-	To:                      to,
-	AllowedBusinessStoreIDs: allowedStoreIDs,
-	MaxJobs:                 2000,
-	Concurrency:             32,
-})
-report, err := xlsxfill.Apply(ctx, plan, xlsxfill.ApplyRequest{
-	OutputPath: `C:\reports\august.filled.xlsx`,
-})
-```
+**2. 檢查結果**
 
-`Config` 裡比較常動的是 `PageConcurrency`（預設 4）跟 `LoginAttempts`（預設 4，最多 10）。`CookieStore` 跟 `CookieFile` 只能選一個。不同帳號請用不同 Client、不同 cookie 路徑。
+每一列會標成：
 
-驗證碼預設用內建 OCR，一般 CPU 就好，不用裝 Tesseract。看不懂的圖它不會硬送，會換一張或交給你串的下一個 solver（例如 `NewTwoCaptchaSolver`）。錯誤用 `errors.As` 看 `AuthError`、`CaptchaError`、`UpstreamError` 那些。任何一分頁失敗，整次查詢就失敗。
+- **將變更**：準備寫入新數字
+- **不變**：跟 RTA 一樣，不用改
+- **問題 / 查詢失敗**：這列先不會寫，看說明處理
 
-## 開發環境
+![檢查 Excel 結果](release/excel-results-desktop.png)
 
-改桌面版請用 Windows。library 測試在 Linux CI 也能跑。
+**3. 另存新檔**
 
-要裝的：
+預覽沒問題後，按 **「另存並寫入」**，選新檔要放哪。  
+寫完畫面會分開顯示 **檔案名稱** 和 **位置**。  
+按 **「開啟檔案」** 用 Excel 打開，或按 **「在資料夾中顯示」**。
 
-- Go 1.25 或更新（CI 會測 1.25.12 跟 1.26.6）
-- [Bun 1.3.14](https://bun.sh)（frontend 指定 Bun，別改用 npm）
-- Git、PowerShell
-- 本機要有 WebView2，不然視窗開不起來
-- 只有要做安裝檔時才需要 NSIS 3.12：`choco install nsis --version 3.12.0`
+![寫入完成](release/excel-success-desktop.png)
 
-Wails 釘在 `v2.14.0`。不必先手動裝，腳本找不到就會 `go run github.com/wailsapp/wails/v2/cmd/wails@v2.14.0`。想先裝也可以：
+### 寫入前請注意
 
-```powershell
-go install github.com/wailsapp/wails/v2/cmd/wails@v2.14.0
-```
+- **來源檔永遠不會被覆蓋。** 寫出來的是另一個檔。
+- 格子裡已經有不同數字時，要先打開 **「允許覆寫全部不同值」**，否則會當成問題列。
+- 格子裡是 **公式** 的，程式不會改，以免把公式蓋掉。
+- 查詢做到一半失敗，可以按 **「重試失敗項目」**。
+- 如果連登入都還沒跑完就取消，請重新按一次「開始分析」。
+- 還沒查完的結果不能存檔。
+- 想略過問題列、只寫其他列：等分析全部結束後，再打開 **「略過全部問題列並寫入其他列」**，程式會再問一次。
 
-不需要 GPU、CGO、Tesseract。測試都是假圖跟本機 HTTP，不會真的打 RTA。
+C 欄如果不是 RTA 門店編號，到「設定」打開本機對照檔（JSON 或 CSV）。這種檔不要傳到別人電腦以外的地方。
 
-目錄大概是：根目錄是 library；`cmd/rta-excel-filler` 是桌面進入點；`desktop/frontend` 是 Svelte；`cmd/rta-xlsx-fill` 是命令列；`scripts` 是本機腳本。
+---
 
-## 從原始碼編出來
+## 設定裡常動的
 
-先 clone，在 repo 根目錄做事。
+左邊選 **「設定」**。
 
-```powershell
-git clone https://github.com/Miku0139oao/rta-sales-client-go.git
-cd rta-sales-client-go
+| 項目 | 建議 |
+| --- | --- |
+| 主題、介面語言 | 可改成英文，或改亮色 / 深色。**一改就生效**，不用再按儲存 |
+| 每次最多查詢工作 | 預設 2000。一次選太多天、太多店時，超過就會擋下來 |
+| 查詢工作並行數 | 預設 32。網路不穩或被擋時，可先降到 8 或 4 再試 |
+| 本機對照設定 | 只有 Excel 的門店編號跟 RTA 不一樣時才要開 |
 
-cd desktop\frontend
-bun install --frozen-lockfile
-cd ..\..
-```
+查詢工作、對照檔改完後，按 **「儲存」**。
 
-編譯前跑一次檢查：
+---
 
-```powershell
-./scripts/verify.ps1
-```
+## 常見問題
 
-會跑 Go 測試（含 race）、vet、build，再跑 frontend 的檢查、測試跟 `vite build`。改一點小東西、不想等 race：
+**程式打不開、視窗閃一下就沒了**  
+請改用安裝檔 `RTA-Excel-Filler-setup.exe`。免安裝版需要電腦已有 WebView2。
 
-```powershell
-./scripts/verify.ps1 -SkipRace
-```
+**同時開了兩個，後面那個立刻關掉**  
+這是正常的，同時只能開一個。
 
-只編命令列：
+**測試帳號失敗、一直說驗證碼不行**  
+隔一分鐘再按一次「測試」。仍不行就先確認帳密、以及這個帳號現在能不能在瀏覽器登入 RTA。
 
-```powershell
-go build -o rta-xlsx-fill.exe ./cmd/rta-xlsx-fill
-.\rta-xlsx-fill.exe -input "C:\path\來源.xlsx" -date 2026-08-13
-```
+**銷售分析說沒有門店**  
+到「帳號」確認這本帳號已啟用，而且「測試」是成功的。有些帳號本身就沒有門店權限。
 
-或直接 `go run ./cmd/rta-xlsx-fill ...`。
+**Excel 很多列變成「找不到門市對照」**  
+C 欄的編號跟 RTA 門店編號不一致。請核對來源檔，或到設定指定對照檔。
 
-開發桌面版（改畫面會熱重載，改 Go 綁定會重開視窗）：
+**按了另存，卻說來源檔被改過**  
+分析開始後，不要再開 Excel 去改那份來源檔。請重新掃描、再分析一次。
 
-```powershell
-./scripts/dev.ps1
-```
+**解除安裝後，下次重裝帳號還在**  
+這是刻意的：解除安裝不會刪帳號。若要連帳號一起清掉，請先到程式的「帳號」頁把每一筆刪除。
 
-要給別人用的 exe。只出可攜版、沒裝 NSIS 時：
+**密碼安全嗎？**  
+密碼交給 Windows 保管。銷售數字、Excel 預覽都只留在這次開啟的視窗裡，不會另外存成明文檔。
 
-```powershell
-./scripts/build-desktop.ps1 -SkipInstaller
-```
+---
 
-可攜版加安裝檔：
+## 帳號資料存在哪裡
 
-```powershell
-./scripts/build-desktop.ps1
-```
+帳號、加密後的登入狀態，放在這個資料夾（資料夾沿用舊名稱，舊資料才找得到）：
 
-完成後看 `release\`。腳本會先編 frontend（每次清掉舊的 dist，免得舊 js 被打進 exe），再用釘住的 Wails 編兩次：可攜版遇到沒有 WebView2 只提示；安裝檔會下載 Runtime。
+`C:\Users\你的使用者名稱\AppData\Roaming\RTA Excel Filler`
 
-產品名稱跟版本改 `cmd/rta-excel-filler/wails.json`。不要只改 `build/windows/info.json`，下次 build 會被蓋掉。
+一般不必自己進去改。真的要整台電腦清乾淨：先在程式裡刪光帳號，再刪這個資料夾。
 
-CI 在 Ubuntu 跑測試跟 frontend，在 Windows 再跑一次 Windows 專用測試並呼叫同一個 `build-desktop.ps1`。本機 verify 不含打包跟漏洞掃描。
+---
 
-## 別提交出去的東西
+## 給工程師
 
-`.env`、cookie、填過正式數字的對照、`*.filled.xlsx`、`cmd/rta-excel-filler/build/bin/`。Wails 產生的 `desktop/frontend/src/lib/wails/` 也被忽略。
-
-桌面版帳密不要改成明文檔。log 裡不要出現 cookie、密碼、完整上游回應或 `SaleItem.Raw`。
+命令列、Go library、從原始碼編譯，請看 [DEVELOPMENT.zh-TW.md](DEVELOPMENT.zh-TW.md)。

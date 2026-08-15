@@ -2,7 +2,10 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  ALL_STORES_REPORT_ID,
   buildSalesAnalysisPDF,
+  categoryCardRowMetrics,
+  categoryRankingCardSlots,
   listSuccessfulReportStores,
   salesAnalysisPDFFilename,
 } from './sales-report-pdf';
@@ -13,7 +16,8 @@ function itemsFor(storeId: string): SalesAnalysisItem[] {
     storeId,
     storeLabel: `${storeId} - Tai Wai`,
     category1: '健康與美容', category1Code: 'A',
-    category2: `商品類別 ${index % 6 + 1}`, category2Code: `A0${index % 6 + 1}`,
+    category2: ['HEALTH CARE', 'PERSONAL CARE', 'BEAUTY CARE', 'BABY NEEDS', 'PAPER GOODS', 'APPAREL'][index % 6]!,
+    category2Code: ['A01', 'A03', 'A02', 'B05', 'B12', 'B10'][index % 6]!,
     category3: '商品種類', category3Code: 'A0101',
     category4: '四級類目', category4Code: 'A010101',
     category5: '小分類', category5Code: 'A01010101',
@@ -95,5 +99,139 @@ describe('sales analysis PDF', () => {
   it('lists successful stores and creates stable per-store filenames', () => {
     expect(listSuccessfulReportStores(resultFixture()).map((store) => store.businessId)).toEqual(['107', '108']);
     expect(salesAnalysisPDFFilename('107', '2026-08-01', '2026-08-16')).toBe('RTA-Sales-107-20260801-20260816.pdf');
+    expect(salesAnalysisPDFFilename(ALL_STORES_REPORT_ID, '2026-08-01', '2026-08-16')).toBe('RTA-Sales-all-20260801-20260816.pdf');
+  });
+
+  it('builds a combined all-stores report with a store comparison page', async () => {
+    const fontBase64 = readFileSync(resolve(process.cwd(), 'src/lib/assets/NotoSansTC-Regular.ttf')).toString('base64');
+    const result = resultFixture();
+    const items108 = itemsFor('108').map((item) => ({ ...item, netSalesAmount: item.netSalesAmount * 0.7, netQuantity: item.netQuantity * 0.7 }));
+    for (const period of result.periods ?? []) {
+      const extra = items108.map((item) => ({
+        ...item,
+        transactionCount: item.transactionCount * (period.key === 'current' ? 1 : 0.9),
+        netSalesAmount: item.netSalesAmount * (period.key === 'current' ? 1 : 0.9),
+        netQuantity: item.netQuantity * (period.key === 'current' ? 1 : 0.9),
+      }));
+      period.items = [...(period.items ?? []), ...extra];
+      period.totals = totalsFor(period.items ?? []);
+      period.stores = [
+        { businessId: '107', label: '107 - Tai Wai', totals: totalsFor(period.items.filter((item) => item.storeId === '107')) },
+        { businessId: '108', label: '108 - Harbour', totals: totalsFor(period.items.filter((item) => item.storeId === '108')) },
+      ];
+    }
+    result.items = result.periods?.[0]?.items ?? result.items;
+    result.totals = totalsFor(result.items ?? []);
+    const pdf = await buildSalesAnalysisPDF(result, ALL_STORES_REPORT_ID, 'category2', 'zh-TW', fontBase64);
+    expect(new TextDecoder().decode(pdf.slice(0, 8))).toBe('%PDF-1.3');
+    expect(new TextDecoder('latin1').decode(pdf).match(/\/Type \/Page\b/g)).toHaveLength(10);
+  });
+
+  it('keeps a three-category store on nine pages without placeholder cards', async () => {
+    const fontBase64 = readFileSync(resolve(process.cwd(), 'src/lib/assets/NotoSansTC-Regular.ttf')).toString('base64');
+    const result = resultFixture();
+    for (const period of result.periods ?? []) {
+      period.items = (period.items ?? []).filter((_, index) => index % 6 < 3);
+      period.totals = totalsFor(period.items ?? []);
+      period.stores = period.stores.map((store) => ({ ...store, totals: period.totals }));
+    }
+    result.items = result.periods?.[0]?.items ?? result.items;
+    result.totals = totalsFor(result.items ?? []);
+    const pdf = await buildSalesAnalysisPDF(result, '107', 'category2', 'zh-TW', fontBase64);
+    expect(new TextDecoder('latin1').decode(pdf).match(/\/Type \/Page\b/g)).toHaveLength(9);
+    if (process.env.SALES_REPORT_3CAT_OUTPUT) writeFileSync(process.env.SALES_REPORT_3CAT_OUTPUT, pdf);
+  });
+
+  it('adds one weekly page per week without changing a report that has no weeks', async () => {
+    const fontBase64 = readFileSync(resolve(process.cwd(), 'src/lib/assets/NotoSansTC-Regular.ttf')).toString('base64');
+    const result = resultFixture();
+    result.weeks = [
+      {
+        from: '2026-08-03', to: '2026-08-09',
+        totals: {
+          salesTw: 200, salesLw: 100, customersTw: 20, customersLw: 10,
+          weekdaySalesTw: 120, weekdaySalesLw: 70, weekendSalesTw: 80, weekendSalesLw: 30,
+          weekdayCustomersTw: 12, weekdayCustomersLw: 6, weekendCustomersTw: 8, weekendCustomersLw: 4,
+        },
+        stores: [{
+          businessId: '107', label: '107 - Tai Wai',
+          salesTw: 200, salesLw: 100, customersTw: 20, customersLw: 10,
+          weekdaySalesTw: 120, weekdaySalesLw: 70, weekendSalesTw: 80, weekendSalesLw: 30,
+          weekdayCustomersTw: 12, weekdayCustomersLw: 6, weekendCustomersTw: 8, weekendCustomersLw: 4,
+        }],
+      },
+    ];
+    const pdf = await buildSalesAnalysisPDF(result, '107', 'category2', 'zh-TW', fontBase64);
+    expect(new TextDecoder('latin1').decode(pdf).match(/\/Type \/Page\b/g)).toHaveLength(10);
+    if (process.env.SALES_REPORT_WEEKLY_OUTPUT) writeFileSync(process.env.SALES_REPORT_WEEKLY_OUTPUT, pdf);
+  });
+
+  it('paginates leftover ranking categories and keeps cards on a page the same size', async () => {
+    const categories = [
+      ['HEALTH CARE', 'A01'], ['PERSONAL CARE', 'A03'], ['BEAUTY CARE', 'A02'],
+      ['BABY NEEDS', 'B05'], ['PAPER GOODS', 'B12'], ['APPAREL', 'B10'],
+      ['JUICE & DRINK', 'E08'], ['_OBSOLETE___', 'B20'], ['HEALTH-FREE GIFT', 'A04'],
+      ['PC-FREE GIFT', 'A07'], ['SANPRO-FREE GIFT', 'A08'], ['BABY-FREE GIFT', 'B19'],
+    ];
+    const items: SalesAnalysisItem[] = categories.flatMap(([name, code], groupIndex) => {
+      const shortCard = code === 'E08' || code === 'B20';
+      const itemCount = shortCard ? 2 : 16;
+      const unitAmount = groupIndex < 6 ? 1000 - groupIndex * 50 : shortCard ? 9 : 0;
+      return Array.from({ length: itemCount }, (_, index) => ({
+        storeId: '107', storeLabel: '107 - Tai Wai',
+        category1: '測試', category1Code: 'T',
+        category2: name, category2Code: code,
+        category3: '商品種類', category3Code: 'T01',
+        category4: '四級類目', category4Code: 'T0101',
+        category5: '小分類', category5Code: 'T010101',
+        articleCode: `${code}-${index + 1}`,
+        articleName: `${name} ${index + 1}`,
+        brandName: '品牌',
+        transactionCount: 1,
+        saleQuantity: shortCard ? 1 : 2,
+        saleAmount: unitAmount,
+        returnTransactionCount: 0,
+        returnQuantity: 0,
+        returnAmount: 0,
+        netQuantity: shortCard ? 1 : 2,
+        netSalesAmount: unitAmount,
+      }));
+    });
+    const fontBase64 = readFileSync(resolve(process.cwd(), 'src/lib/assets/NotoSansTC-Regular.ttf')).toString('base64');
+    const result = resultFixture();
+    for (const period of result.periods ?? []) {
+      period.items = items;
+      period.totals = totalsFor(items);
+      period.stores = period.stores.map((store) => ({ ...store, totals: period.totals }));
+    }
+    result.items = items;
+    result.totals = totalsFor(items);
+    const pdf = await buildSalesAnalysisPDF(result, '107', 'category2', 'zh-TW', fontBase64);
+    expect(new TextDecoder('latin1').decode(pdf).match(/\/Type \/Page\b/g)?.length).toBeGreaterThan(9);
+    if (process.env.SALES_REPORT_MIXED_OUTPUT) writeFileSync(process.env.SALES_REPORT_MIXED_OUTPUT, pdf);
+  });
+
+  it('fills the ranking page with only the categories that exist', () => {
+    expect(categoryRankingCardSlots(0)).toEqual([]);
+    const three = categoryRankingCardSlots(3);
+    expect(three).toHaveLength(3);
+    expect(three.every((slot) => slot.y === 30 && slot.height === 166)).toBe(true);
+    expect(three[0]?.x).toBe(10);
+    expect(Math.round((three[2]!.x + three[2]!.width) * 10) / 10).toBe(287);
+
+    const five = categoryRankingCardSlots(5);
+    expect(five).toHaveLength(5);
+    expect(five.slice(0, 3).every((slot) => slot.y === 30)).toBe(true);
+    expect(five.slice(3).every((slot) => slot.y > 30 && slot.width > five[0]!.width)).toBe(true);
+
+    const six = categoryRankingCardSlots(6);
+    expect(six).toHaveLength(6);
+    expect(six.filter((slot) => slot.y === 30)).toHaveLength(3);
+    expect(six.filter((slot) => slot.y > 30)).toHaveLength(3);
+    expect(new Set(six.slice(0, 3).map((slot) => slot.height)).size).toBe(1);
+    expect(new Set(six.slice(3).map((slot) => slot.height)).size).toBe(1);
+    expect(six[0]?.height).toBe(six[3]?.height);
+    expect(categoryCardRowMetrics(166).limit).toBeGreaterThan(15);
+    expect(categoryCardRowMetrics(81).limit).toBeGreaterThanOrEqual(15);
   });
 });

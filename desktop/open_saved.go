@@ -52,3 +52,15 @@ func (a *App) RevealSavedWorkbook(request PathRequest) error {
 	}
 	return nil
 }
+
+// OpenSavedFolder opens an existing directory in the system file manager.
+func (a *App) OpenSavedFolder(request PathRequest) error {
+	path, err := existingDirectoryPath(request.Path)
+	if err != nil {
+		return err
+	}
+	if err := a.pathLauncher().Open(path); err != nil {
+		return fmt.Errorf("open saved folder: %w", err)
+	}
+	return nil
+}

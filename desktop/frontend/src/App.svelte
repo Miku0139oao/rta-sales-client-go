@@ -55,6 +55,7 @@
     if (navigationBusy && page !== activePage) return;
     activePage = page;
     await tick();
+    if (mainContent) mainContent.scrollTop = 0;
     document.documentElement.scrollTop = 0;
     document.body.scrollTop = 0;
     mainContent?.focus({ preventScroll: true });

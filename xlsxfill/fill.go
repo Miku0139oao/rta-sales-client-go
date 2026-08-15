@@ -23,7 +23,7 @@ const (
 	// full workbook month to be processed without per-run tuning.
 	DefaultMaxJobs = 2000
 	// DefaultConcurrency is the number of date/store query jobs run at once.
-	DefaultConcurrency = 16
+	DefaultConcurrency = 32
 	// MaximumConcurrency is the user-selectable ceiling for independent
 	// date/store jobs. A single authenticated client is safe for concurrent use.
 	MaximumConcurrency = 32

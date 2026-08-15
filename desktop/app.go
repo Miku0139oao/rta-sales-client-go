@@ -55,6 +55,9 @@ type App struct {
 	salesAnalysisRunning   bool
 	salesAnalysisID        string
 	salesAnalysisCancel    context.CancelFunc
+	salesResultMu          sync.Mutex
+	salesResult            *SalesAnalysisResult
+	salesPacked            map[string]SalesAnalysisPackedItems
 }
 
 type operationState struct {
@@ -953,6 +956,25 @@ func existingWorkbookPath(path string) (string, error) {
 	}
 	if !info.Mode().IsRegular() {
 		return "", errors.New("inputPath must be a regular file")
+	}
+	return absolute, nil
+}
+
+func existingDirectoryPath(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", errors.New("directory is required")
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve directory: %w", err)
+	}
+	info, err := os.Stat(absolute)
+	if err != nil {
+		return "", fmt.Errorf("inspect directory: %w", err)
+	}
+	if !info.IsDir() {
+		return "", errors.New("path must be a directory")
 	}
 	return absolute, nil
 }

@@ -19,7 +19,8 @@ type ProfileUpsertRequest struct {
 }
 
 type ProfileIDRequest struct {
-	ProfileID string `json:"profileId"`
+	ProfileID          string `json:"profileId"`
+	SimulateStoreCount int    `json:"simulateStoreCount,omitempty"`
 }
 
 type TestProfileRequest struct {
@@ -205,12 +206,13 @@ type SalesAnalysisStore struct {
 }
 
 type SalesAnalysisRequest struct {
-	ProfileID   string                       `json:"profileId"`
-	StoreIDs    []string                     `json:"storeIds"`
-	From        string                       `json:"from,omitempty"`
-	To          string                       `json:"to,omitempty"`
-	Periods     []SalesAnalysisPeriodRequest `json:"periods,omitempty"`
-	Concurrency int                          `json:"concurrency"`
+	ProfileID          string                       `json:"profileId"`
+	StoreIDs           []string                     `json:"storeIds"`
+	From               string                       `json:"from,omitempty"`
+	To                 string                       `json:"to,omitempty"`
+	Periods            []SalesAnalysisPeriodRequest `json:"periods,omitempty"`
+	Concurrency        int                          `json:"concurrency"`
+	SimulateStoreCount int                          `json:"simulateStoreCount,omitempty"`
 }
 
 type SalesAnalysisPeriodRequest struct {
@@ -280,8 +282,45 @@ type SalesAnalysisPeriodResult struct {
 	SuccessfulStores int                         `json:"successfulStores"`
 	Totals           SalesAnalysisTotals         `json:"totals"`
 	Stores           []SalesAnalysisStoreSummary `json:"stores"`
-	Items            []SalesAnalysisItem         `json:"items"`
+	Items            []SalesAnalysisItem         `json:"items,omitempty"`
+	ItemCount        int                         `json:"itemCount"`
 	Issues           []SalesAnalysisIssue        `json:"issues,omitempty"`
+}
+
+type SalesAnalysisItemsRequest struct {
+	OperationID string `json:"operationId"`
+	PeriodKey   string `json:"periodKey"`
+}
+
+type SalesAnalysisPackedItems struct {
+	PeriodKey string                   `json:"periodKey"`
+	Dict      []string                 `json:"dict"`
+	Rows      []SalesAnalysisPackedRow `json:"rows"`
+}
+
+type SalesAnalysisPackedRow struct {
+	S  int     `json:"s"`
+	Ac int     `json:"ac"`
+	An int     `json:"an"`
+	Br int     `json:"br,omitempty"`
+	C1 int     `json:"c1,omitempty"`
+	K1 int     `json:"k1,omitempty"`
+	C2 int     `json:"c2,omitempty"`
+	K2 int     `json:"k2,omitempty"`
+	C3 int     `json:"c3,omitempty"`
+	K3 int     `json:"k3,omitempty"`
+	C4 int     `json:"c4,omitempty"`
+	K4 int     `json:"k4,omitempty"`
+	C5 int     `json:"c5,omitempty"`
+	K5 int     `json:"k5,omitempty"`
+	T  float64 `json:"t,omitempty"`
+	Sq float64 `json:"sq,omitempty"`
+	Sa float64 `json:"sa,omitempty"`
+	Rq float64 `json:"rq,omitempty"`
+	Rt float64 `json:"rt,omitempty"`
+	Ra float64 `json:"ra,omitempty"`
+	Nq float64 `json:"nq,omitempty"`
+	Ns float64 `json:"ns,omitempty"`
 }
 
 type SalesAnalysisResult struct {
@@ -293,10 +332,35 @@ type SalesAnalysisResult struct {
 	SuccessfulStores int                         `json:"successfulStores"`
 	Totals           SalesAnalysisTotals         `json:"totals"`
 	Stores           []SalesAnalysisStoreSummary `json:"stores"`
-	Items            []SalesAnalysisItem         `json:"items"`
+	Items            []SalesAnalysisItem         `json:"items,omitempty"`
 	Issues           []SalesAnalysisIssue        `json:"issues,omitempty"`
 	Periods          []SalesAnalysisPeriodResult `json:"periods,omitempty"`
+	Weeks            []SalesAnalysisWeek         `json:"weeks,omitempty"`
 	QueryDurationMS  int64                       `json:"queryDurationMs"`
+}
+
+type SalesAnalysisWeek struct {
+	From   string                    `json:"from"`
+	To     string                    `json:"to"`
+	Stores []SalesAnalysisWeekStore  `json:"stores"`
+	Totals SalesAnalysisWeekStore    `json:"totals"`
+}
+
+type SalesAnalysisWeekStore struct {
+	BusinessID            string  `json:"businessId,omitempty"`
+	Label                 string  `json:"label,omitempty"`
+	SalesTW               float64 `json:"salesTw"`
+	SalesLW               float64 `json:"salesLw"`
+	CustomersTW           float64 `json:"customersTw"`
+	CustomersLW           float64 `json:"customersLw"`
+	WeekdaySalesTW        float64 `json:"weekdaySalesTw"`
+	WeekdaySalesLW        float64 `json:"weekdaySalesLw"`
+	WeekendSalesTW        float64 `json:"weekendSalesTw"`
+	WeekendSalesLW        float64 `json:"weekendSalesLw"`
+	WeekdayCustomersTW    float64 `json:"weekdayCustomersTw"`
+	WeekdayCustomersLW    float64 `json:"weekdayCustomersLw"`
+	WeekendCustomersTW    float64 `json:"weekendCustomersTw"`
+	WeekendCustomersLW    float64 `json:"weekendCustomersLw"`
 }
 
 type SalesAnalysisPDFWriteRequest struct {
