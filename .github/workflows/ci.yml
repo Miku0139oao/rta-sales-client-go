@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -11,71 +16,67 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: ["1.25.12", "1.26.6"]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: ${{ matrix.go-version }}
-          cache: true
-      - run: go test ./...
-      - run: go test -race ./...
-      - run: go vet ./...
-
-  vulnerability-scan:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: "1.26.6"
-          cache: true
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
-
-  desktop-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: "1.26.6"
+          go-version-file: go.mod
           cache: true
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.3.14"
-      - name: Verify Go packages
-        run: |
-          go test ./...
-          go vet ./...
-          go build ./...
+      - run: go test -race ./...
+      - run: go vet ./...
       - name: Verify Svelte frontend
         working-directory: desktop/frontend
         run: |
           bun install --frozen-lockfile
           bun run verify
+
+  vulnerability-scan:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+
+  desktop-windows:
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.3.14"
       - name: Install pinned Wails CLI
         shell: pwsh
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.14.0
-      - name: Install NSIS
-        shell: pwsh
-        run: |
-          choco install nsis --version 3.12.0 --no-progress --yes
-          "${env:ProgramFiles(x86)}\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Build portable executable
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path release | Out-Null
           Push-Location cmd/rta-excel-filler
-          & (Join-Path (go env GOPATH) 'bin\wails.exe') build -clean -trimpath -platform windows/amd64 -webview2 error -o RTA-Excel-Filler.exe
+          & (Join-Path (go env GOPATH) 'bin\wails.exe') build -trimpath -platform windows/amd64 -webview2 error -o RTA-Excel-Filler.exe
           Pop-Location
           Copy-Item -LiteralPath cmd/rta-excel-filler/build/bin/RTA-Excel-Filler.exe -Destination release/RTA-Excel-Filler-portable.exe
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          choco install nsis --version 3.12.0 --no-progress --yes
+          "${env:ProgramFiles(x86)}\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Build NSIS installer
         shell: pwsh
         run: |
           Push-Location cmd/rta-excel-filler
-          & (Join-Path (go env GOPATH) 'bin\wails.exe') build -clean -trimpath -platform windows/amd64 -webview2 download -nsis -installscope user -o RTA-Excel-Filler.exe
+          & (Join-Path (go env GOPATH) 'bin\wails.exe') build -trimpath -platform windows/amd64 -webview2 download -nsis -installscope user -o RTA-Excel-Filler.exe
           Pop-Location
           $installer = Get-ChildItem -LiteralPath cmd/rta-excel-filler/build/bin -Filter '*-installer.exe' | Select-Object -First 1
           if ($null -eq $installer) { throw 'Wails did not produce an NSIS installer' }
