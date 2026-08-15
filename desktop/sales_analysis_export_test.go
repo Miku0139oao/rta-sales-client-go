@@ -57,6 +57,7 @@ func TestWriteSalesAnalysisPDFRejectsUnsafeInput(t *testing.T) {
 	tests := []SalesAnalysisPDFWriteRequest{
 		{Filename: "report.pdf", DataBase64: valid},
 		{Directory: output, Filename: "..\\escape.pdf", DataBase64: valid},
+		{Directory: output, Filename: "../escape.pdf", DataBase64: valid},
 		{Directory: output, Filename: "report.txt", DataBase64: valid},
 		{Directory: output, Filename: "report.pdf", DataBase64: base64.StdEncoding.EncodeToString([]byte("not a PDF"))},
 	}

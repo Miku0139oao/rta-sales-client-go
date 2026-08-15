@@ -69,7 +69,7 @@ func validPDFDirectory(value string) (string, error) {
 
 func validPDFFilename(value string) (string, error) {
 	filename := strings.TrimSpace(value)
-	if filename == "" || filepath.Base(filename) != filename || !strings.EqualFold(filepath.Ext(filename), ".pdf") {
+	if filename == "" || strings.ContainsAny(filename, `/\`) || filepath.Base(filename) != filename || !strings.EqualFold(filepath.Ext(filename), ".pdf") {
 		return "", errors.New("invalid PDF filename")
 	}
 	return filename, nil
