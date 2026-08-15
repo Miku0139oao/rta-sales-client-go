@@ -262,6 +262,12 @@ export interface SalesAnalysisProgress {
   status?: 'running' | 'success' | 'failed' | string;
 }
 
+export interface SalesAnalysisPDFWriteRequest {
+  directory: string;
+  filename: string;
+  dataBase64: string;
+}
+
 export interface AppSettings {
   locale: Locale;
   theme: ThemePreference;
@@ -285,6 +291,8 @@ export interface BackendApi {
   listSalesAnalysisStores(profileId: string): Promise<SalesAnalysisStore[]>;
   runSalesAnalysis(request: SalesAnalysisRequest): Promise<SalesAnalysisResult>;
   cancelSalesAnalysis(operationId: string): Promise<void>;
+  chooseSalesAnalysisPDFDirectory(): Promise<string>;
+  writeSalesAnalysisPDF(request: SalesAnalysisPDFWriteRequest): Promise<string>;
   analyze(request: AnalyzeRequest): Promise<AnalysisResult>;
   cancelAnalysis(operationId: string): Promise<void>;
   retryFailed(operationId: string): Promise<AnalysisResult>;

@@ -21,6 +21,7 @@ type fileDialogFilter struct {
 
 type dialogService interface {
 	OpenFile(context.Context, fileDialogOptions) (string, error)
+	OpenDirectory(context.Context, fileDialogOptions) (string, error)
 	SaveFile(context.Context, fileDialogOptions) (string, error)
 }
 

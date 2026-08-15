@@ -295,6 +295,12 @@ type SalesAnalysisResult struct {
 	QueryDurationMS  int64                       `json:"queryDurationMs"`
 }
 
+type SalesAnalysisPDFWriteRequest struct {
+	Directory  string `json:"directory"`
+	Filename   string `json:"filename"`
+	DataBase64 string `json:"dataBase64"`
+}
+
 type SalesAnalysisProgress struct {
 	OperationID string `json:"operationId"`
 	Current     int    `json:"current"`

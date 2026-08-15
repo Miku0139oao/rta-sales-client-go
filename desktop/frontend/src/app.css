@@ -352,9 +352,11 @@ md-icon-button {
   box-shadow: 0 7px 18px var(--app-brand-shadow);
 }
 
-.brand-mark .material-symbols-rounded {
-  font-size: 28px;
-  font-variation-settings: "FILL" 1, "wght" 500, "GRAD" 0, "opsz" 28;
+.brand-mark .brand-glyph {
+  display: block;
+  width: 24px;
+  height: 24px;
+  fill: currentColor;
 }
 
 .brand-copy {

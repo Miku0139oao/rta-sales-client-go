@@ -13,6 +13,7 @@ import type {
   SaveWorkbookRequest,
   ScanWorkbookRequest,
   SalesAnalysisItem,
+  SalesAnalysisPDFWriteRequest,
   SalesAnalysisProgress,
   SalesAnalysisPeriodResult,
   SalesAnalysisRequest,
@@ -366,6 +367,12 @@ export const backend: BackendApi = {
 
   cancelSalesAnalysis: (operationId: string) =>
     invoke(['CancelSalesAnalysis'], [{ operationId }], async () => { mockSalesCancelled = true; }),
+
+  chooseSalesAnalysisPDFDirectory: () =>
+    invoke(['ChooseSalesAnalysisPDFDirectory'], [], async () => 'C:\\Users\\Demo\\Documents\\RTA Reports'),
+
+  writeSalesAnalysisPDF: (request: SalesAnalysisPDFWriteRequest) =>
+    invoke(['WriteSalesAnalysisPDF'], [request], async () => `${request.directory}\\${request.filename}`),
 
   analyze: (request: AnalyzeRequest) => invoke(['Analyze'], [request], mockAnalyze),
 

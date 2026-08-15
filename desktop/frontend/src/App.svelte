@@ -64,7 +64,13 @@
 <div class="app-shell">
   <header class="top-app-bar">
     <a class="brand" href="#main-content" aria-label={t('app.name')}>
-      <span class="brand-mark" aria-hidden="true"><span class="material-symbols-rounded">finance_mode</span></span>
+      <span class="brand-mark" aria-hidden="true">
+        <svg class="brand-glyph" viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="4.2" y="13.4" width="4" height="6.4" rx="1.3" />
+          <rect x="10" y="9.6" width="4" height="10.2" rx="1.3" />
+          <rect x="15.8" y="5.6" width="4" height="14.2" rx="1.3" />
+        </svg>
+      </span>
       <span class="brand-copy">
         <strong>{t('app.name')}</strong>
       </span>

@@ -4,6 +4,15 @@ import { configureBackend } from '../backend';
 import { translator } from '../i18n';
 import { defaultSettings } from '../settings';
 import type { SalesAnalysisRequest, SalesAnalysisResult } from '../types';
+
+vi.mock('../sales-report-pdf', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../sales-report-pdf')>();
+  return {
+    ...actual,
+    generateSalesAnalysisPDF: vi.fn(async () => new TextEncoder().encode('%PDF-1.7\nmock report')),
+  };
+});
+
 import AnalysisPage from './AnalysisPage.svelte';
 
 const analysisResult: SalesAnalysisResult = {
@@ -45,6 +54,7 @@ analysisResult.periods = [
   { key: 'previous', label: '上期', from: '2026-07-01', to: '2026-07-31', complete: true, successfulStores: 2, totals: analysisResult.totals, stores: [], items: analysisResult.items, issues: [] },
   { key: 'previous2', label: '前期', from: '2026-05-31', to: '2026-06-30', complete: true, successfulStores: 2, totals: analysisResult.totals, stores: [], items: analysisResult.items, issues: [] },
   { key: 'yearAgo', label: '去年同期', from: '2025-08-01', to: '2025-08-31', complete: true, successfulStores: 2, totals: analysisResult.totals, stores: [], items: analysisResult.items, issues: [] },
+  { key: 'yearAgoNext', label: '去年下月', from: '2025-09-01', to: '2025-09-30', complete: true, successfulStores: 2, totals: analysisResult.totals, stores: [], items: analysisResult.items, issues: [] },
 ];
 
 beforeEach(() => configureBackend(undefined));
@@ -56,6 +66,11 @@ afterEach(() => {
 describe('sales analysis page', () => {
   it('queries multiple stores through one profile and filters all five category levels locally', async () => {
     const runSalesAnalysis = vi.fn(async (..._args: unknown[]) => analysisResult);
+    const chooseSalesAnalysisPDFDirectory = vi.fn(async () => 'D:\\RTA Reports');
+    const writeSalesAnalysisPDF = vi.fn(async (...args: unknown[]) => {
+      const request = args[0] as { directory: string; filename: string; dataBase64: string };
+      return `${request.directory}\\${request.filename}`;
+    });
     configureBackend({ methods: {
       ListProfiles: vi.fn(async () => [{
         id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
@@ -65,6 +80,8 @@ describe('sales analysis page', () => {
         { businessId: '108', label: '108 - Harbour' },
       ]),
       RunSalesAnalysis: runSalesAnalysis,
+      ChooseSalesAnalysisPDFDirectory: chooseSalesAnalysisPDFDirectory,
+      WriteSalesAnalysisPDF: writeSalesAnalysisPDF,
     } });
     const { container } = render(AnalysisPage, {
       props: { t: translator('zh-TW'), settings: { ...defaultSettings, accountConcurrency: 4 } },
@@ -90,6 +107,15 @@ describe('sales analysis page', () => {
     expect(topSales?.querySelector('.top-metrics')).toHaveTextContent('2 件');
     expect(topQuantity?.querySelector('.top-metrics')).toHaveTextContent('2 件');
     expect(topQuantity?.querySelector('.top-metrics')).toHaveTextContent('100.00');
+    await fireEvent.click(screen.getByText('匯出門店 PDF'));
+    await waitFor(() => expect(writeSalesAnalysisPDF).toHaveBeenCalledTimes(2));
+    expect(chooseSalesAnalysisPDFDirectory).toHaveBeenCalledOnce();
+    const firstPDF = writeSalesAnalysisPDF.mock.calls[0]![0] as { directory: string; filename: string; dataBase64: string };
+    expect(firstPDF).toMatchObject({
+      directory: 'D:\\RTA Reports', filename: 'RTA-Sales-107-20260801-20260831.pdf',
+    });
+    expect(firstPDF.dataBase64).toBe(btoa('%PDF-1.7\nmock report'));
+    expect(screen.getByRole('status')).toHaveTextContent('已匯出 2 份報告至 D:\\RTA Reports');
     expect(runSalesAnalysis).toHaveBeenCalledWith({
       profileId: 'profile-1', storeIds: ['107', '108'], concurrency: 4,
       periods: [
@@ -111,6 +137,9 @@ describe('sales analysis page', () => {
 
     await fireEvent.click(screen.getByRole('tab', { name: '分類' }));
     expect(screen.getByRole('heading', { name: '三期分類比較' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '分類商品銷售排行' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '分類商品銷量排行' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '去年下月' })).toBeInTheDocument();
     expect(screen.getAllByText('商品部門').length).toBeGreaterThan(0);
     expect(screen.getAllByText('商品種類').length).toBeGreaterThan(0);
     expect(screen.getAllByText('四級類目').length).toBeGreaterThan(0);
@@ -153,5 +182,10 @@ describe('sales analysis page', () => {
     expect(periods[0]!.to).toBe(localDate);
     expect(periods[1]!.to).toBe(expectedEnd(-1));
     expect(periods[2]!.to).toBe(expectedEnd(-2));
+    expect(periods[4]).toMatchObject({ key: 'yearAgoNext', includeTrend: false });
+    const nextMonthLastYear = new Date(now.getFullYear() - 1, now.getMonth() + 1, 1);
+    const nextMonthLastYearEnd = new Date(nextMonthLastYear.getFullYear(), nextMonthLastYear.getMonth() + 1, 0);
+    expect(periods[4]!.from).toBe(`${nextMonthLastYear.getFullYear()}-${String(nextMonthLastYear.getMonth() + 1).padStart(2, '0')}-01`);
+    expect(periods[4]!.to).toBe(`${nextMonthLastYearEnd.getFullYear()}-${String(nextMonthLastYearEnd.getMonth() + 1).padStart(2, '0')}-${String(nextMonthLastYearEnd.getDate()).padStart(2, '0')}`);
   });
 });

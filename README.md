@@ -67,11 +67,11 @@ removes its saved credentials and encrypted cookies.
 
 Open **Sales analysis**, choose one enabled multi-store profile, select the
 stores, and query either a month or a custom date range. Monthly comparison
-loads the current period, previous period, two periods ago, and the same period
-last year in one run. Period/store jobs share the selected profile and run in
+loads the current period, previous period, two periods ago, the same period
+last year, and the following month last year in one run. Period/store jobs share the selected profile and run in
 parallel up to the concurrency configured in **Settings**. When the selected
-month is still in progress, all four comparisons stop at the same day-of-month
-(capped at each month's final day); completed months use their full month.
+month is still in progress, the first four periods stop at the same day-of-month
+(capped at each month's final day); the following month last year uses its full month.
 
 Product, brand, and all five category levels come from Article View. Gross
 sales, returns, net sales, quantities, category comparisons, top products, and
@@ -81,6 +81,12 @@ Whole-store transaction counts come from Trend View and basket value is
 never summed to approximate a store transaction count. Category and product
 filters intentionally hide transaction count and basket value because Trend
 View does not provide those measures at the filtered product grain.
+
+The category view includes sales rankings for current/year-ago/next-month-last-year
+and quantity rankings for current/previous/two-periods-ago. **Export store PDFs**
+asks for one destination folder, then creates a separate landscape report for
+every successfully queried store. Existing report names are preserved by adding
+a numeric suffix instead of overwriting them.
 
 ### Multi-day workbook workflow
 
