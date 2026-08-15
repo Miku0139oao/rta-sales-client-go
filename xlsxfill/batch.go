@@ -32,7 +32,8 @@ type BackoffFunc func(context.Context, time.Duration) error
 // terminal state. Callbacks are invoked serially by Analyze or RetryFailed.
 type ProgressFunc func(ProgressEvent)
 
-// ProgressEvent intentionally omits account names, store IDs, and sales data.
+// ProgressEvent keeps routing details in memory for trusted callers, while its
+// JSON form omits profiles, store IDs, and sales data.
 type ProgressEvent struct {
 	Stage         string `json:"stage"`
 	CompletedJobs int    `json:"completed_jobs"`
@@ -40,12 +41,13 @@ type ProgressEvent struct {
 	Attempt       int    `json:"attempt"`
 	Date          string `json:"date"`
 	Profile       string `json:"-"`
+	StoreID       string `json:"-"`
 	Status        string `json:"status"`
 }
 
 // BatchRequest configures an inclusive multi-day workbook analysis. From and
 // To are compared as calendar dates. MaxJobs defaults to 2000, and Concurrency
-// defaults to two with a hard maximum of four account profiles.
+// defaults to two query jobs with a hard maximum of four.
 type BatchRequest struct {
 	InputPath               string
 	SheetName               string
@@ -251,7 +253,6 @@ type batchJob struct {
 	date       time.Time
 	dateText   string
 	profile    string
-	account    string
 	provider   SalesProvider
 	rowIndexes []int
 	status     batchJobStatus
@@ -659,7 +660,7 @@ func prepareBatchPlan(ctx context.Context, provider SalesProvider, request Batch
 			}
 		}
 		state.report.SelectedRows++
-		jobProvider, profile, account, ok := resolveBatchProvider(provider, businessStoreID)
+		jobProvider, profile, ok := resolveBatchProvider(provider, businessStoreID)
 		if !ok {
 			row.status = RowStatusIssue
 			row.static = []string{"store_not_authorized"}
@@ -675,7 +676,7 @@ func prepareBatchPlan(ctx context.Context, provider SalesProvider, request Batch
 			jobsByKey[key] = jobIndex
 			state.jobs = append(state.jobs, batchJob{
 				storeID: businessStoreID, date: rowDate, dateText: row.date,
-				profile: profile, account: account, provider: jobProvider,
+				profile: profile, provider: jobProvider,
 			})
 		}
 		row.jobIndex = jobIndex
@@ -706,49 +707,35 @@ func (state *batchPlanState) executeJobsLocked(ctx context.Context, indexes []in
 	}
 	state.executing = true
 	defer func() { state.executing = false }()
-	// Build serial account lanes first. Assigning whole lanes to workers avoids
-	// head-of-line blocking where every worker waits for the same account while
-	// another account is ready to run.
-	lanesByAccount := make(map[string][]int)
-	accountOrder := make([]string, 0)
-	for _, index := range indexes {
-		account := state.jobs[index].account
-		if _, exists := lanesByAccount[account]; !exists {
-			accountOrder = append(accountOrder, account)
-		}
-		lanesByAccount[account] = append(lanesByAccount[account], index)
-	}
 	workerCount := state.concurrency
-	if workerCount > len(accountOrder) {
-		workerCount = len(accountOrder)
+	if workerCount > len(indexes) {
+		workerCount = len(indexes)
 	}
-	work := make(chan []int)
+	work := make(chan int)
 	results := make(chan batchJobResult, workerCount)
 	var workers sync.WaitGroup
 	for worker := 0; worker < workerCount; worker++ {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			for lane := range work {
-				for _, index := range lane {
-					if ctx.Err() != nil {
-						return
-					}
-					result := executeBatchJob(ctx, state.jobs[index], state.backoff)
-					result.index = index
-					results <- result
-					if result.cancelled {
-						return
-					}
+			for index := range work {
+				if ctx.Err() != nil {
+					return
+				}
+				result := executeBatchJob(ctx, state.jobs[index], state.backoff)
+				result.index = index
+				results <- result
+				if result.cancelled {
+					return
 				}
 			}
 		}()
 	}
 	go func() {
 		defer close(work)
-		for _, account := range accountOrder {
+		for _, index := range indexes {
 			select {
-			case work <- lanesByAccount[account]:
+			case work <- index:
 			case <-ctx.Done():
 				return
 			}
@@ -793,7 +780,7 @@ func (state *batchPlanState) executeJobsLocked(ctx context.Context, indexes []in
 			state.callProgressLocked(ProgressEvent{
 				Stage: "analyze", CompletedJobs: state.report.CompletedJobs, TotalJobs: len(state.jobs),
 				Attempt: result.attempts, Date: job.dateText,
-				Profile: job.profile, Status: status,
+				Profile: job.profile, StoreID: job.storeID, Status: status,
 			})
 		}
 	}
@@ -1003,21 +990,17 @@ func readCurrentValues(book *excelize.File, sheet string, row int) (CurrentValue
 	return values, nil
 }
 
-func resolveBatchProvider(provider SalesProvider, storeID string) (SalesProvider, string, string, bool) {
+func resolveBatchProvider(provider SalesProvider, storeID string) (SalesProvider, string, bool) {
 	if router, ok := provider.(interface {
 		ProviderForStore(string) (ProviderRoute, bool)
 	}); ok {
 		route, found := router.ProviderForStore(storeID)
 		if !found || nilSalesProvider(route.Provider) {
-			return nil, "", "", false
+			return nil, "", false
 		}
-		lane := strings.TrimSpace(route.Lane)
-		if lane == "" {
-			lane = providerLane(route.Provider)
-		}
-		return route.Provider, strings.TrimSpace(route.Profile), lane, true
+		return route.Provider, strings.TrimSpace(route.Profile), true
 	}
-	return provider, "", "default", true
+	return provider, "", true
 }
 
 func isTemporaryQueryError(err error) bool {

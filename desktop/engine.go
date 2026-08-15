@@ -30,6 +30,10 @@ type engineAnalyzeRequest struct {
 type engineProgress struct {
 	Completed int
 	Total     int
+	Date      string
+	StoreID   string
+	Profile   string
+	Attempt   int
 	Status    string
 }
 

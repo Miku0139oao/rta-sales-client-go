@@ -55,7 +55,7 @@ func (xlsxEngine) Analyze(ctx context.Context, provider xlsxfill.SalesProvider, 
 		Overwrite:               request.Overwrite, MaxJobs: request.MaxJobs, Concurrency: request.Concurrency,
 		Progress: func(event xlsxfill.ProgressEvent) {
 			if request.Progress != nil {
-				request.Progress(engineProgress{Completed: event.CompletedJobs, Total: event.TotalJobs, Status: event.Status})
+				request.Progress(toEngineProgress(event))
 			}
 		},
 	})
@@ -69,6 +69,18 @@ func (xlsxEngine) Analyze(ctx context.Context, provider xlsxfill.SalesProvider, 
 		return converted, analyzeErr
 	}
 	return converted, nil
+}
+
+func toEngineProgress(event xlsxfill.ProgressEvent) engineProgress {
+	return engineProgress{
+		Completed: event.CompletedJobs,
+		Total:     event.TotalJobs,
+		Date:      event.Date,
+		StoreID:   event.StoreID,
+		Profile:   event.Profile,
+		Attempt:   event.Attempt,
+		Status:    event.Status,
+	}
 }
 
 func (xlsxEngine) RetryFailed(ctx context.Context, existing *enginePlan, progress func(engineProgress)) (*enginePlan, error) {

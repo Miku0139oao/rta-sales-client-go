@@ -18,8 +18,8 @@ type ProviderRouter struct {
 }
 
 // ProviderRoute associates a store with an account-scoped provider. Profile is
-// an optional display label kept only in memory. Lane identifies providers that
-// must never be queried concurrently; when empty it is derived from Provider.
+// an optional display label kept only in memory. Lane is retained for source
+// compatibility but query scheduling is job-scoped and does not serialize it.
 type ProviderRoute struct {
 	Provider SalesProvider `json:"-"`
 	Profile  string        `json:"-"`
@@ -49,14 +49,13 @@ func NewProviderRouter(providers map[string]SalesProvider) (*ProviderRouter, err
 		if _, exists := routes[storeID]; exists {
 			return nil, &rtasales.InputError{Field: "providers", Message: fmt.Sprintf("store %q is configured more than once after trimming", storeID)}
 		}
-		routes[storeID] = ProviderRoute{Provider: provider, Lane: providerLane(provider)}
+		routes[storeID] = ProviderRoute{Provider: provider}
 	}
 	return &ProviderRouter{routes: routes}, nil
 }
 
-// NewProfiledProviderRouter creates a router with optional display profiles and
-// explicit serialization lanes. It copies every route and never serializes the
-// supplied profile/lane metadata.
+// NewProfiledProviderRouter creates a router with optional display profiles.
+// It copies every route and never serializes the supplied profile/lane metadata.
 func NewProfiledProviderRouter(routes map[string]ProviderRoute) (*ProviderRouter, error) {
 	if len(routes) == 0 {
 		return nil, &rtasales.InputError{Field: "routes", Message: "at least one store provider is required"}
@@ -81,9 +80,6 @@ func NewProfiledProviderRouter(routes map[string]ProviderRoute) (*ProviderRouter
 		}
 		route.Profile = strings.TrimSpace(route.Profile)
 		route.Lane = strings.TrimSpace(route.Lane)
-		if route.Lane == "" {
-			route.Lane = providerLane(route.Provider)
-		}
 		copyOfRoutes[storeID] = route
 	}
 	return &ProviderRouter{routes: copyOfRoutes}, nil
@@ -115,31 +111,13 @@ func (r *ProviderRouter) Sales(ctx context.Context, query rtasales.SalesQuery) (
 
 // ProviderForStore returns a copy of the route for exact-match inspection by
 // adapters. The route contains no credentials, but callers should still keep
-// its profile and lane out of logs.
+// its profile and compatibility lane out of logs.
 func (r *ProviderRouter) ProviderForStore(businessStoreID string) (ProviderRoute, bool) {
 	if r == nil {
 		return ProviderRoute{}, false
 	}
 	route, ok := r.routes[strings.TrimSpace(businessStoreID)]
 	return route, ok
-}
-
-func providerLane(provider SalesProvider) string {
-	value := reflect.ValueOf(provider)
-	if !value.IsValid() {
-		return "provider:nil"
-	}
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.Slice, reflect.UnsafePointer:
-		if value.IsNil() {
-			return fmt.Sprintf("provider:%T:nil", provider)
-		}
-		return fmt.Sprintf("provider:%T:%x", provider, value.Pointer())
-	default:
-		// A value provider cannot expose a stable identity without inspecting its
-		// fields. Group all such providers conservatively into one serial lane.
-		return "provider:value"
-	}
 }
 
 func nilSalesProvider(provider SalesProvider) bool {

@@ -233,6 +233,7 @@ md-outlined-button,
 md-text-button,
 md-icon-button,
 md-switch,
+md-checkbox,
 input[type="checkbox"] {
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
@@ -253,7 +254,8 @@ md-filled-tonal-button,
 md-outlined-button,
 md-text-button,
 md-icon-button,
-md-switch {
+md-switch,
+md-checkbox {
   transition: transform 70ms ease, opacity 100ms ease, background-color 120ms ease;
 }
 
@@ -263,7 +265,8 @@ md-filled-tonal-button:active:not([disabled="true"]),
 md-outlined-button:active:not([disabled="true"]),
 md-text-button:active:not([disabled="true"]),
 md-icon-button:active:not([disabled="true"]),
-md-switch:active:not([disabled="true"]) {
+md-switch:active:not([disabled="true"]),
+md-checkbox:active:not([disabled="true"]) {
   transform: scale(0.975);
 }
 
@@ -921,10 +924,23 @@ main:focus {
   margin-bottom: 18px;
 }
 
-.progress-heading > span {
+.progress-percentage {
+  display: grid;
+  justify-items: end;
+  line-height: 1;
+}
+
+.progress-percentage strong {
+  color: var(--md-sys-color-primary);
+  font-size: 28px;
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-percentage span {
+  margin-top: 6px;
   color: var(--md-sys-color-on-surface-variant);
   font-variant-numeric: tabular-nums;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .progress-card md-linear-progress {
@@ -933,6 +949,109 @@ main:focus {
   --md-linear-progress-active-indicator-height: 9px;
   --md-linear-progress-track-shape: 999px;
   --md-linear-progress-active-indicator-shape: 999px;
+}
+
+.progress-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.progress-stats > div {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 13px;
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.progress-stats span {
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 12px;
+}
+
+.progress-stats strong {
+  color: var(--md-sys-color-on-surface);
+  font-size: 21px;
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-latest {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 13px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--app-active-border);
+  border-radius: 15px;
+  background: var(--md-sys-color-secondary-container);
+}
+
+.progress-latest.progress-issue {
+  border-color: var(--md-sys-color-error);
+  background: var(--md-sys-color-error-container);
+}
+
+.progress-latest-icon {
+  color: var(--md-sys-color-primary);
+  font-size: 28px;
+}
+
+.progress-issue .progress-latest-icon {
+  color: var(--md-sys-color-error);
+}
+
+.progress-latest-main {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.progress-latest-main span,
+.progress-latest-meta span {
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 12px;
+}
+
+.progress-latest-main strong {
+  overflow: hidden;
+  color: var(--md-sys-color-on-surface);
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-latest-meta {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+
+.progress-latest-meta strong {
+  color: var(--md-sys-color-primary);
+  font-size: 13px;
+}
+
+.progress-issue .progress-latest-meta strong {
+  color: var(--md-sys-color-error);
+}
+
+.progress-waiting {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 14px;
+  padding: 13px 15px;
+  border-radius: 14px;
+  color: var(--md-sys-color-on-surface-variant);
+  background: var(--md-sys-color-surface-container-low);
+  font-size: 13px;
+  font-weight: 620;
 }
 
 .stage-list {
@@ -1790,6 +1909,15 @@ th.proposed-column {
 
   .workflow-steps li strong {
     font-size: 11px;
+  }
+
+  .progress-latest {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .progress-latest-meta {
+    grid-column: 2;
+    justify-items: start;
   }
 
   .source-card,

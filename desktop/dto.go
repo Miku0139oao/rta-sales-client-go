@@ -171,15 +171,20 @@ type ApplyResult struct {
 	SkippedRows      int    `json:"skippedRows"`
 }
 
-// ProgressEvent is the only event payload sent by the backend. It contains
-// counts and generic bilingual status text, never store IDs, credentials, or
-// sales values.
+// ProgressEvent is the only event payload sent by the backend. Query events may
+// identify the latest completed profile, store, and date, but never include
+// credentials, cookies, or sales values.
 type ProgressEvent struct {
 	OperationID string `json:"operationId"`
 	Stage       string `json:"stage"`
 	Current     int    `json:"current"`
 	Total       int    `json:"total"`
 	Message     string `json:"message"`
+	Date        string `json:"date,omitempty"`
+	StoreID     string `json:"storeId,omitempty"`
+	Profile     string `json:"profile,omitempty"`
+	Attempt     int    `json:"attempt,omitempty"`
+	Status      string `json:"status,omitempty"`
 }
 
 type RuntimeStatus struct {

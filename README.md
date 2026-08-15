@@ -52,9 +52,9 @@ Get-Content .\SHA256SUMS.txt
 Open **Accounts**, add a display name and the RTA account/password, then use
 **Test** before enabling the profile for analysis. Profile order is also store
 ownership priority: if two profiles can access the same store, the first
-enabled profile wins. Queries for one account are always serialized; different
-accounts use the concurrency limit from **Settings** (default `2`, maximum
-`4`).
+enabled profile wins. The query-job concurrency limit in **Settings** applies
+across stores and dates even when one multi-store account handles every job
+(default `2`, maximum `4`).
 
 Passwords are kept in Windows Credential Manager. Each profile's cookies are
 encrypted with Windows DPAPI before being saved under the current user's
@@ -256,7 +256,8 @@ go run ./cmd/rta-xlsx-fill `
 Do not pass `-row` during normal use; it is diagnostic-only and cannot be used
 with `-write`. `-max-jobs` is the safety ceiling after automatic store
 matching (default `2,000`); `-max-queries` remains as a deprecated alias.
-`-concurrency` is capped at `4`, while jobs for the same account remain serial.
+`-concurrency` is capped at `4` and applies to date/store query jobs, including
+jobs handled by the same multi-store account.
 There is no whole-operation timeout by default. Use an explicit value such as
 `-timeout 20m` when one is required.
 

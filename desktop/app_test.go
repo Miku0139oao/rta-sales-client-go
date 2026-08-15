@@ -605,13 +605,13 @@ func TestProfilePriorityWinsOverlapAndReorderChangesOwner(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(string(encoded), "shared-store") || strings.Contains(string(encoded), "account-one") {
-			t.Fatalf("progress event exposed private routing data: %s", encoded)
+		if strings.Contains(string(encoded), "account-one") || strings.Contains(string(encoded), "password-one") {
+			t.Fatalf("progress event exposed credentials: %s", encoded)
 		}
 	}
 }
 
-func TestDuplicateAccountProfilesShareSerialLane(t *testing.T) {
+func TestDuplicateAccountProfilesDoNotExposeAccountInRoutes(t *testing.T) {
 	factory := &sequenceClients{clients: []accountClient{
 		&fakeAccountClient{stores: []rtasales.Store{{BusinessID: "store-one"}}},
 		&fakeAccountClient{stores: []rtasales.Store{{BusinessID: "store-two"}}},
@@ -630,11 +630,56 @@ func TestDuplicateAccountProfilesShareSerialLane(t *testing.T) {
 	}
 	first, firstOK := router.ProviderForStore("store-one")
 	second, secondOK := router.ProviderForStore("store-two")
-	if !firstOK || !secondOK || first.Lane == "" || first.Lane != second.Lane {
-		t.Fatalf("duplicate account profiles did not share a lane: %#v %#v", first, second)
+	if !firstOK || !secondOK {
+		t.Fatalf("duplicate account profiles lost a route: %#v %#v", first, second)
 	}
-	if strings.Contains(first.Lane, "same-account") {
-		t.Fatal("serial lane exposed the account identifier")
+	if strings.Contains(first.Lane, "same-account") || strings.Contains(second.Lane, "same-account") {
+		t.Fatal("route metadata exposed the account identifier")
+	}
+}
+
+func TestAnalyzeEmitsUsefulQueryProgressWithoutCredentials(t *testing.T) {
+	engine := new(fakeEngine)
+	engine.analyze = func(_ context.Context, _ xlsxfill.SalesProvider, request engineAnalyzeRequest) (*enginePlan, error) {
+		request.Progress(engineProgress{
+			Completed: 7, Total: 12, Date: "2026-08-07", StoreID: "107",
+			Profile: "Production", Attempt: 2, Status: "success",
+		})
+		return &enginePlan{PlanID: "test-plan", InputPath: request.InputPath, Complete: true}, nil
+	}
+	app, _, events := newTestApp(t, engine, fakeClients{byAccount: map[string]accountClient{
+		"secret-account": &fakeAccountClient{stores: []rtasales.Store{{BusinessID: "107"}}},
+	}})
+	if _, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{
+		DisplayName: "Production", Account: "secret-account", Password: "secret-password", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.Analyze(AnalyzeRequest{InputPath: testWorkbook(t), Date: "2026-08-07"}); err != nil {
+		t.Fatal(err)
+	}
+	events.mu.Lock()
+	defer events.mu.Unlock()
+	found := false
+	for _, recorded := range events.events {
+		event, ok := recorded.payload.(ProgressEvent)
+		if !ok || event.Stage != "query" {
+			continue
+		}
+		found = true
+		if event.Current != 7 || event.Total != 12 || event.StoreID != "107" || event.Date != "2026-08-07" || event.Profile != "Production" || event.Attempt != 2 || event.Status != "success" {
+			t.Fatalf("unexpected query progress: %#v", event)
+		}
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), "secret-account") || strings.Contains(string(encoded), "secret-password") {
+			t.Fatalf("query progress exposed credentials: %s", encoded)
+		}
+	}
+	if !found {
+		t.Fatal("query progress event was not emitted")
 	}
 }
 

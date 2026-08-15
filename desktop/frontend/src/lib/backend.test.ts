@@ -38,10 +38,15 @@ describe('Wails backend adapter', () => {
     });
     const received: AnalysisProgress[] = [];
     const unsubscribe = backend.onProgress((progress) => received.push(progress));
-    listeners.get('rta:progress')?.({ operationId: 'op1', stage: 'query', current: 2, total: 4 });
+    listeners.get('rta:progress')?.({
+      operationId: 'op1', stage: 'query', current: 2, total: 4,
+      storeId: '107', date: '2026-08-07', profile: 'Production', attempt: 1, status: 'success',
+    });
 
     expect(received).toHaveLength(1);
-    expect(received[0]).toMatchObject({ stage: 'query', current: 2 });
+    expect(received[0]).toMatchObject({
+      stage: 'query', current: 2, storeId: '107', date: '2026-08-07', profile: 'Production', status: 'success',
+    });
     unsubscribe();
     expect(cleanups).toEqual(['rta:progress', 'analysis-progress']);
   });

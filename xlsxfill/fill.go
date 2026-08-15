@@ -22,8 +22,7 @@ const (
 	// DefaultMaxJobs bounds a normal multi-day analysis while still allowing a
 	// full workbook month to be processed without per-run tuning.
 	DefaultMaxJobs = 2000
-	// DefaultConcurrency is the number of account profiles queried at once.
-	// Queries belonging to the same account remain serialized.
+	// DefaultConcurrency is the number of date/store query jobs run at once.
 	DefaultConcurrency = 2
 	// MaximumConcurrency is deliberately small because a Sales call may itself
 	// issue multiple concurrent RTA page requests.

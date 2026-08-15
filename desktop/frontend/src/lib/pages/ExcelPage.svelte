@@ -37,10 +37,8 @@
   let analysis: AnalysisResult | undefined;
   let filter: PreviewFilter = 'all';
   let overwrite = false;
-  let overwriteConfirmed = false;
   let allowPartial = false;
   let keepIssueOriginal = false;
-  let overwriteDialog = false;
   let partialDialog = false;
   let operationError = '';
   let applyResult: ApplyResult | undefined;
@@ -70,6 +68,8 @@
   $: onBusyChange(workflowBusy);
   $: activeStageIndex = progress ? stages.indexOf(progress.stage) : -1;
   $: progressValue = progress && progress.total > 0 ? Math.min(1, progress.current / progress.total) : 0;
+  $: progressPercent = Math.round(progressValue * 100);
+  $: progressRemaining = Math.max(0, (progress?.total ?? 0) - (progress?.current ?? 0));
   $: invalidRange = Boolean(fromDate && toDate && fromDate > toDate);
   $: canAnalyze = Boolean(scan && sheetName && fromDate && toDate && !invalidRange && scan.accounts > 0 && !workflowBusy && !analysis);
   $: partialOverrideAllowed = Boolean(
@@ -79,8 +79,7 @@
   $: canSave = Boolean(
     analysis && !workflowBusy && analysisComplete && hasWritableChanges && aggregateProblemCount === 0 &&
     (analysis.canApply || partialOverrideAllowed) &&
-    (issueCount === 0 || partialOverrideAllowed) &&
-    (!overwrite || overwriteConfirmed)
+    (issueCount === 0 || partialOverrideAllowed)
   );
 
   onMount(() => {
@@ -185,8 +184,6 @@
   async function analyzeWorkbook() {
     allowPartial = false;
     keepIssueOriginal = false;
-    overwriteConfirmed = true;
-    overwriteDialog = false;
     partialDialog = false;
     await runAnalysis();
   }
@@ -310,27 +307,14 @@
 
   function resetWriteOptions() {
     overwrite = false;
-    overwriteConfirmed = false;
     allowPartial = false;
     keepIssueOriginal = false;
-    overwriteDialog = false;
     partialDialog = false;
   }
 
   function toggleOverwritePolicy() {
     if (analysis || workflowBusy) return;
-    if (overwrite) {
-      overwrite = false;
-      overwriteConfirmed = true;
-      return;
-    }
-    overwriteDialog = true;
-  }
-
-  function confirmOverwrite() {
-    overwrite = true;
-    overwriteConfirmed = true;
-    overwriteDialog = false;
+    overwrite = !overwrite;
   }
 
   function togglePartial() {
@@ -532,12 +516,12 @@
         <div class="pre-analysis-option">
           <div class="write-option">
             <strong>{t('excel.overwriteLabel')}</strong>
-            <md-switch
+            <md-checkbox
               aria-label={t('excel.overwriteLabel')}
-              selected={overwrite}
+              checked={overwrite}
               disabled={workflowBusy || Boolean(analysis)}
               onclick={toggleOverwritePolicy}
-            ></md-switch>
+            ></md-checkbox>
           </div>
         </div>
 
@@ -554,9 +538,35 @@
       <section bind:this={progressSection} class="progress-card surface-card" aria-labelledby="progress-title" aria-live="polite" tabindex="-1">
         <div class="progress-heading">
           <h2 id="progress-title">{retrying ? t('excel.retrying') : t('excel.progressTitle')}</h2>
-          <span>{t('excel.progressCount', { current: progress?.current ?? 0, total: progress?.total ?? stages.length })}</span>
+          <div class="progress-percentage">
+            <strong>{progressPercent}%</strong>
+            <span>{t('excel.progressCount', { current: progress?.current ?? 0, total: progress?.total ?? stages.length })}</span>
+          </div>
         </div>
         <md-linear-progress value={progressValue}></md-linear-progress>
+        <div class="progress-stats">
+          <div><span>{t('excel.progress.completed')}</span><strong>{progress?.current ?? 0}</strong></div>
+          <div><span>{t('excel.progress.remaining')}</span><strong>{progressRemaining}</strong></div>
+          <div><span>{t('excel.progress.total')}</span><strong>{progress?.total ?? stages.length}</strong></div>
+        </div>
+        {#if progress?.stage === 'query'}
+          {#if progress.storeId || progress.date || progress.profile}
+            <div class="progress-latest" class:progress-issue={progress.status === 'issue'}>
+              <span class="progress-latest-icon material-symbols-rounded" aria-hidden="true">{progress.status === 'issue' ? 'error' : 'task_alt'}</span>
+              <div class="progress-latest-main">
+                <span>{t('excel.progress.latest')}</span>
+                <strong>{t('excel.progress.latestJob', { store: progress.storeId || '—', date: progress.date || '—' })}</strong>
+              </div>
+              <div class="progress-latest-meta">
+                {#if progress.profile}<span>{t('excel.progress.account', { profile: progress.profile })}</span>{/if}
+                <strong>{progress.status === 'issue' ? t('excel.progress.issue') : t('excel.progress.success')}</strong>
+                {#if (progress.attempt ?? 0) > 1}<span>{t('excel.progress.attempt', { count: progress.attempt ?? 0 })}</span>{/if}
+              </div>
+            </div>
+          {:else}
+            <div class="progress-waiting"><span class="material-symbols-rounded" aria-hidden="true">hourglass_top</span>{t('excel.progress.waiting')}</div>
+          {/if}
+        {/if}
         <ol class="stage-list">
           {#each stages as stage, index}
             <li class:complete={index < activeStageIndex} class:active={index === activeStageIndex}>
@@ -603,12 +613,12 @@
           <div class="divider"></div>
           <div class="write-option">
             <strong>{t('excel.partialLabel')}</strong>
-            <md-switch
+            <md-checkbox
               aria-label={t('excel.partialLabel')}
-              selected={allowPartial}
+              checked={allowPartial}
               disabled={workflowBusy || !analysisComplete || !hasWritableChanges || aggregateProblemCount > 0}
               onclick={togglePartial}
-            ></md-switch>
+            ></md-checkbox>
           </div>
           {#if !analysisComplete}
             <div class="inline-blocker" role="status"><span class="material-symbols-rounded" aria-hidden="true">pending_actions</span>{t('excel.incompleteBlock')}</div>
@@ -665,17 +675,6 @@
     {/if}
   {/if}
 </section>
-
-{#if overwriteDialog}
-  <dialog use:modal={{ busy: workflowBusy, onClose: () => (overwriteDialog = false) }} class="app-dialog compact-dialog" aria-modal="true" aria-labelledby="overwrite-title" aria-describedby="overwrite-body">
-    <form class="confirmation-form" onsubmit={(event) => { event.preventDefault(); confirmOverwrite(); }}>
-      <div class="dialog-symbol warning-symbol"><span class="material-symbols-rounded" aria-hidden="true">difference</span></div>
-      <h2 id="overwrite-title">{t('excel.overwriteConfirmTitle')}</h2>
-      <p id="overwrite-body">{t('excel.overwriteConfirmBody')}</p>
-      <div class="dialog-actions"><md-text-button type="button" onclick={() => (overwriteDialog = false)}>{t('common.cancel')}</md-text-button><md-filled-button type="submit" onclick={confirmOverwrite} data-autofocus>{t('common.confirm')}</md-filled-button></div>
-    </form>
-  </dialog>
-{/if}
 
 {#if partialDialog}
   <dialog use:modal={{ busy: workflowBusy, onClose: () => (partialDialog = false) }} class="app-dialog compact-dialog" aria-modal="true" aria-labelledby="partial-title" aria-describedby="partial-body">

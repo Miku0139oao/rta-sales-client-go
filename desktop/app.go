@@ -3,7 +3,6 @@ package desktop
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -554,7 +553,7 @@ func (a *App) Analyze(request AnalyzeRequest) (AnalysisResult, error) {
 		concurrency = 2
 	}
 	if concurrency < 1 || concurrency > 4 {
-		return AnalysisResult{}, errors.New("accountConcurrency must be between 1 and 4")
+		return AnalysisResult{}, errors.New("query concurrency must be between 1 and 4")
 	}
 	operationID, err := newUUID()
 	if err != nil {
@@ -597,7 +596,7 @@ func (a *App) Analyze(request AnalyzeRequest) (AnalysisResult, error) {
 		Overwrite: request.Overwrite, MaxJobs: maxJobs, Concurrency: concurrency,
 		AllowedBusinessStoreIDs: allowedStores, Mapper: mapper,
 		Progress: func(progress engineProgress) {
-			a.emit(operationID, "query", progress.Completed, progress.Total, "Querying sales data / 正在查詢銷售資料")
+			a.emitQueryProgress(operationID, progress, "Querying sales data / 正在查詢銷售資料")
 		},
 	})
 	if err != nil {
@@ -645,7 +644,7 @@ func (a *App) RetryFailed(request OperationRequest) (AnalysisResult, error) {
 		return AnalysisResult{}, errors.New("plan has no failed work to retry")
 	}
 	plan, retryErr := a.engine.RetryFailed(ctx, state.plan, func(progress engineProgress) {
-		a.emit(state.id, "query", progress.Completed, progress.Total, "Retrying failed queries / 正在重試失敗查詢")
+		a.emitQueryProgress(state.id, progress, "Retrying failed queries / 正在重試失敗查詢")
 	})
 	if retryErr != nil {
 		finish(nil, retryErr)
@@ -790,7 +789,7 @@ func (a *App) buildRouter(ctx context.Context, operationID string) (*xlsxfill.Pr
 		if err != nil {
 			return nil, nil, nil, 0, nil, err
 		}
-		a.emit(operationID, "stores", index+1, len(enabled), "Loading authorized stores / 正在載入授權門店")
+		a.emit(operationID, "login", index+1, len(enabled), "Account ready / 帳號已就緒")
 		for _, store := range stores {
 			storeID := strings.TrimSpace(store.BusinessID)
 			if storeID == "" {
@@ -801,11 +800,12 @@ func (a *App) buildRouter(ctx context.Context, operationID string) (*xlsxfill.Pr
 				continue
 			}
 			routes[storeID] = xlsxfill.ProviderRoute{
-				Provider: client, Profile: profile.DisplayName, Lane: accountLane(credential.Account),
+				Provider: client, Profile: profile.DisplayName,
 			}
 			ownership[storeID] = profile.DisplayName
 		}
 	}
+	a.emit(operationID, "stores", 1, 1, "Authorized stores ready / 授權門店已就緒")
 	router, err := xlsxfill.NewProfiledProviderRouter(routes)
 	if err != nil {
 		return nil, nil, nil, 0, nil, err
@@ -861,13 +861,6 @@ func (a *App) profilesWithCredentials(records []profileRecord) ([]Profile, error
 
 func profileFromRecord(record profileRecord, hasCredentials bool) Profile {
 	return Profile{ID: record.ID, DisplayName: record.DisplayName, Enabled: record.Enabled, Priority: record.Priority, HasCredentials: hasCredentials}
-}
-
-func accountLane(account string) string {
-	// The digest exists only in the in-memory router. It lets duplicate profiles
-	// for the same account share a serial lane without exposing the account.
-	digest := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(account))))
-	return fmt.Sprintf("account:%x", digest[:])
 }
 
 func findProfile(records []profileRecord, id string) (int, bool) {
@@ -1039,6 +1032,21 @@ func analysisResult(state *operationState) AnalysisResult {
 
 func (a *App) emit(operationID, stage string, current, total int, message string) {
 	a.events.Emit(a.appContext(), progressEventName, ProgressEvent{OperationID: operationID, Stage: stage, Current: current, Total: total, Message: message})
+}
+
+func (a *App) emitQueryProgress(operationID string, progress engineProgress, message string) {
+	a.events.Emit(a.appContext(), progressEventName, ProgressEvent{
+		OperationID: operationID,
+		Stage:       "query",
+		Current:     progress.Completed,
+		Total:       progress.Total,
+		Message:     message,
+		Date:        progress.Date,
+		StoreID:     progress.StoreID,
+		Profile:     progress.Profile,
+		Attempt:     progress.Attempt,
+		Status:      progress.Status,
+	})
 }
 
 func newUUID() (string, error) {

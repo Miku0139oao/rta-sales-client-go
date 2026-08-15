@@ -85,7 +85,7 @@ describe('Excel safety workflow', () => {
     expect(screen.getByText('daily-sales.XLSX')).toBeInTheDocument();
   });
 
-  it('confirms overwrite before the single analysis and keeps the preview policy read-only', async () => {
+  it('enables overwrite-all in one click and keeps the preview policy read-only', async () => {
     const analyze = vi.fn(async (_request: unknown) => result({ overlapCount: 3 }));
     configureBackend({
       methods: {
@@ -98,15 +98,16 @@ describe('Excel safety workflow', () => {
       props: { t: translator('zh-TW'), settings: defaultSettings, onGoToAccounts: vi.fn() },
     });
     await openAndScan(container);
-    await fireEvent.click(container.querySelectorAll('md-switch')[0]);
-    expect(screen.getByText('分析可能覆寫 L／AB 欄位中已存在的不同值。此選擇在本次分析後無法變更。')).toBeInTheDocument();
-    await fireEvent.click(container.querySelector('.app-dialog md-filled-button')!);
+    const overwriteCheckbox = container.querySelector('md-checkbox')!;
+    await fireEvent.click(overwriteCheckbox);
+    expect(overwriteCheckbox).toHaveAttribute('checked', 'true');
+    expect(container.querySelector('.app-dialog')).not.toBeInTheDocument();
     await fireEvent.click(button(container, '開始分析'));
     await waitFor(() => expect(screen.getByText('帳號授權範圍重疊')).toBeInTheDocument());
 
     expect(analyze).toHaveBeenCalledTimes(1);
     expect(analyze.mock.calls[0]?.[0]).toMatchObject({ overwrite: true, maxJobs: 2000 });
-    expect(screen.getAllByText('允許覆寫不同值').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('允許覆寫全部不同值').length).toBeGreaterThan(0);
   });
 
   it('returns from results to the same range without rescanning the workbook', async () => {
@@ -163,8 +164,9 @@ describe('Excel safety workflow', () => {
     expect(container.textContent).not.toContain('重試失敗項目');
     expect(button(container, '另存並寫入')).toHaveAttribute('disabled');
 
-    await fireEvent.click(container.querySelector('md-switch')!);
-    expect(screen.queryByRole('checkbox', { name: '問題列保持原值' })).not.toBeInTheDocument();
+    const partialCheckbox = container.querySelector('md-checkbox')!;
+    await fireEvent.click(partialCheckbox);
+    expect(partialCheckbox).toHaveAttribute('checked', 'true');
     expect(button(container, '另存並寫入')).toHaveAttribute('disabled', 'false');
     await fireEvent.click(button(container, '另存並寫入'));
 
@@ -204,8 +206,18 @@ describe('Excel safety workflow', () => {
     const cancelButton = button(container, '取消分析');
     expect(cancelButton).toHaveAttribute('disabled');
 
-    progressListener?.({ operationId: 'operation-live', stage: 'query', current: 1, total: 2 } satisfies AnalysisProgress);
+    progressListener?.({
+      operationId: 'operation-live', stage: 'query', current: 14, total: 30,
+      storeId: '107', date: '2026-08-07', profile: 'Production', attempt: 2, status: 'success',
+    } satisfies AnalysisProgress);
     await waitFor(() => expect(cancelButton).toHaveAttribute('disabled', 'false'));
+    expect(screen.getByText('47%')).toBeInTheDocument();
+    expect(screen.getByText('門店 107 · 2026-08-07')).toBeInTheDocument();
+    expect(screen.getByText('帳號 Production')).toBeInTheDocument();
+    expect(screen.getByText('查詢成功')).toBeInTheDocument();
+    expect(screen.getByText('嘗試 2 次')).toBeInTheDocument();
+    expect(screen.getByText('剩餘').parentElement).toHaveTextContent('16');
+    expect(screen.getByText('總計').parentElement).toHaveTextContent('30');
     await fireEvent.click(cancelButton);
 
     expect(cancel).toHaveBeenCalledWith({ operationId: 'operation-live' });
@@ -226,7 +238,7 @@ describe('Excel safety workflow', () => {
     await fireEvent.click(button(container, '開始分析'));
     await waitFor(() => expect(screen.getByText('分析仍有未完成的工作。請先重試可重試項目，完成後才能另存。')).toBeInTheDocument());
 
-    expect(container.querySelector('md-switch')).toHaveAttribute('disabled', 'true');
+    expect(container.querySelector('md-checkbox')).toHaveAttribute('disabled', 'true');
     expect(button(container, '另存並寫入')).toHaveAttribute('disabled', 'true');
   });
 

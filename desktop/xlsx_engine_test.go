@@ -44,3 +44,13 @@ func TestPreviewNumbersAreHumanReadable(t *testing.T) {
 		}
 	}
 }
+
+func TestEngineProgressPreservesLatestCompletedJob(t *testing.T) {
+	converted := toEngineProgress(xlsxfill.ProgressEvent{
+		CompletedJobs: 14, TotalJobs: 30, Date: "2026-08-07", StoreID: "107",
+		Profile: "Production", Attempt: 2, Status: "success",
+	})
+	if converted.Completed != 14 || converted.Total != 30 || converted.Date != "2026-08-07" || converted.StoreID != "107" || converted.Profile != "Production" || converted.Attempt != 2 || converted.Status != "success" {
+		t.Fatalf("progress fields were lost: %#v", converted)
+	}
+}

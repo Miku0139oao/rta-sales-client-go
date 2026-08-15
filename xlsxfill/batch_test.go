@@ -188,7 +188,7 @@ func updateAtomicMax(target *atomic.Int32, value int32) {
 	}
 }
 
-func TestAnalyzeSerializesEachAccountAndRunsAccountsConcurrently(t *testing.T) {
+func TestAnalyzeRunsJobsConcurrentlyForOneAccount(t *testing.T) {
 	input := filepath.Join(t.TempDir(), "accounts.xlsx")
 	date := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.Local)
 	createBatchWorkbook(t, input, []batchWorkbookRow{
@@ -221,8 +221,8 @@ func TestAnalyzeSerializesEachAccountAndRunsAccountsConcurrently(t *testing.T) {
 	}()
 	first := waitStarted(t, started)
 	second := waitStarted(t, started)
-	if first == second {
-		t.Fatalf("same account entered concurrently: %q and %q", first, second)
+	if first != "A" || second != "A" {
+		t.Fatalf("first account did not run two jobs concurrently: %q and %q", first, second)
 	}
 	close(release)
 	select {
@@ -233,7 +233,7 @@ func TestAnalyzeSerializesEachAccountAndRunsAccountsConcurrently(t *testing.T) {
 	if analyzeErr != nil {
 		t.Fatal(analyzeErr)
 	}
-	if accountA.maxActive.Load() != 1 || accountB.maxActive.Load() != 1 || globalMax.Load() != 2 {
+	if accountA.maxActive.Load() != 2 || globalMax.Load() != 2 {
 		t.Fatalf("max active A=%d B=%d global=%d", accountA.maxActive.Load(), accountB.maxActive.Load(), globalMax.Load())
 	}
 	profiles := make(map[string]bool)
@@ -760,15 +760,15 @@ func TestAnalyzeOverwriteAndPlanJSONRedaction(t *testing.T) {
 			t.Fatalf("plan JSON leaked %q: %s", secret, text)
 		}
 	}
-	if len(events) != 1 || events[0].Stage != "analyze" || events[0].CompletedJobs != 1 || events[0].TotalJobs != 1 || events[0].Profile != "SECRET_PROFILE" {
+	if len(events) != 1 || events[0].Stage != "analyze" || events[0].CompletedJobs != 1 || events[0].TotalJobs != 1 || events[0].Profile != "SECRET_PROFILE" || events[0].StoreID != "SECRET_STORE_9" {
 		t.Fatalf("unexpected progress events: %+v", events)
 	}
 	eventJSON, err := json.Marshal(events[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(eventJSON), "SECRET_PROFILE") {
-		t.Fatalf("progress JSON leaked profile: %s", eventJSON)
+	if strings.Contains(string(eventJSON), "SECRET_PROFILE") || strings.Contains(string(eventJSON), "SECRET_STORE_9") {
+		t.Fatalf("progress JSON leaked routing details: %s", eventJSON)
 	}
 	overwritePlan, err := Analyze(context.Background(), router, BatchRequest{
 		InputPath: input, From: date, To: date, Overwrite: true,

@@ -40,7 +40,7 @@ func run() error {
 	maxJobs := flag.Int("max-jobs", xlsxfill.DefaultMaxJobs, "maximum unique date/store jobs for this run")
 	maxQueries := flag.Int("max-queries", 0, "deprecated alias for -max-jobs")
 	onlyRow := flag.Int("row", 0, "optional diagnostic row; zero scans all rows in the date range")
-	concurrency := flag.Int("concurrency", xlsxfill.DefaultConcurrency, "concurrent account profiles (1-4; each account remains serial)")
+	concurrency := flag.Int("concurrency", xlsxfill.DefaultConcurrency, "concurrent date/store query jobs (1-4)")
 	pageConcurrency := flag.Int("page-concurrency", 1, "maximum concurrent RTA page requests after page one")
 	loginAttempts := flag.Int("login-attempts", 4, "maximum fresh captcha/login attempts")
 	timeout := flag.Duration("timeout", 0, "optional whole-operation timeout; zero disables it")

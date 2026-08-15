@@ -67,6 +67,11 @@ export interface AnalysisProgress {
   current: number;
   total: number;
   message?: string;
+	date?: string;
+	storeId?: string;
+	profile?: string;
+	attempt?: number;
+	status?: 'success' | 'issue' | 'complete' | string;
 }
 
 export interface AnalyzeRequest {
