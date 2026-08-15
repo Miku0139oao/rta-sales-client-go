@@ -149,10 +149,23 @@ if (-not $SkipInstaller) {
         throw "WebView2 bootstrapper was not generated at $bootstrapper"
     }
 
+    $wailsInfo = Get-Content -LiteralPath (Join-Path $AppDir 'wails.json') -Raw | ConvertFrom-Json
+    $productName = [string]$wailsInfo.info.productName
+    $productVersion = [string]$wailsInfo.info.productVersion
+    if ([string]::IsNullOrWhiteSpace($productName) -or [string]::IsNullOrWhiteSpace($productVersion)) {
+        throw 'wails.json is missing info.productName or info.productVersion'
+    }
+
     Push-Location $nsisDir
     try {
         Invoke-Checked 'makensis installer' {
-            makensis -DREQUEST_EXECUTION_LEVEL=user -DWAILS_INSTALL_SCOPE=user "-DARG_WAILS_AMD64_BINARY=$builtExe" project.nsi
+            makensis `
+                -DREQUEST_EXECUTION_LEVEL=user `
+                -DWAILS_INSTALL_SCOPE=user `
+                "-DARG_WAILS_AMD64_BINARY=$builtExe" `
+                "-DINFO_PRODUCTNAME=$productName" `
+                "-DINFO_PRODUCTVERSION=$productVersion" `
+                project.nsi
         }
     }
     finally {

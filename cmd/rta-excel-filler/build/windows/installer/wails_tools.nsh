@@ -11,10 +11,10 @@
     !define INFO_COMPANYNAME "Miku0139oao"
 !endif
 !ifndef INFO_PRODUCTNAME
-    !define INFO_PRODUCTNAME "RTA Excel Filler"
+    !define INFO_PRODUCTNAME "RTA 銷售分析"
 !endif
 !ifndef INFO_PRODUCTVERSION
-    !define INFO_PRODUCTVERSION "0.1.0"
+    !define INFO_PRODUCTVERSION "0.2.0"
 !endif
 !ifndef INFO_COPYRIGHT
     !define INFO_COPYRIGHT "Copyright (c) 2026 Miku0139oao"

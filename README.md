@@ -2,14 +2,14 @@
 
 English | [繁體中文](README.zh-TW.md)
 
-A **Windows desktop app** for store, area, and operations staff.  
+A **Windows desktop app for managers**: review stores, export a meeting PDF, and fill the company Excel file.  
 After install you only need the mouse. **No programming and no command line.**
 
 It can:
 
 1. **Sign in to RTA** and solve the captcha for you
 2. **Show store sales**, compared with last month and the same month last year
-3. **Export PDF reports** (one combined file plus one file per store)
+3. **Export PDF reports** (one combined file plus one file per store, for meetings)
 4. **Fill today's sales amount and transaction count** into the company's existing Excel workbook
 
 The Start menu and shortcut name is **RTA 銷售分析**.  
@@ -34,6 +34,10 @@ Most people should use the installer. If the PC does not already have WebView2, 
 3. Open the Start menu, search for **RTA 銷售分析**, and launch it.
 
 Only one window can run at a time. If a click seems to do nothing, check the taskbar — it may already be open.
+
+A two-minute silent walkthrough with captions:
+
+[Tutorial video](https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.2.0/RTA-Sales-Analyzer-tutorial.mp4)
 
 ### The other files
 
