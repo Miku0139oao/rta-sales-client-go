@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { backend } from '../backend';
   import { errorMessage } from '../i18n';
+  import { buildFocusGroups, type FocusGroup } from '../analysisFocus';
   import {
     bytesToBase64,
     generateSalesAnalysisPDF,
@@ -28,7 +29,7 @@
 
   type CategoryKey = 'category1' | 'category2' | 'category3' | 'category4' | 'category5';
   type FacetSelections = Record<CategoryKey, Set<string>>;
-  type ReportView = 'overview' | 'categories' | 'products' | 'stores';
+  type ReportView = 'overview' | 'focus' | 'categories' | 'products' | 'stores';
   type PeriodMode = 'month' | 'range';
   type ValueFormat = 'money' | 'number';
   type FilteredTotals = SalesAnalysisTotals & { skuCount: number; basketValue?: number };
@@ -97,6 +98,8 @@
   let salesRankingGroups: CategoryRankingGroup[] = [];
   let quantityRankingGroups: CategoryRankingGroup[] = [];
   let storeRows: StoreComparisonRow[] = [];
+  let focusGroups: FocusGroup[] = [];
+  let focusPeriod: SalesAnalysisPeriodResult | undefined;
   let page = 1;
   let pageCount = 1;
   let pageRows: SalesAnalysisItem[] = [];
@@ -122,6 +125,13 @@
   $: salesRankingGroups = buildCategoryRankings(salesRankingPeriod, groupLevel, 'amount', selections, search);
   $: quantityRankingGroups = buildCategoryRankings(quantityRankingPeriod, groupLevel, 'quantity', selections, search);
   $: storeRows = buildStoreRows(reportPeriods);
+  $: focusPeriod = periodByKey(reportPeriods, 'yearAgoNext');
+  $: focusGroups = focusPeriod
+    ? buildFocusGroups(
+      focusPeriod.items.filter((item) => matchesFilters(item, selections, search)),
+      currentPeriod?.items.filter((item) => matchesFilters(item, selections, search)) ?? [],
+    )
+    : [];
   $: pageCount = Math.max(1, Math.ceil(filteredItems.length / pageSize));
   $: if (page > pageCount) page = pageCount;
   $: pageRows = filteredItems.slice((page - 1) * pageSize, page * pageSize);
@@ -283,11 +293,13 @@
     const previousFrom = addDays(previousTo, -(days - 1));
     const previous2To = addDays(previousFrom, -1);
     const previous2From = addDays(previous2To, -(days - 1));
+    const yearAgoNextMonth = shiftMonth(from.slice(0, 7), -11);
     return [
       periodRequest('current', t('analysis.currentPeriod'), from, to),
       periodRequest('previous', t('analysis.previousPeriod'), previousFrom, previousTo),
       periodRequest('previous2', t('analysis.previous2Period'), previous2From, previous2To),
       periodRequest('yearAgo', t('analysis.yearAgoPeriod'), shiftYear(from, -1), shiftYear(to, -1)),
+      periodRequest('yearAgoNext', t('analysis.yearAgoNextPeriod'), `${yearAgoNextMonth}-01`, endOfMonth(yearAgoNextMonth), false),
     ];
   }
 
@@ -330,6 +342,13 @@
 
   function periodByKey(periods: SalesAnalysisPeriodResult[], key: string): SalesAnalysisPeriodResult | undefined {
     return periods.find((period) => period.key === key);
+  }
+
+  function focusGroupLabel(id: string): string {
+    if (id === 'health') return t('analysis.focusHealth');
+    if (id === 'skin') return t('analysis.focusSkin');
+    if (id === 'pc') return t('analysis.focusPC');
+    return id;
   }
 
   function categoryValue(item: SalesAnalysisItem, key: CategoryKey): string {
@@ -714,6 +733,7 @@
       <div class="report-tabs" role="tablist" aria-label={t('analysis.reportViews')}>
         {#each [
           { key: 'overview', label: t('analysis.overview'), icon: 'space_dashboard' },
+          { key: 'focus', label: t('analysis.focus'), icon: 'upcoming' },
           { key: 'categories', label: t('analysis.categories'), icon: 'account_tree' },
           { key: 'products', label: t('analysis.products'), icon: 'inventory_2' },
           { key: 'stores', label: t('analysis.stores'), icon: 'storefront' },
@@ -736,8 +756,8 @@
         <section class="performance-card surface-card" aria-labelledby="performance-title">
           <div class="section-heading"><h2 id="performance-title">{t('analysis.performance')}</h2></div>
           <div class="table-scroll"><table>
-            <thead><tr><th>{t('analysis.metric')}</th><th class="numeric">{t('analysis.currentPeriod')}</th><th class="numeric">{t('analysis.previousPeriod')}</th><th class="numeric">{t('analysis.yearAgoPeriod')}</th><th class="numeric">{t('analysis.variance')}</th><th class="numeric">{t('analysis.variancePercent')}</th></tr></thead>
-            <tbody>{#each performanceRows as row}<tr><th>{row.label}</th><td class="numeric emphasis">{formatValue(row.current, row.format)}</td><td class="numeric">{formatValue(row.previous, row.format)}</td><td class="numeric">{formatValue(row.yearAgo, row.format)}</td><td class="numeric">{row.current === undefined || row.yearAgo === undefined ? '—' : formatValue(row.current - row.yearAgo, row.format)}</td><td class={`numeric ${deltaClass(delta(row.current, row.yearAgo))}`}>{formatPercent(delta(row.current, row.yearAgo))}</td></tr>{/each}</tbody>
+            <thead><tr><th>{t('analysis.metric')}</th><th class="numeric">{t('analysis.currentPeriod')}</th><th class="numeric">{t('analysis.previousPeriod')}</th><th class="numeric">{t('analysis.yearAgoPeriod')}</th><th class="numeric">{t('analysis.vsPrevious')}</th><th class="numeric">{t('analysis.vsYearAgo')}</th></tr></thead>
+            <tbody>{#each performanceRows as row}<tr><th>{row.label}</th><td class="numeric emphasis">{formatValue(row.current, row.format)}</td><td class="numeric">{formatValue(row.previous, row.format)}</td><td class="numeric">{formatValue(row.yearAgo, row.format)}</td><td class={`numeric ${deltaClass(delta(row.current, row.previous))}`}>{formatPercent(delta(row.current, row.previous))}</td><td class={`numeric ${deltaClass(delta(row.current, row.yearAgo))}`}>{formatPercent(delta(row.current, row.yearAgo))}</td></tr>{/each}</tbody>
           </table></div>
         </section>
 
@@ -751,6 +771,53 @@
             <ol>{#each topQuantity as item, index}<li><span class="rank">{index + 1}</span><div><strong>{item.name}</strong><span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div><div class="top-metrics"><b>{formatNumber(item.quantity)} {t('analysis.units')}</b><span>{formatMoney(item.amount)}</span></div></li>{:else}<li class="empty-row">{t('analysis.noResults')}</li>{/each}</ol>
           </section>
         </div>
+      {:else if activeView === 'focus'}
+        <section class="focus-section surface-card" aria-labelledby="focus-title">
+          <div class="focus-heading">
+            <div>
+              <h2 id="focus-title">{t('analysis.focusTitle')}</h2>
+              {#if focusPeriod}<span>{focusPeriod.label} · {focusPeriod.from} — {focusPeriod.to}</span>{/if}
+            </div>
+          </div>
+          {#if !focusPeriod}
+            <div class="ranking-empty">{t('analysis.focusMissing')}</div>
+          {:else}
+            <p class="focus-note">{t('analysis.focusHint')}</p>
+            <div class="focus-grid">
+              {#each focusGroups as group (group.id)}
+                <article class="focus-group">
+                  <header><strong>{focusGroupLabel(group.id)}</strong><span>{group.prefix}</span></header>
+                  <div class="focus-columns">
+                    <div>
+                      <h3>{t('analysis.focusSales')}</h3>
+                      <ol>
+                        {#each group.sales as item, index}
+                          <li>
+                            <span class="rank">{index + 1}</span>
+                            <div><strong>{item.name || item.code}</strong><span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div>
+                            <div class="top-metrics"><b>{formatMoney(item.amount)}</b><span>{formatNumber(item.quantity)} {t('analysis.units')}</span>{#if item.currentAmount || item.currentQuantity}<em>{t('analysis.focusCurrent')} {formatMoney(item.currentAmount)}</em>{/if}</div>
+                          </li>
+                        {:else}<li class="empty-row">{t('analysis.noResults')}</li>{/each}
+                      </ol>
+                    </div>
+                    <div>
+                      <h3>{t('analysis.focusQuantity')}</h3>
+                      <ol>
+                        {#each group.quantity as item, index}
+                          <li>
+                            <span class="rank">{index + 1}</span>
+                            <div><strong>{item.name || item.code}</strong><span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div>
+                            <div class="top-metrics"><b>{formatNumber(item.quantity)} {t('analysis.units')}</b><span>{formatMoney(item.amount)}</span>{#if item.currentAmount || item.currentQuantity}<em>{t('analysis.focusCurrent')} {formatNumber(item.currentQuantity)} {t('analysis.units')}</em>{/if}</div>
+                          </li>
+                        {:else}<li class="empty-row">{t('analysis.noResults')}</li>{/each}
+                      </ol>
+                    </div>
+                  </div>
+                </article>
+              {:else}<div class="ranking-empty">{t('analysis.noResults')}</div>{/each}
+            </div>
+          {/if}
+        </section>
       {:else if activeView === 'categories'}
         <section class="comparison-card surface-card" aria-labelledby="category-title">
           <div class="comparison-heading"><h2 id="category-title">{t('analysis.rolling')}</h2><div class="group-tabs" role="radiogroup" aria-label={t('analysis.groupBy')}>{#each facets as facet}<button type="button" class:active={groupLevel === facet.key} role="radio" aria-checked={groupLevel === facet.key} onclick={() => { groupLevel = facet.key; }}>{t(facet.label)}</button>{/each}</div></div>
@@ -909,6 +976,28 @@
   .top-card .top-metrics span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-variant-numeric: tabular-nums; }
   .top-card .rank { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 8px; color: var(--md-sys-color-primary); background: var(--md-sys-color-secondary-container); font-weight: 750; }
   .top-card .empty-row { display: grid; min-height: 120px; place-items: center; color: var(--md-sys-color-on-surface-variant); }
+  .focus-section { overflow: hidden; padding: 0; }
+  .focus-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 18px 20px 0; }
+  .focus-heading h2 { margin: 0; }
+  .focus-heading span { color: var(--md-sys-color-on-surface-variant); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .focus-note { margin: 8px 20px 0; color: var(--md-sys-color-on-surface-variant); font-size: 13px; }
+  .focus-grid { display: grid; gap: 14px; padding: 14px 16px 16px; }
+  .focus-group { overflow: hidden; border: 1px solid var(--app-border); border-radius: 16px; background: var(--md-sys-color-surface-container-lowest); }
+  .focus-group > header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 12px 14px; background: var(--md-sys-color-surface-container-low); }
+  .focus-group > header span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .focus-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+  .focus-columns > div { min-width: 0; padding: 0 12px 10px; }
+  .focus-columns > div + div { border-left: 1px solid var(--app-table-border); }
+  .focus-columns h3 { margin: 12px 2px 4px; color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-weight: 700; }
+  .focus-columns ol { display: grid; margin: 0; padding: 0; list-style: none; }
+  .focus-columns li { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 48px; border-top: 1px solid var(--app-table-border); }
+  .focus-columns li:first-child { border-top: 0; }
+  .focus-columns li > div { display: grid; min-width: 0; gap: 2px; }
+  .focus-columns li strong, .focus-columns li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .focus-columns li span { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
+  .focus-columns .top-metrics { min-width: max-content; justify-items: end; text-align: right; }
+  .focus-columns .top-metrics em { color: var(--md-sys-color-primary); font-size: 11px; font-style: normal; font-variant-numeric: tabular-nums; }
+  .focus-columns .rank { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 8px; color: var(--md-sys-color-primary); background: var(--md-sys-color-secondary-container); font-weight: 750; }
   .comparison-heading { align-items: flex-start; }
   .group-tabs { display: flex; flex-wrap: wrap; overflow: hidden; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 11px; }
   .group-tabs button { min-height: 38px; padding: 7px 10px; cursor: pointer; border: 0; border-right: 1px solid var(--md-sys-color-outline-variant); color: var(--md-sys-color-on-surface-variant); background: transparent; font-size: 12px; font-weight: 650; }
@@ -959,6 +1048,8 @@
     .period-strip { grid-template-columns: 1fr 1fr; }
     .period-strip > div:nth-child(2n) { border-right: 0; }
     .top-grid { grid-template-columns: 1fr; }
+    .focus-columns { grid-template-columns: 1fr; }
+    .focus-columns > div + div { border-top: 1px solid var(--app-table-border); border-left: 0; }
     .comparison-heading { flex-direction: column; }
     .ranking-heading { align-items: flex-start; flex-direction: column; }
   }
