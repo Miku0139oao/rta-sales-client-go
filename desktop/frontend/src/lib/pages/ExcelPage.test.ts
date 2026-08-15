@@ -306,6 +306,36 @@ describe('Excel safety workflow', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: '檢查分析結果', level: 2 })).toBeInTheDocument());
   });
 
+  it('opens or reveals the saved workbook from the success card', async () => {
+    const openSavedWorkbook = vi.fn(async () => undefined);
+    const revealSavedWorkbook = vi.fn(async () => undefined);
+    configureBackend({
+      methods: {
+        OpenWorkbook: vi.fn(async () => 'D:\\sales.xlsx'),
+        ScanWorkbook: vi.fn(async () => scan),
+        Analyze: vi.fn(async () => result()),
+        SaveWorkbook: vi.fn(async () => 'D:\\filled.xlsx'),
+        Apply: vi.fn(async () => ({ outputPath: 'D:\\filled.xlsx', changedCells: 2, skippedRows: 0 })),
+        OpenSavedWorkbook: openSavedWorkbook,
+        RevealSavedWorkbook: revealSavedWorkbook,
+      },
+    });
+    const { container } = render(ExcelPage, {
+      props: { t: translator('zh-TW'), settings: defaultSettings, onGoToAccounts: vi.fn() },
+    });
+    await openAndScan(container);
+    await fireEvent.click(button(container, '開始分析'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: '檢查分析結果' })).toBeInTheDocument());
+    await fireEvent.click(button(container, '另存並寫入'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: '已建立新檔案' })).toBeInTheDocument());
+    expect(screen.getByText('D:\\filled.xlsx')).toBeInTheDocument();
+
+    await fireEvent.click(button(container, '開啟檔案'));
+    await waitFor(() => expect(openSavedWorkbook).toHaveBeenCalledWith({ path: 'D:\\filled.xlsx' }));
+    await fireEvent.click(button(container, '在資料夾中顯示'));
+    await waitFor(() => expect(revealSavedWorkbook).toHaveBeenCalledWith({ path: 'D:\\filled.xlsx' }));
+  });
+
   it('does not infer retry work when the backend explicitly returns zero', async () => {
     configureBackend({
       methods: {

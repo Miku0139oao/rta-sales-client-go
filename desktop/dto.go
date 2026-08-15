@@ -151,6 +151,10 @@ type OperationRequest struct {
 	OperationID string `json:"operationId"`
 }
 
+type PathRequest struct {
+	Path string `json:"path"`
+}
+
 type ApplyRequest struct {
 	OperationID       string `json:"operationId"`
 	InputPath         string `json:"inputPath"`

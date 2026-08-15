@@ -42,6 +42,8 @@
   let partialDialog = false;
   let operationError = '';
   let applyResult: ApplyResult | undefined;
+  let openingSaved = false;
+  let revealingSaved = false;
   let generation = 0;
   let controlsSection: HTMLElement | undefined;
   let progressSection: HTMLElement | undefined;
@@ -409,7 +411,35 @@
     applyResult = undefined;
     progress = undefined;
     operationError = '';
+    openingSaved = false;
+    revealingSaved = false;
     resetWriteOptions();
+  }
+
+  async function openSavedFile() {
+    if (!applyResult?.outputPath || openingSaved || revealingSaved) return;
+    openingSaved = true;
+    operationError = '';
+    try {
+      await backend.openSavedWorkbook(applyResult.outputPath);
+    } catch (error) {
+      await showOperationError(errorMessage(settings.locale, error));
+    } finally {
+      openingSaved = false;
+    }
+  }
+
+  async function revealSavedFile() {
+    if (!applyResult?.outputPath || openingSaved || revealingSaved) return;
+    revealingSaved = true;
+    operationError = '';
+    try {
+      await backend.revealSavedWorkbook(applyResult.outputPath);
+    } catch (error) {
+      await showOperationError(errorMessage(settings.locale, error));
+    } finally {
+      revealingSaved = false;
+    }
   }
 </script>
 
@@ -669,8 +699,23 @@
     {#if applyResult}
       <section bind:this={successSection} class="success-card surface-card" aria-labelledby="saved-title" aria-live="polite" tabindex="-1">
         <div class="success-symbol"><span class="material-symbols-rounded" aria-hidden="true">task_alt</span></div>
-        <div><h2 id="saved-title">{t('excel.savedTitle')}</h2><p>{t('excel.savedBody', { changed: applyResult.changedCells, skipped: applyResult.skippedRows })}</p><span class="label">{t('excel.savedPath')}</span><code>{applyResult.outputPath}</code></div>
-        <md-outlined-button onclick={startAnother} disabled={workflowBusy}>{t('excel.startAnother')}</md-outlined-button>
+        <div>
+          <h2 id="saved-title">{t('excel.savedTitle')}</h2>
+          <p>{t('excel.savedBody', { changed: applyResult.changedCells, skipped: applyResult.skippedRows })}</p>
+          <span class="label">{t('excel.savedPath')}</span>
+          <code title={applyResult.outputPath}>{applyResult.outputPath}</code>
+        </div>
+        <div class="success-actions">
+          <md-filled-button onclick={openSavedFile} disabled={openingSaved || revealingSaved}>
+            <span class="material-symbols-rounded" slot="icon">file_open</span>
+            {openingSaved ? t('excel.openingSaved') : t('excel.openSaved')}
+          </md-filled-button>
+          <md-outlined-button onclick={revealSavedFile} disabled={openingSaved || revealingSaved}>
+            <span class="material-symbols-rounded" slot="icon">folder_open</span>
+            {revealingSaved ? t('excel.revealingSaved') : t('excel.showInFolder')}
+          </md-outlined-button>
+          <md-text-button onclick={startAnother} disabled={workflowBusy}>{t('excel.startAnother')}</md-text-button>
+        </div>
       </section>
     {/if}
   {/if}

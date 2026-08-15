@@ -41,6 +41,7 @@ type App struct {
 	dialogs     dialogService
 	events      eventSink
 	runtime     runtimeChecker
+	launcher    pathLauncher
 
 	contextMu              sync.RWMutex
 	ctx                    context.Context

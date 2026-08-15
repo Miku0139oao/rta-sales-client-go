@@ -297,6 +297,8 @@ export interface BackendApi {
   cancelAnalysis(operationId: string): Promise<void>;
   retryFailed(operationId: string): Promise<AnalysisResult>;
   apply(request: ApplyRequest): Promise<ApplyResult>;
+  openSavedWorkbook(path: string): Promise<void>;
+  revealSavedWorkbook(path: string): Promise<void>;
   onProgress(listener: (progress: AnalysisProgress) => void): () => void;
   onSalesAnalysisProgress(listener: (progress: SalesAnalysisProgress) => void): () => void;
   onFileDrop(listener: (paths: string[]) => void): () => void;

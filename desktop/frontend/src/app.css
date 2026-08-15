@@ -1380,6 +1380,14 @@ th.proposed-column {
   white-space: nowrap;
 }
 
+.success-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 188px;
+}
+
 .profile-list {
   display: flex;
   flex-direction: column;
@@ -1868,8 +1876,9 @@ th.proposed-column {
     justify-content: flex-start;
   }
 
-  .success-card md-outlined-button {
+  .success-actions {
     grid-column: 1 / -1;
+    min-width: 0;
   }
 
   .profile-card {
