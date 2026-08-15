@@ -84,6 +84,12 @@ describe('sales analysis page', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: '銷售表現' })).toBeInTheDocument());
     const basketKpi = screen.getAllByText('客單價').find((element) => element.tagName === 'DT');
     expect(basketKpi?.parentElement).toHaveTextContent('20.00');
+    const topSales = screen.getByRole('heading', { name: '銷售額 Top 15' }).closest('section');
+    const topQuantity = screen.getByRole('heading', { name: '銷量 Top 15' }).closest('section');
+    expect(topSales?.querySelector('.top-metrics')).toHaveTextContent('100.00');
+    expect(topSales?.querySelector('.top-metrics')).toHaveTextContent('2 件');
+    expect(topQuantity?.querySelector('.top-metrics')).toHaveTextContent('2 件');
+    expect(topQuantity?.querySelector('.top-metrics')).toHaveTextContent('100.00');
     expect(runSalesAnalysis).toHaveBeenCalledWith({
       profileId: 'profile-1', storeIds: ['107', '108'], concurrency: 4,
       periods: [

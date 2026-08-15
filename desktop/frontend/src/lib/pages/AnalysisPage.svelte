@@ -640,11 +640,11 @@
         <div class="top-grid">
           <section class="top-card surface-card" aria-labelledby="top-sales-title">
             <div class="section-heading"><h2 id="top-sales-title">{t('analysis.topSales')}</h2></div>
-            <ol>{#each topSales as item, index}<li><span class="rank">{index + 1}</span><div><strong>{item.name}</strong><span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div><b>{formatMoney(item.amount)}</b></li>{:else}<li class="empty-row">{t('analysis.noResults')}</li>{/each}</ol>
+            <ol>{#each topSales as item, index}<li><span class="rank">{index + 1}</span><div><strong>{item.name}</strong><span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div><div class="top-metrics"><b>{formatMoney(item.amount)}</b><span>{formatNumber(item.quantity)} {t('analysis.units')}</span></div></li>{:else}<li class="empty-row">{t('analysis.noResults')}</li>{/each}</ol>
           </section>
           <section class="top-card surface-card" aria-labelledby="top-quantity-title">
             <div class="section-heading"><h2 id="top-quantity-title">{t('analysis.topQuantity')}</h2></div>
-            <ol>{#each topQuantity as item, index}<li><span class="rank">{index + 1}</span><div><strong>{item.name}</strong><span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div><b>{formatNumber(item.quantity)}</b></li>{:else}<li class="empty-row">{t('analysis.noResults')}</li>{/each}</ol>
+            <ol>{#each topQuantity as item, index}<li><span class="rank">{index + 1}</span><div><strong>{item.name}</strong><span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div><div class="top-metrics"><b>{formatNumber(item.quantity)} {t('analysis.units')}</b><span>{formatMoney(item.amount)}</span></div></li>{:else}<li class="empty-row">{t('analysis.noResults')}</li>{/each}</ol>
           </section>
         </div>
       {:else if activeView === 'categories'}
@@ -759,6 +759,8 @@
   .top-card li strong, .top-card li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .top-card li span { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
   .top-card li b { font-variant-numeric: tabular-nums; }
+  .top-card li > .top-metrics { min-width: max-content; justify-items: end; text-align: right; }
+  .top-card .top-metrics span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-variant-numeric: tabular-nums; }
   .top-card .rank { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 8px; color: var(--md-sys-color-primary); background: var(--md-sys-color-secondary-container); font-weight: 750; }
   .top-card .empty-row { display: grid; min-height: 120px; place-items: center; color: var(--md-sys-color-on-surface-variant); }
   .comparison-heading { align-items: flex-start; }
