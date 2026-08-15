@@ -396,6 +396,12 @@ export const backend: BackendApi = {
     skippedRows: request.allowPartial ? 2 : 0,
   })),
 
+  openSavedWorkbook: (path: string) =>
+    invoke(['OpenSavedWorkbook'], [{ path }], async () => undefined),
+
+  revealSavedWorkbook: (path: string) =>
+    invoke(['RevealSavedWorkbook'], [{ path }], async () => undefined),
+
   onProgress(listener: (progress: AnalysisProgress) => void): () => void {
     const source = eventSource();
     if (!source) {
