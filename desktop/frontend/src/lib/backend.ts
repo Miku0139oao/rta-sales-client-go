@@ -100,6 +100,7 @@ async function invoke<T>(names: string[], args: unknown[], fallback: () => Promi
   try {
     return (await method(...args)) as T;
   } catch (error) {
+    if (import.meta.env.DEV) return fallback();
     throw asAppError(error);
   }
 }

@@ -93,4 +93,18 @@ describe('Wails backend adapter', () => {
 
     expect(analyze).toHaveBeenCalledWith(expect.objectContaining({ maxJobs: 2000, mappingPath: 'D:\\map.json' }));
   });
+
+  it('falls back to the mock backend in DEV when a bound method throws', async () => {
+    configureBackend({
+      methods: {
+        ListProfiles: vi.fn(async () => {
+          throw new Error('Call.ByName failed');
+        }),
+      },
+    });
+
+    const profiles = await backend.listProfiles();
+    expect(profiles.length).toBeGreaterThan(0);
+    expect(profiles[0]).toMatchObject({ displayName: '主要帳號' });
+  });
 });

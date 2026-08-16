@@ -19,23 +19,19 @@ function eventData(payload: unknown): unknown {
   return payload;
 }
 
-const hasWailsRuntime = typeof window !== 'undefined' && Boolean(window.runtime || window.go);
-
-if (hasWailsRuntime) {
-  configureBackend({
-    methods,
-    events: {
-      on(name, listener) {
-        return Events.On(name, (event) => listener(eventData(event)));
-      },
+configureBackend({
+  methods,
+  events: {
+    on(name, listener) {
+      return Events.On(name, (event) => listener(eventData(event)));
     },
-    fileDrops: {
-      on(listener) {
-        return Events.On('rta:file-drop', (event) => {
-          const data = eventData(event);
-          listener(Array.isArray(data) ? (data as string[]) : []);
-        });
-      },
+  },
+  fileDrops: {
+    on(listener) {
+      return Events.On('rta:file-drop', (event) => {
+        const data = eventData(event);
+        listener(Array.isArray(data) ? (data as string[]) : []);
+      });
     },
-  });
-}
+  },
+});
