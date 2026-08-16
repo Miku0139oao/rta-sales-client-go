@@ -179,6 +179,9 @@
       progress = next;
       operationId = next.operationId;
     });
+    const unsubscribeUpdate = backend.onSalesAnalysisUpdate((next) => {
+      if (result?.operationId && next.operationId === result.operationId) result = next;
+    });
     const closeFacetMenus = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null;
       if (!target?.closest('.facet-menu')) openFacet = '';
@@ -187,6 +190,7 @@
     void initialize();
     return () => {
       unsubscribe();
+      unsubscribeUpdate();
       document.removeEventListener('pointerdown', closeFacetMenus);
     };
   });
@@ -256,6 +260,9 @@
     if (!profileId || selectedStoreIds.size === 0 || rangeInvalid) return;
     const periods = buildPeriodRequests();
     if (periods.length === 0) return;
+    if (operationId) {
+      try { await backend.cancelSalesAnalysis(operationId); } catch { /* previous run may already be finished */ }
+    }
     running = true;
     cancelling = false;
     error = '';
@@ -331,7 +338,7 @@
   }
 
   function openExportDialog() {
-    if (!result || exportingPDF || loadingItems) return;
+    if (!result || result.pending || exportingPDF || loadingItems) return;
     exportDialog = true;
   }
 
@@ -861,7 +868,7 @@
     <h1 id="analysis-title">{t('analysis.title')}</h1>
     {#if result}
       <div class="analysis-heading-actions">
-        <md-filled-button type="button" onclick={openExportDialog} disabled={exportingPDF || loadingItems}>
+        <md-filled-button type="button" onclick={openExportDialog} disabled={exportingPDF || loadingItems || result.pending}>
           <span class="material-symbols-rounded" slot="icon" aria-hidden="true">picture_as_pdf</span>{exportingPDF ? t('analysis.exportingPDFProgress', { current: pdfExportCurrent, total: pdfExportTotal }) : t('analysis.exportPDF')}
         </md-filled-button>
         <md-outlined-button type="button" onclick={() => { dismissExportNotice(); resetFilters(); void discardResult(); }} disabled={exportingPDF}>
@@ -982,7 +989,7 @@
   {#if result && currentPeriod}
     <section class="analysis-results">
       <div class="analysis-toolbar">
-      {#if !result.complete}<div class="notice warning-notice" role="status"><span class="material-symbols-rounded" aria-hidden="true">warning</span><span>{t('analysis.partialResult', { count: result.issues?.length ?? 0 })}</span></div>{/if}
+      {#if result.pending}<div class="notice success-notice" role="status"><span class="material-symbols-rounded" aria-hidden="true">sync</span><span>{t('analysis.supplementing')}</span><md-text-button type="button" onclick={() => void cancelAnalysis()} disabled={!operationId || cancelling}>{cancelling ? t('common.loading') : t('common.cancel')}</md-text-button></div>{:else if !result.complete}<div class="notice warning-notice" role="status"><span class="material-symbols-rounded" aria-hidden="true">warning</span><span>{t('analysis.partialResult', { count: result.issues?.length ?? 0 })}</span></div>{/if}
 
       <div class="period-summary" aria-label={t('analysis.periods')}>
         {#each reportPeriods as period}<span class:current={period.key === 'current'}><strong>{period.label}</strong> {period.from} — {period.to}</span>{/each}

@@ -504,6 +504,13 @@ export const backend: BackendApi = {
     return () => cleanup?.();
   },
 
+  onSalesAnalysisUpdate(listener: (result: SalesAnalysisResult) => void): () => void {
+    const source = eventSource();
+    if (!source) return () => undefined;
+    const cleanup = source.on('rta:sales-analysis-update', (payload) => listener(payload as SalesAnalysisResult));
+    return () => cleanup?.();
+  },
+
   onFileDrop(listener: (paths: string[]) => void): () => void {
     return fileDropSource()?.on(listener) ?? (() => undefined);
   },

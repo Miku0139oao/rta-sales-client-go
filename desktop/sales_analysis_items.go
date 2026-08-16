@@ -109,6 +109,7 @@ func (a *App) rememberSalesAnalysis(result SalesAnalysisResult, packed map[strin
 // can still reload every period.
 func (a *App) ClearSalesAnalysis(request OperationRequest) error {
 	operationID := strings.TrimSpace(request.OperationID)
+	_ = a.CancelSalesAnalysis(OperationRequest{OperationID: operationID})
 	a.salesResultMu.Lock()
 	if a.salesResult != nil && (operationID == "" || a.salesResult.OperationID == operationID) {
 		a.salesResult = nil

@@ -179,13 +179,20 @@ func TestOneAccountSixteenStoresFivePeriodsHitsAPIAndKeeps429OnThatAccount(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	result = waitSalesAnalysisSettled(t, app, result.OperationID)
 	if result.SelectedStores != 16 {
 		t.Fatalf("selected=%d, want 16", result.SelectedStores)
 	}
-	if len(client.queries) != 80 {
-		t.Fatalf("inner queries=%d, want 80 live hits on one account", len(client.queries))
+	if len(client.queries) != 84 {
+		t.Fatalf("inner queries=%d, want 80 store reports plus 4 all-store trends", len(client.queries))
 	}
 	for _, query := range client.queries {
+		if query.AllStores {
+			if !query.SkipArticle || query.BusinessStoreID != "" {
+				t.Fatalf("all-store trend should skip articles: %#v", query)
+			}
+			continue
+		}
 		if query.BusinessStoreID != "107" {
 			t.Fatalf("query used %q, want the single authorized store", query.BusinessStoreID)
 		}

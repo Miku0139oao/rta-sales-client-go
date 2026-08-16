@@ -16,7 +16,10 @@ import (
 	"github.com/Miku0139oao/rta-sales-client-go/xlsxfill"
 )
 
-const salesAnalysisProgressEventName = "rta:sales-analysis-progress"
+const (
+	salesAnalysisProgressEventName = "rta:sales-analysis-progress"
+	salesAnalysisUpdateEventName   = "rta:sales-analysis-update"
+)
 
 // ListSalesAnalysisStores loads authorized stores from one profile, or from
 // every enabled profile when ProfileID is empty. Overlapping stores keep the
@@ -53,8 +56,10 @@ func (a *App) ListSalesAnalysisStores(request ProfileIDRequest) ([]SalesAnalysis
 	return result, nil
 }
 
-// RunSalesAnalysis queries selected stores in parallel. Each store uses the
-// account that owns it so multiple profiles can request RTA at the same time.
+// RunSalesAnalysis returns current-period Article View first so a 16-store
+// account can show the overview quickly. Trend View is one all-stores query
+// because RTA already aggregates it. Other periods and that trend run in the
+// background; each store's independent article report stays a separate query.
 func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResult, error) {
 	started := time.Now()
 	periods, err := normalizeSalesAnalysisPeriods(request)
@@ -80,89 +85,188 @@ func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResul
 	if err != nil {
 		return SalesAnalysisResult{}, err
 	}
-	defer finish()
+	released := false
+	defer func() {
+		if !released {
+			finish()
+		}
+	}()
 
-	routes, err := a.salesAnalysisRoutes(ctx, request.ProfileID, request.SimulateStoreCount)
+	selected, err := a.selectSalesAnalysisStores(ctx, request.ProfileID, storeIDs, request.SimulateStoreCount)
 	if err != nil {
 		return SalesAnalysisResult{}, err
+	}
+	primaryIndex := primarySalesAnalysisPeriodIndex(periods)
+	primaryJobs := articleJobsForPeriod(primaryIndex, len(selected))
+	followJobs := followOnSalesAnalysisJobs(periods, primaryIndex, len(selected))
+	totalTasks := len(primaryJobs) + len(followJobs)
+
+	a.events.Emit(a.appContext(), salesAnalysisProgressEventName, SalesAnalysisProgress{
+		OperationID: operationID, Current: 0, Total: totalTasks, Status: "running",
+	})
+	primaryOutcomes, completed, err := a.runSalesAnalysisJobs(ctx, operationID, selected, periods, primaryJobs, 0, totalTasks, concurrency)
+	if err != nil {
+		return SalesAnalysisResult{}, err
+	}
+
+	analysis, packed := assembleSalesAnalysisArticles(operationID, selected, []normalizedSalesAnalysisPeriod{periods[primaryIndex]}, [][]storeOutcome{primaryOutcomes[primaryIndex]})
+	analysis.Pending = len(followJobs) > 0
+	analysis.Complete = !analysis.Pending && len(analysis.Issues) == 0
+	analysis.QueryDurationMS = time.Since(started).Milliseconds()
+	remembered := a.rememberSalesAnalysis(analysis, packed)
+	if len(followJobs) == 0 {
+		released = true
+		finish()
+		return remembered, nil
+	}
+
+	released = true
+	go a.supplementSalesAnalysis(ctx, finish, started, operationID, selected, periods, primaryIndex, followJobs, completed, totalTasks, concurrency)
+	return remembered, nil
+}
+
+type selectedStore struct {
+	route analysisStoreRoute
+	query accountClient
+}
+
+type storeOutcome struct {
+	result *rtasales.SalesResult
+	err    error
+}
+
+type analysisJob struct {
+	kind        string
+	periodIndex int
+	storeIndex  int
+}
+
+type normalizedSalesAnalysisPeriod struct {
+	key          string
+	label        string
+	from         time.Time
+	to           time.Time
+	includeTrend bool
+}
+
+func (a *App) selectSalesAnalysisStores(ctx context.Context, profileID string, storeIDs []string, simulateStoreCount int) ([]selectedStore, error) {
+	routes, err := a.salesAnalysisRoutes(ctx, profileID, simulateStoreCount)
+	if err != nil {
+		return nil, err
 	}
 	byID := make(map[string]analysisStoreRoute, len(routes))
 	for _, route := range routes {
 		byID[strings.TrimSpace(route.store.BusinessID)] = route
 	}
-	type selectedStore struct {
-		route analysisStoreRoute
-		query accountClient
-	}
 	selected := make([]selectedStore, 0, len(storeIDs))
 	for _, storeID := range storeIDs {
 		route, ok := byID[storeID]
 		if !ok {
-			return SalesAnalysisResult{}, fmt.Errorf("store %q is not authorized for the selected profiles", storeID)
+			return nil, fmt.Errorf("store %q is not authorized for the selected profiles", storeID)
 		}
 		selected = append(selected, selectedStore{
 			route: route,
-			query: maybeSimulateClient(route.client, request.SimulateStoreCount),
+			query: maybeSimulateClient(route.client, simulateStoreCount),
 		})
 	}
-	type storeOutcome struct {
-		result *rtasales.SalesResult
-		err    error
-	}
-	type queryTask struct {
-		periodIndex int
-		storeIndex  int
-	}
-	outcomes := make([][]storeOutcome, len(periods))
-	tasks := make([]queryTask, 0, len(periods)*len(selected))
-	for periodIndex := range periods {
-		outcomes[periodIndex] = make([]storeOutcome, len(selected))
-		for storeIndex := range selected {
-			tasks = append(tasks, queryTask{periodIndex: periodIndex, storeIndex: storeIndex})
+	return selected, nil
+}
+
+func primarySalesAnalysisPeriodIndex(periods []normalizedSalesAnalysisPeriod) int {
+	for index, period := range periods {
+		if period.key == "current" {
+			return index
 		}
 	}
-	jobs := make(chan queryTask)
+	return 0
+}
+
+func articleJobsForPeriod(periodIndex, storeCount int) []analysisJob {
+	jobs := make([]analysisJob, 0, storeCount)
+	for storeIndex := 0; storeIndex < storeCount; storeIndex++ {
+		jobs = append(jobs, analysisJob{kind: "article", periodIndex: periodIndex, storeIndex: storeIndex})
+	}
+	return jobs
+}
+
+func followOnSalesAnalysisJobs(periods []normalizedSalesAnalysisPeriod, primaryIndex, storeCount int) []analysisJob {
+	jobs := make([]analysisJob, 0)
+	if periods[primaryIndex].includeTrend {
+		jobs = append(jobs, analysisJob{kind: "trend", periodIndex: primaryIndex, storeIndex: -1})
+	}
+	for periodIndex := range periods {
+		if periodIndex == primaryIndex {
+			continue
+		}
+		jobs = append(jobs, articleJobsForPeriod(periodIndex, storeCount)...)
+		if periods[periodIndex].includeTrend {
+			jobs = append(jobs, analysisJob{kind: "trend", periodIndex: periodIndex, storeIndex: -1})
+		}
+	}
+	return jobs
+}
+
+func (a *App) runSalesAnalysisJobs(
+	ctx context.Context,
+	operationID string,
+	selected []selectedStore,
+	periods []normalizedSalesAnalysisPeriod,
+	tasks []analysisJob,
+	progressOffset, totalTasks, concurrency int,
+) ([][]storeOutcome, int, error) {
+	if len(tasks) == 0 {
+		return make([][]storeOutcome, len(periods)), progressOffset, nil
+	}
+	outcomes := make([][]storeOutcome, len(periods))
+	for periodIndex := range periods {
+		outcomes[periodIndex] = make([]storeOutcome, len(selected))
+	}
+	trendOutcomes := make([]storeOutcome, len(periods))
+	jobs := make(chan analysisJob)
 	workerCount := min(concurrency, len(tasks))
 	var waitGroup sync.WaitGroup
 	var completed atomic.Int64
-	a.events.Emit(a.appContext(), salesAnalysisProgressEventName, SalesAnalysisProgress{
-		OperationID: operationID,
-		Current:     0,
-		Total:       len(tasks),
-		Status:      "running",
-	})
+	completed.Store(int64(progressOffset))
 	for worker := 0; worker < workerCount; worker++ {
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
 			for task := range jobs {
-				selectedStore := selected[task.storeIndex]
-				store := selectedStore.route.store
 				period := periods[task.periodIndex]
-				result, queryErr := selectedStore.query.Sales(ctx, rtasales.SalesQuery{
-					BusinessStoreID: store.BusinessID,
-					StartDate:       period.from,
-					EndDate:         period.to,
-					Category:        "全部商品",
-					SkipTrend:           !period.includeTrend,
-					SkipTrendLookback:   period.key != "current",
-					Compact:             true,
-				})
-				outcomes[task.periodIndex][task.storeIndex] = storeOutcome{result: result, err: queryErr}
+				query := rtasales.SalesQuery{
+					StartDate:         period.from,
+					EndDate:           period.to,
+					Category:          "全部商品",
+					SkipTrendLookback: period.key != "current",
+					Compact:           true,
+				}
+				storeID, storeLabel := "", "全部"
+				var result *rtasales.SalesResult
+				var queryErr error
+				if task.kind == "trend" {
+					query.SkipArticle = true
+					query.AllStores = true
+					result, queryErr = selected[0].query.Sales(ctx, query)
+					trendOutcomes[task.periodIndex] = storeOutcome{result: result, err: queryErr}
+				} else {
+					selectedStore := selected[task.storeIndex]
+					store := selectedStore.route.store
+					storeID = store.BusinessID
+					storeLabel = store.Label
+					query.BusinessStoreID = store.BusinessID
+					query.SkipTrend = true
+					result, queryErr = selectedStore.query.Sales(ctx, query)
+					outcomes[task.periodIndex][task.storeIndex] = storeOutcome{result: result, err: queryErr}
+				}
 				current := int(completed.Add(1))
 				status := "success"
 				if queryErr != nil {
 					status = "failed"
 				}
 				a.events.Emit(a.appContext(), salesAnalysisProgressEventName, SalesAnalysisProgress{
-					OperationID: operationID,
-					Current:     current,
-					Total:       len(tasks),
-					StoreID:     store.BusinessID,
-					StoreLabel:  store.Label,
-					PeriodKey:   period.key,
-					PeriodLabel: period.label,
-					Status:      status,
+					OperationID: operationID, Current: current, Total: totalTasks,
+					StoreID: storeID, StoreLabel: storeLabel,
+					PeriodKey: period.key, PeriodLabel: period.label, Status: status,
 				})
 			}
 		}()
@@ -181,9 +285,57 @@ func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResul
 	close(jobs)
 	waitGroup.Wait()
 	if err := ctx.Err(); err != nil {
-		return SalesAnalysisResult{}, err
+		return nil, int(completed.Load()), err
 	}
+	for periodIndex, outcome := range trendOutcomes {
+		if outcome.result == nil && outcome.err == nil {
+			continue
+		}
+		if len(outcomes[periodIndex]) == 0 {
+			outcomes[periodIndex] = make([]storeOutcome, 1)
+		}
+		// Stash the all-stores trend on a sidecar by overwriting nothing;
+		// callers read it via applyStoredTrend below using period extras.
+		_ = outcome
+	}
+	return attachTrendOutcomes(outcomes, trendOutcomes), int(completed.Load()), nil
+}
 
+func attachTrendOutcomes(article [][]storeOutcome, trends []storeOutcome) [][]storeOutcome {
+	for periodIndex, trend := range trends {
+		if trend.result == nil && trend.err == nil {
+			continue
+		}
+		article[periodIndex] = append(article[periodIndex], trend)
+	}
+	return article
+}
+
+func (a *App) supplementSalesAnalysis(
+	ctx context.Context,
+	finish func(),
+	started time.Time,
+	operationID string,
+	selected []selectedStore,
+	periods []normalizedSalesAnalysisPeriod,
+	primaryIndex int,
+	jobs []analysisJob,
+	progressOffset, totalTasks, concurrency int,
+) {
+	defer finish()
+	outcomes, _, err := a.runSalesAnalysisJobs(ctx, operationID, selected, periods, jobs, progressOffset, totalTasks, concurrency)
+	if err != nil {
+		return
+	}
+	a.mergeSalesAnalysisSupplement(operationID, selected, periods, primaryIndex, outcomes, time.Since(started).Milliseconds())
+}
+
+func assembleSalesAnalysisArticles(
+	operationID string,
+	selected []selectedStore,
+	periods []normalizedSalesAnalysisPeriod,
+	outcomes [][]storeOutcome,
+) (SalesAnalysisResult, map[string]SalesAnalysisPackedItems) {
 	analysis := SalesAnalysisResult{
 		OperationID:    operationID,
 		SelectedStores: len(selected),
@@ -191,70 +343,156 @@ func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResul
 		Issues:         make([]SalesAnalysisIssue, 0),
 	}
 	packed := make(map[string]SalesAnalysisPackedItems, len(periods))
-	var currentTrend []storeTrendSeries
 	for periodIndex, period := range periods {
-		periodResult := SalesAnalysisPeriodResult{
-			Key: period.key, Label: period.label,
-			From: period.from.Format("2006-01-02"), To: period.to.Format("2006-01-02"),
-			Stores: make([]SalesAnalysisStoreSummary, 0, len(selected)),
-			Issues: make([]SalesAnalysisIssue, 0),
-		}
-		builder := newPackedPeriodBuilder()
-		for storeIndex, outcome := range outcomes[periodIndex] {
-			store := selected[storeIndex].route.store
-			if outcome.err != nil {
-				periodResult.Issues = append(periodResult.Issues, SalesAnalysisIssue{
-					PeriodKey: period.key, StoreID: store.BusinessID, StoreLabel: store.Label, Message: outcome.err.Error(),
-				})
-				continue
-			}
-			totals, added, conversionErr := builder.appendStore(store, outcome.result)
-			outcomes[periodIndex][storeIndex].result = nil
-			if conversionErr != nil {
-				periodResult.Issues = append(periodResult.Issues, SalesAnalysisIssue{
-					PeriodKey: period.key, StoreID: store.BusinessID, StoreLabel: store.Label, Message: conversionErr.Error(),
-				})
-				continue
-			}
-			periodResult.SuccessfulStores++
-			periodResult.ItemCount += added
-			periodResult.Stores = append(periodResult.Stores, SalesAnalysisStoreSummary{
-				BusinessID: store.BusinessID, Label: store.Label, Totals: totals,
-			})
-			addSalesAnalysisTotals(&periodResult.Totals, totals)
-			if period.key == "current" && outcome.result != nil {
-				currentTrend = append(currentTrend, storeTrendSeries{store: store, days: outcome.result.TrendDays})
-			}
-		}
-		periodResult.Complete = len(periodResult.Issues) == 0
-		finalizeSalesAnalysisTrendTotals(&periodResult.Totals, periodResult.Stores)
-		packed[period.key] = builder.finish(period.key)
+		periodResult, periodPacked := assembleArticlePeriod(period, selected, outcomes[periodIndex])
+		packed[period.key] = periodPacked
 		analysis.Issues = append(analysis.Issues, periodResult.Issues...)
 		analysis.Periods = append(analysis.Periods, periodResult)
 	}
-	primary := analysis.Periods[0]
-	analysis.From = primary.From
-	analysis.To = primary.To
-	analysis.SuccessfulStores = primary.SuccessfulStores
-	analysis.Totals = primary.Totals
-	analysis.Stores = primary.Stores
-	for _, period := range periods {
-		if period.key == "current" {
-			analysis.Weeks = foldSalesAnalysisWeeks(period.from, period.to, currentTrend)
-			break
-		}
+	if len(analysis.Periods) > 0 {
+		primary := analysis.Periods[0]
+		analysis.From = primary.From
+		analysis.To = primary.To
+		analysis.SuccessfulStores = primary.SuccessfulStores
+		analysis.Totals = primary.Totals
+		analysis.Stores = primary.Stores
 	}
-	analysis.Complete = len(analysis.Issues) == 0
-	analysis.QueryDurationMS = time.Since(started).Milliseconds()
-	return a.rememberSalesAnalysis(analysis, packed), nil
+	return analysis, packed
 }
 
-type normalizedSalesAnalysisPeriod struct {
-	key          string
-	label        string
-	from         time.Time
-	to           time.Time
-	includeTrend bool
+func assembleArticlePeriod(
+	period normalizedSalesAnalysisPeriod,
+	selected []selectedStore,
+	outcomes []storeOutcome,
+) (SalesAnalysisPeriodResult, SalesAnalysisPackedItems) {
+	periodResult := SalesAnalysisPeriodResult{
+		Key: period.key, Label: period.label,
+		From: period.from.Format("2006-01-02"), To: period.to.Format("2006-01-02"),
+		Stores: make([]SalesAnalysisStoreSummary, 0, len(selected)),
+		Issues: make([]SalesAnalysisIssue, 0),
+	}
+	builder := newPackedPeriodBuilder()
+	articleCount := min(len(outcomes), len(selected))
+	for storeIndex := 0; storeIndex < articleCount; storeIndex++ {
+		store := selected[storeIndex].route.store
+		outcome := outcomes[storeIndex]
+		if outcome.err != nil {
+			periodResult.Issues = append(periodResult.Issues, SalesAnalysisIssue{
+				PeriodKey: period.key, StoreID: store.BusinessID, StoreLabel: store.Label, Message: outcome.err.Error(),
+			})
+			continue
+		}
+		totals, added, conversionErr := builder.appendStore(store, articleOnlyResult(outcome.result))
+		if conversionErr != nil {
+			periodResult.Issues = append(periodResult.Issues, SalesAnalysisIssue{
+				PeriodKey: period.key, StoreID: store.BusinessID, StoreLabel: store.Label, Message: conversionErr.Error(),
+			})
+			continue
+		}
+		periodResult.SuccessfulStores++
+		periodResult.ItemCount += added
+		periodResult.Stores = append(periodResult.Stores, SalesAnalysisStoreSummary{
+			BusinessID: store.BusinessID, Label: store.Label, Totals: totals,
+		})
+		addSalesAnalysisTotals(&periodResult.Totals, totals)
+	}
+	if trend, ok := periodTrendOutcome(outcomes, len(selected)); ok {
+		applyAllStoresTrend(&periodResult, trend)
+	}
+	periodResult.Complete = len(periodResult.Issues) == 0
+	return periodResult, builder.finish(period.key)
+}
+
+func periodTrendOutcome(outcomes []storeOutcome, storeCount int) (storeOutcome, bool) {
+	if len(outcomes) > storeCount {
+		return outcomes[storeCount], true
+	}
+	return storeOutcome{}, false
+}
+
+func applyAllStoresTrend(period *SalesAnalysisPeriodResult, outcome storeOutcome) {
+	if outcome.err != nil {
+		period.Issues = append(period.Issues, SalesAnalysisIssue{
+			PeriodKey: period.Key, StoreID: "", StoreLabel: "全部", Message: outcome.err.Error(),
+		})
+		return
+	}
+	if outcome.result == nil {
+		return
+	}
+	period.Totals.TrendNetSalesAmount = outcome.result.TrendGrossSaleAmount
+	period.Totals.TransactionCount = outcome.result.TotalTransactionCount
+}
+
+func articleOnlyResult(result *rtasales.SalesResult) *rtasales.SalesResult {
+	if result == nil {
+		return nil
+	}
+	clone := *result
+	clone.TrendGrossSaleAmount = nil
+	clone.TotalTransactionCount = nil
+	clone.TrendDays = nil
+	return &clone
+}
+
+func (a *App) mergeSalesAnalysisSupplement(
+	operationID string,
+	selected []selectedStore,
+	periods []normalizedSalesAnalysisPeriod,
+	primaryIndex int,
+	outcomes [][]storeOutcome,
+	durationMS int64,
+) {
+	a.salesResultMu.Lock()
+	if a.salesResult == nil || a.salesResult.OperationID != operationID {
+		a.salesResultMu.Unlock()
+		return
+	}
+	current := *a.salesResult
+	packed := a.salesPacked
+	if packed == nil {
+		packed = make(map[string]SalesAnalysisPackedItems)
+	}
+	byKey := make(map[string]int, len(current.Periods))
+	for index, period := range current.Periods {
+		byKey[period.Key] = index
+	}
+	if trend, ok := periodTrendOutcome(outcomes[primaryIndex], len(selected)); ok {
+		period := current.Periods[byKey[periods[primaryIndex].key]]
+		applyAllStoresTrend(&period, trend)
+		period.Complete = len(period.Issues) == 0
+		current.Periods[byKey[periods[primaryIndex].key]] = period
+		if periods[primaryIndex].key == "current" && trend.err == nil && trend.result != nil {
+			current.Weeks = foldSalesAnalysisWeeks(periods[primaryIndex].from, periods[primaryIndex].to, []storeTrendSeries{{
+				store: rtasales.Store{Label: "全部"},
+				days:  trend.result.TrendDays,
+			}})
+		}
+	}
+	for periodIndex, period := range periods {
+		if periodIndex == primaryIndex {
+			continue
+		}
+		periodResult, periodPacked := assembleArticlePeriod(period, selected, outcomes[periodIndex])
+		packed[period.key] = periodPacked
+		current.Periods = append(current.Periods, periodResult)
+		current.Issues = append(current.Issues, periodResult.Issues...)
+	}
+	if index, ok := byKey["current"]; ok {
+		current.SuccessfulStores = current.Periods[index].SuccessfulStores
+		current.Totals = current.Periods[index].Totals
+		current.Stores = current.Periods[index].Stores
+		current.From = current.Periods[index].From
+		current.To = current.Periods[index].To
+	}
+	current.Pending = false
+	current.Complete = len(current.Issues) == 0
+	current.QueryDurationMS = durationMS
+	slim := slimSalesAnalysis(current)
+	a.salesResult = &slim
+	a.salesPacked = packed
+	a.salesResultMu.Unlock()
+	a.events.Emit(a.appContext(), salesAnalysisUpdateEventName, slim)
 }
 
 func normalizeSalesAnalysisPeriods(request SalesAnalysisRequest) ([]normalizedSalesAnalysisPeriod, error) {

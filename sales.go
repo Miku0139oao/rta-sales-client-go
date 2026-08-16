@@ -47,6 +47,12 @@ type SalesQuery struct {
 	// SkipTrend avoids the additional whole-store Trend View request when the
 	// caller only needs Article View rows and category metrics.
 	SkipTrend bool
+	// SkipArticle fetches Trend View only. Article View is per-store and
+	// cannot be mixed with AllStores.
+	SkipArticle bool
+	// AllStores runs Trend View for every authorized store in one request.
+	// Article View cannot use this; SKU rows have no store identity.
+	AllStores bool
 	// SkipTrendLookback uses the queried dates only for Trend View, instead of
 	// also fetching the previous ISO week used by weekly comparison pages.
 	SkipTrendLookback bool
@@ -118,9 +124,9 @@ type SalesResult struct {
 
 // TrendDay is one calendar day's whole-store Trend View totals.
 type TrendDay struct {
-	Date              string  `json:"date"`
-	GrossSaleAmount   float64 `json:"gross_sale_amount"`
-	TransactionCount  float64 `json:"transaction_count"`
+	Date             string  `json:"date"`
+	GrossSaleAmount  float64 `json:"gross_sale_amount"`
+	TransactionCount float64 `json:"transaction_count"`
 }
 
 type salesQueryPayload struct {
@@ -215,9 +221,15 @@ func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, err
 	if err != nil {
 		return nil, err
 	}
-	store, err := c.resolveStore(ctx, query.BusinessStoreID)
-	if err != nil {
-		return nil, err
+	var store storeRecord
+	if query.AllStores {
+		store = storeRecord{Store: Store{Label: "全部"}}
+	} else {
+		resolved, resolveErr := c.resolveStore(ctx, query.BusinessStoreID)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		store = resolved
 	}
 	items, trend, err := c.fetchSalesWindows(ctx, query, store)
 	if err != nil {
@@ -260,6 +272,13 @@ func (c *Client) fetchSalesWindows(ctx context.Context, query SalesQuery, store 
 			}
 			trendDone <- trendFetch{trend: trend, err: err}
 		}()
+	}
+	if query.SkipArticle {
+		if trendDone == nil {
+			return nil, trendTotals{}, &InputError{Field: "SkipArticle", Message: "requires Trend View"}
+		}
+		fetched := <-trendDone
+		return nil, fetched.trend, fetched.err
 	}
 	var items []SaleItem
 	for _, window := range windows {
@@ -536,7 +555,18 @@ func (c *Client) fetchTrendTransactionPage(ctx context.Context, queryJSON, colum
 
 func validateSalesQuery(query SalesQuery) (SalesQuery, error) {
 	query.BusinessStoreID = strings.TrimSpace(query.BusinessStoreID)
-	if query.BusinessStoreID == "" {
+	if query.SkipArticle && query.SkipTrend {
+		return query, &InputError{Field: "SkipArticle", Message: "cannot be used together with SkipTrend"}
+	}
+	if query.AllStores {
+		if !query.SkipArticle {
+			return query, &InputError{Field: "AllStores", Message: "cannot include Article View; SKU rows have no store identity"}
+		}
+		if query.SkipTrend {
+			return query, &InputError{Field: "AllStores", Message: "requires Trend View"}
+		}
+		query.BusinessStoreID = ""
+	} else if query.BusinessStoreID == "" {
 		return query, &InputError{Field: "BusinessStoreID", Message: "is required"}
 	}
 	if query.StartDate.IsZero() {

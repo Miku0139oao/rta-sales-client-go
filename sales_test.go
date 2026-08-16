@@ -5,6 +5,21 @@ import (
 	"time"
 )
 
+func TestValidateSalesQueryAllStoresCannotMixArticleRows(t *testing.T) {
+	day := time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
+	_, err := validateSalesQuery(SalesQuery{AllStores: true, StartDate: day, EndDate: day})
+	if err == nil {
+		t.Fatal("all-stores Article View should be rejected")
+	}
+	query, err := validateSalesQuery(SalesQuery{AllStores: true, SkipArticle: true, StartDate: day, EndDate: day})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if query.BusinessStoreID != "" || !query.AllStores || !query.SkipArticle {
+		t.Fatalf("unexpected all-stores query: %#v", query)
+	}
+}
+
 func TestSplitSalesDateRange(t *testing.T) {
 	tests := []struct {
 		name  string

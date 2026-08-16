@@ -61,11 +61,60 @@ func (c *salesAnalysisFakeClient) Sales(ctx context.Context, query rtasales.Sale
 			return nil, err
 		}
 	}
+	if query.AllStores {
+		return mergeFakeAllStoresTrend(c.results), nil
+	}
 	result := c.results[query.BusinessStoreID]
 	if result == nil {
 		return nil, errors.New("missing fake sales result")
 	}
 	return result, nil
+}
+
+func mergeFakeAllStoresTrend(results map[string]*rtasales.SalesResult) *rtasales.SalesResult {
+	merged := &rtasales.SalesResult{}
+	var sales, tickets float64
+	hasSales, hasTickets := false, false
+	for _, result := range results {
+		if result == nil {
+			continue
+		}
+		if result.TrendGrossSaleAmount != nil {
+			sales += *result.TrendGrossSaleAmount
+			hasSales = true
+		}
+		if result.TotalTransactionCount != nil {
+			tickets += *result.TotalTransactionCount
+			hasTickets = true
+		}
+		merged.TrendDays = append(merged.TrendDays, result.TrendDays...)
+	}
+	if hasSales {
+		merged.TrendGrossSaleAmount = &sales
+	}
+	if hasTickets {
+		merged.TotalTransactionCount = &tickets
+	}
+	return merged
+}
+
+func waitSalesAnalysisSettled(t *testing.T, app *App, operationID string) SalesAnalysisResult {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		app.salesResultMu.Lock()
+		result := app.salesResult
+		app.salesResultMu.Unlock()
+		app.operationMu.Lock()
+		running := app.salesAnalysisRunning
+		app.operationMu.Unlock()
+		if result != nil && result.OperationID == operationID && !result.Pending && !running {
+			return *result
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("sales analysis did not finish background work")
+	return SalesAnalysisResult{}
 }
 
 func TestSalesAnalysisUsesOneProfileForParallelStoresAndPreservesCategories(t *testing.T) {
@@ -155,8 +204,8 @@ func TestSalesAnalysisUsesOneProfileForParallelStoresAndPreservesCategories(t *t
 	if result.Totals.SaleAmount != 150 || result.Totals.ReturnAmount != 15 || result.Totals.NetSalesAmount != 135 {
 		t.Fatalf("unexpected totals: %#v", result.Totals)
 	}
-	if result.Totals.TransactionCount == nil || *result.Totals.TransactionCount != 22 {
-		t.Fatalf("unexpected transaction total: %#v", result.Totals.TransactionCount)
+	if result.Totals.TransactionCount != nil {
+		t.Fatalf("article-only current period should omit Trend totals: %#v", result.Totals.TransactionCount)
 	}
 	if result.Items[0].Category1 != "A-HEALTH & BEAUTY" || result.Items[0].Category5 != "MASQUE" ||
 		result.Items[0].Category4Code != "A020101" || result.Items[0].BrandName != "Brand" {
@@ -236,40 +285,55 @@ func TestSalesAnalysisQueriesReportPeriodsInParallelAndIncludesTrend(t *testing.
 		})
 		done <- runErr
 	}()
-	for range 4 {
+	for range 2 {
 		select {
 		case <-client.started:
 		case <-time.After(time.Second):
-			t.Fatal("period/store queries did not start in parallel")
+			t.Fatal("current-period article queries did not start")
 		}
 	}
 	close(client.release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Periods) != 2 || result.Periods[0].Key != "current" || result.Periods[1].Key != "yearAgo" {
-		t.Fatalf("unexpected period results: %#v", result.Periods)
+	if !result.Pending || len(result.Periods) != 1 || result.Periods[0].Key != "current" {
+		t.Fatalf("primary result should be current articles only: %#v", result)
 	}
-	if result.Periods[0].Totals.TransactionCount == nil || *result.Periods[0].Totals.TransactionCount != 16 {
-		t.Fatalf("unexpected period transactions: %#v", result.Periods[0].Totals.TransactionCount)
+	if result.Periods[0].Totals.TransactionCount != nil {
+		t.Fatalf("current article wave should omit Trend totals: %#v", result.Periods[0].Totals)
 	}
-	if result.Periods[0].Totals.TrendNetSalesAmount == nil || *result.Periods[0].Totals.TrendNetSalesAmount != 34 {
-		t.Fatalf("unexpected period Trend View net sales: %#v", result.Periods[0].Totals.TrendNetSalesAmount)
+	settled := waitSalesAnalysisSettled(t, app, result.OperationID)
+	if len(settled.Periods) != 2 || settled.Periods[0].Key != "current" {
+		t.Fatalf("unexpected period results: %#v", settled.Periods)
 	}
-	if len(result.Weeks) == 0 || result.Weeks[0].From != "2026-07-27" || result.Weeks[0].Totals.SalesTW != 14 {
-		t.Fatalf("weekly fold missing or wrong: %#v", result.Weeks)
+	if settled.Periods[0].Totals.TransactionCount == nil || *settled.Periods[0].Totals.TransactionCount != 16 {
+		t.Fatalf("unexpected period transactions: %#v", settled.Periods[0].Totals.TransactionCount)
+	}
+	if settled.Periods[0].Totals.TrendNetSalesAmount == nil || *settled.Periods[0].Totals.TrendNetSalesAmount != 34 {
+		t.Fatalf("unexpected period Trend View net sales: %#v", settled.Periods[0].Totals.TrendNetSalesAmount)
+	}
+	if len(settled.Weeks) == 0 || settled.Weeks[0].From != "2026-07-27" || settled.Weeks[0].Totals.SalesTW != 14 {
+		t.Fatalf("weekly fold missing or wrong: %#v", settled.Weeks)
 	}
 	client.mu.Lock()
 	queries := append([]rtasales.SalesQuery(nil), client.queries...)
-	maxActive := client.maxActive
 	client.mu.Unlock()
-	if len(queries) != 4 || maxActive != 4 {
-		t.Fatalf("queries=%d maxActive=%d, want 4", len(queries), maxActive)
-	}
+	articles, trends := 0, 0
 	for _, query := range queries {
-		if query.SkipTrend {
-			t.Fatal("report period requested Trend View totals")
+		if query.AllStores {
+			trends++
+			if !query.SkipArticle {
+				t.Fatal("all-stores Trend View must skip Article View")
+			}
+			continue
 		}
+		articles++
+		if !query.SkipTrend {
+			t.Fatal("per-store report queries must skip Trend View")
+		}
+	}
+	if articles != 4 || trends != 2 {
+		t.Fatalf("articles=%d trends=%d, want 4 store reports and 2 all-store trends", articles, trends)
 	}
 	events.mu.Lock()
 	defer events.mu.Unlock()
@@ -279,8 +343,8 @@ func TestSalesAnalysisQueriesReportPeriodsInParallelAndIncludesTrend(t *testing.
 			progressEvents++
 		}
 	}
-	if progressEvents != 5 {
-		t.Fatalf("progress events=%d, want initial plus four tasks", progressEvents)
+	if progressEvents < 5 {
+		t.Fatalf("progress events=%d, want initial plus follow-on work", progressEvents)
 	}
 }
 
@@ -297,8 +361,8 @@ func TestSalesAnalysisSupportsDefaultAndMaximum160ParallelTasksPerProfile(t *tes
 		storeCount  int
 		wantActive  int
 	}{
-		{name: "default 160", concurrency: 0, storeCount: 40, wantActive: 160},
-		{name: "maximum 160", concurrency: 160, storeCount: 40, wantActive: 160},
+		{name: "default first wave is current articles", concurrency: 0, storeCount: 40, wantActive: 40},
+		{name: "maximum first wave is current articles", concurrency: 160, storeCount: 40, wantActive: 40},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			stores := make([]rtasales.Store, 0, test.storeCount)
@@ -310,9 +374,8 @@ func TestSalesAnalysisSupportsDefaultAndMaximum160ParallelTasksPerProfile(t *tes
 				storeIDs = append(storeIDs, storeID)
 				results[storeID] = &rtasales.SalesResult{}
 			}
-			taskCount := test.storeCount * len(periods)
 			client := &salesAnalysisFakeClient{
-				stores: stores, results: results, started: make(chan struct{}, taskCount), release: make(chan struct{}),
+				stores: stores, results: results, started: make(chan struct{}, 256), release: make(chan struct{}),
 			}
 			app, _, _ := newTestApp(t, new(fakeEngine), fakeClients{byAccount: map[string]accountClient{"analysis-account": client}})
 			profile, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{
@@ -321,12 +384,14 @@ func TestSalesAnalysisSupportsDefaultAndMaximum160ParallelTasksPerProfile(t *tes
 			if err != nil {
 				t.Fatal(err)
 			}
-			done := make(chan error, 1)
+			done := make(chan SalesAnalysisResult, 1)
+			errs := make(chan error, 1)
 			go func() {
-				_, runErr := app.RunSalesAnalysis(SalesAnalysisRequest{
+				result, runErr := app.RunSalesAnalysis(SalesAnalysisRequest{
 					ProfileID: profile.ID, StoreIDs: storeIDs, Periods: periods, Concurrency: test.concurrency,
 				})
-				done <- runErr
+				errs <- runErr
+				done <- result
 			}()
 			for range test.wantActive {
 				select {
@@ -336,15 +401,30 @@ func TestSalesAnalysisSupportsDefaultAndMaximum160ParallelTasksPerProfile(t *tes
 				}
 			}
 			close(client.release)
-			if err := <-done; err != nil {
+			if err := <-errs; err != nil {
 				t.Fatal(err)
 			}
+			primary := <-done
+			if !primary.Pending {
+				t.Fatal("expected remaining periods to load in the background")
+			}
+			waitSalesAnalysisSettled(t, app, primary.OperationID)
 			client.mu.Lock()
 			maxActive := client.maxActive
 			queryCount := len(client.queries)
 			client.mu.Unlock()
-			if maxActive != test.wantActive || queryCount != taskCount {
-				t.Fatalf("maxActive=%d queries=%d, want %d and %d", maxActive, queryCount, test.wantActive, taskCount)
+			if maxActive < test.wantActive {
+				t.Fatalf("maxActive=%d, want at least %d", maxActive, test.wantActive)
+			}
+			trendJobs := 0
+			for _, period := range periods {
+				if period.IncludeTrend {
+					trendJobs++
+				}
+			}
+			wantQueries := test.storeCount*len(periods) + trendJobs
+			if queryCount != wantQueries {
+				t.Fatalf("queries=%d, want %d articles plus %d all-store trends", queryCount, test.storeCount*len(periods), trendJobs)
 			}
 		})
 	}

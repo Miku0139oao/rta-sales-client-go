@@ -344,6 +344,7 @@ export interface SalesAnalysisResult {
   from: string;
   to: string;
   complete: boolean;
+  pending?: boolean;
   selectedStores: number;
   successfulStores: number;
   totals: SalesAnalysisTotals;
@@ -435,6 +436,7 @@ export interface BackendApi {
   openSavedFolder(path: string): Promise<void>;
   onProgress(listener: (progress: AnalysisProgress) => void): () => void;
   onSalesAnalysisProgress(listener: (progress: SalesAnalysisProgress) => void): () => void;
+  onSalesAnalysisUpdate(listener: (result: SalesAnalysisResult) => void): () => void;
   onFileDrop(listener: (paths: string[]) => void): () => void;
 }
 

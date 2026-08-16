@@ -347,8 +347,8 @@ type SalesAnalysisCategoryGroup struct {
 }
 
 type SalesAnalysisFocusGroup struct {
-	ID       string                     `json:"id"`
-	Prefix   string                     `json:"prefix"`
+	ID       string                      `json:"id"`
+	Prefix   string                      `json:"prefix"`
 	Sales    []SalesAnalysisFocusProduct `json:"sales,omitempty"`
 	Quantity []SalesAnalysisFocusProduct `json:"quantity,omitempty"`
 }
@@ -394,6 +394,7 @@ type SalesAnalysisResult struct {
 	From             string                      `json:"from"`
 	To               string                      `json:"to"`
 	Complete         bool                        `json:"complete"`
+	Pending          bool                        `json:"pending,omitempty"`
 	SelectedStores   int                         `json:"selectedStores"`
 	SuccessfulStores int                         `json:"successfulStores"`
 	Totals           SalesAnalysisTotals         `json:"totals"`
@@ -406,27 +407,27 @@ type SalesAnalysisResult struct {
 }
 
 type SalesAnalysisWeek struct {
-	From   string                    `json:"from"`
-	To     string                    `json:"to"`
-	Stores []SalesAnalysisWeekStore  `json:"stores"`
-	Totals SalesAnalysisWeekStore    `json:"totals"`
+	From   string                   `json:"from"`
+	To     string                   `json:"to"`
+	Stores []SalesAnalysisWeekStore `json:"stores"`
+	Totals SalesAnalysisWeekStore   `json:"totals"`
 }
 
 type SalesAnalysisWeekStore struct {
-	BusinessID            string  `json:"businessId,omitempty"`
-	Label                 string  `json:"label,omitempty"`
-	SalesTW               float64 `json:"salesTw"`
-	SalesLW               float64 `json:"salesLw"`
-	CustomersTW           float64 `json:"customersTw"`
-	CustomersLW           float64 `json:"customersLw"`
-	WeekdaySalesTW        float64 `json:"weekdaySalesTw"`
-	WeekdaySalesLW        float64 `json:"weekdaySalesLw"`
-	WeekendSalesTW        float64 `json:"weekendSalesTw"`
-	WeekendSalesLW        float64 `json:"weekendSalesLw"`
-	WeekdayCustomersTW    float64 `json:"weekdayCustomersTw"`
-	WeekdayCustomersLW    float64 `json:"weekdayCustomersLw"`
-	WeekendCustomersTW    float64 `json:"weekendCustomersTw"`
-	WeekendCustomersLW    float64 `json:"weekendCustomersLw"`
+	BusinessID         string  `json:"businessId,omitempty"`
+	Label              string  `json:"label,omitempty"`
+	SalesTW            float64 `json:"salesTw"`
+	SalesLW            float64 `json:"salesLw"`
+	CustomersTW        float64 `json:"customersTw"`
+	CustomersLW        float64 `json:"customersLw"`
+	WeekdaySalesTW     float64 `json:"weekdaySalesTw"`
+	WeekdaySalesLW     float64 `json:"weekdaySalesLw"`
+	WeekendSalesTW     float64 `json:"weekendSalesTw"`
+	WeekendSalesLW     float64 `json:"weekendSalesLw"`
+	WeekdayCustomersTW float64 `json:"weekdayCustomersTw"`
+	WeekdayCustomersLW float64 `json:"weekdayCustomersLw"`
+	WeekendCustomersTW float64 `json:"weekendCustomersTw"`
+	WeekendCustomersLW float64 `json:"weekendCustomersLw"`
 }
 
 type SalesAnalysisPDFWriteRequest struct {
