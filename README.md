@@ -1,4 +1,4 @@
-# RTA Sales Analyzer
+# RTA 銷售分析 (RTA Sales Analyzer)
 
 English | [繁體中文](README.zh-TW.md)
 

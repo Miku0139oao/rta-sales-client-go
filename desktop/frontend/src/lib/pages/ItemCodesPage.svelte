@@ -27,8 +27,10 @@
   let saving = false;
   let deletingBusy = false;
   let codesBusyId = '';
+  let transferKind: '' | 'export' | 'import' = '';
+  let transferNotice = '';
 
-  $: pageBusy = Boolean(saving || deletingBusy || codesBusyId);
+  $: pageBusy = Boolean(saving || deletingBusy || codesBusyId || transferKind);
   $: onBusyChange(pageBusy);
   $: query = search.trim().toLowerCase();
   $: visibleGroups = query
@@ -226,6 +228,40 @@
       codesBusyId = '';
     }
   }
+
+  async function exportCatalog() {
+    if (pageBusy) return;
+    transferKind = 'export';
+    try {
+      const result = await backend.exportManCodeCatalog();
+      if (result.cancelled) return;
+      error = '';
+      transferNotice = t('itemcodes.exported');
+    } catch (caught) {
+      transferNotice = '';
+      error = errorMessage(locale, caught);
+    } finally {
+      transferKind = '';
+    }
+  }
+
+  async function importCatalog() {
+    if (pageBusy) return;
+    transferKind = 'import';
+    try {
+      const result = await backend.importManCodeCatalog();
+      if (result.cancelled) return;
+      error = '';
+      groups = result.groups ?? [];
+      expandedIds = new Set();
+      transferNotice = t('itemcodes.imported', { count: groups.length });
+    } catch (caught) {
+      transferNotice = '';
+      error = errorMessage(locale, caught);
+    } finally {
+      transferKind = '';
+    }
+  }
 </script>
 
 <section class="page itemcodes-page" aria-labelledby="itemcodes-title">
@@ -233,9 +269,19 @@
     <div>
       <h1 id="itemcodes-title">{t('itemcodes.title')}</h1>
     </div>
-    <md-filled-button onclick={openCreate} disabled={pageBusy}>
-      <span class="material-symbols-rounded" slot="icon">add</span>{t('itemcodes.add')}
-    </md-filled-button>
+    <div class="itemcode-heading-actions">
+      <md-outlined-button onclick={exportCatalog} disabled={pageBusy}>
+        <span class="material-symbols-rounded" slot="icon">download</span>
+        {transferKind === 'export' ? t('itemcodes.exporting') : t('itemcodes.export')}
+      </md-outlined-button>
+      <md-outlined-button onclick={importCatalog} disabled={pageBusy}>
+        <span class="material-symbols-rounded" slot="icon">upload</span>
+        {transferKind === 'import' ? t('itemcodes.importing') : t('itemcodes.import')}
+      </md-outlined-button>
+      <md-filled-button onclick={openCreate} disabled={pageBusy}>
+        <span class="material-symbols-rounded" slot="icon">add</span>{t('itemcodes.add')}
+      </md-filled-button>
+    </div>
   </div>
 
   <div class="field-group itemcodes-search">
@@ -247,6 +293,13 @@
     <div class="notice error-notice" role="alert">
       <span class="material-symbols-rounded" aria-hidden="true">error</span>
       <div><strong>{t('error.title')}</strong><p>{error}</p></div>
+    </div>
+  {/if}
+
+  {#if transferNotice}
+    <div class="notice success-notice" role="status">
+      <span class="material-symbols-rounded" aria-hidden="true">check_circle</span>
+      <span>{transferNotice}</span>
     </div>
   {/if}
 
@@ -264,7 +317,7 @@
     </div>
   {:else if groups.length === 0}
     <div class="empty-state surface-card">
-      <span class="material-symbols-rounded" aria-hidden="true">qr_code_2</span>
+      <span class="material-symbols-rounded" aria-hidden="true">tag</span>
       <h2>{t('itemcodes.emptyTitle')}</h2>
       <md-filled-tonal-button onclick={openCreate}>{t('itemcodes.add')}</md-filled-tonal-button>
     </div>

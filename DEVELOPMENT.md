@@ -4,7 +4,7 @@ English | [繁體中文](DEVELOPMENT.zh-TW.md)
 
 Everyday use is documented in [README.md](README.md). This file is for people changing the code, running the CLI, or importing the library.
 
-The Windows app is **RTA Sales Analyzer**. The exe is still named `RTA-Excel-Filler.exe`. That filename was left alone so installers and CI artifacts did not have to move. The window title is the new name.
+The Windows app is **RTA 銷售分析** (RTA Sales Analyzer). The exe is still named `RTA-Excel-Filler.exe`. That filename was left alone so installers and CI artifacts did not have to move. The window title is **RTA 銷售分析**.
 
 The same repo also has:
 

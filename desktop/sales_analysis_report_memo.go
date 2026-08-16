@@ -52,6 +52,29 @@ func (a *App) GetSalesAnalysisReportMemo(request SalesAnalysisReportMemoRequest)
 		mode:             strings.TrimSpace(request.Mode),
 		categories:       request.Categories,
 	}
+	focusCatalog := catalog
+	groupID := strings.TrimSpace(request.GroupID)
+	if groupID != "" {
+		filter.itemCodes = make(map[string]struct{})
+		found := false
+		for _, group := range catalog {
+			if strings.TrimSpace(group.ID) != groupID {
+				continue
+			}
+			found = true
+			focusCatalog = []ManCodeGroup{group}
+			for _, code := range group.Codes {
+				code = strings.TrimSpace(code)
+				if code != "" {
+					filter.itemCodes[code] = struct{}{}
+				}
+			}
+			break
+		}
+		if !found {
+			return SalesAnalysisReportMemo{}, errors.New("mancode group does not exist")
+		}
+	}
 	if filter.mode == "" {
 		filter.mode = "blacklist"
 	}
@@ -65,15 +88,20 @@ func (a *App) GetSalesAnalysisReportMemo(request SalesAnalysisReportMemoRequest)
 		}
 		builder := buildPeriodMemo(packed, periodStores(a.salesResult, period.Key), storeID, filter, level)
 		built[period.Key] = builder
-		periods = append(periods, builder.finish(period.Key, ""))
+		memo := builder.finish(period.Key, "")
+		if filter.itemCodes != nil {
+			totals := builder.totals
+			memo.Totals = &totals
+		}
+		periods = append(periods, memo)
 	}
 	if next, ok := built["yearAgoNext"]; ok {
 		for index, period := range periods {
 			if period.Key != "yearAgoNext" {
 				continue
 			}
-			periods[index].FocusGroups = focusGroupsFromBuilders(next, built["current"], catalog)
-			periods[index].FocusCatalog = catalogFocusActive(catalog)
+			periods[index].FocusGroups = focusGroupsFromBuilders(next, built["current"], focusCatalog)
+			periods[index].FocusCatalog = catalogFocusActive(focusCatalog)
 		}
 	}
 	return SalesAnalysisReportMemo{Periods: periods}, nil
@@ -84,11 +112,13 @@ type reportMemoFilter struct {
 	excludeStamps    bool
 	mode             string
 	categories       []string
+	itemCodes        map[string]struct{}
 }
 
 type periodMemoBuilder struct {
 	products   map[string]*SalesAnalysisRankedItem
 	categories map[string]*memoCategory
+	totals     SalesAnalysisTotals
 }
 
 type memoCategory struct {
@@ -130,6 +160,12 @@ func buildPeriodMemo(
 		if !includePackedReportRow(packed.Dict, row, filter, level) {
 			continue
 		}
+		builder.totals.SaleQuantity += row.Sq
+		builder.totals.SaleAmount += row.Sa
+		builder.totals.ReturnQuantity += row.Rq
+		builder.totals.ReturnAmount += row.Ra
+		builder.totals.NetQuantity += row.Nq
+		builder.totals.NetSalesAmount += row.Ns
 		code := packedString(packed.Dict, row.Ac)
 		name := packedString(packed.Dict, row.An)
 		id := strings.TrimSpace(code)
@@ -215,7 +251,9 @@ func (b periodMemoBuilder) finish(key, uncategorized string) SalesAnalysisPeriod
 	}
 	amountGroups := append([]SalesAnalysisCategoryGroup(nil), groups...)
 	quantityGroups := append([]SalesAnalysisCategoryGroup(nil), groups...)
-	sort.Slice(amountGroups, func(i, j int) bool { return rankedGreater(amountGroups[i].Amount, amountGroups[j].Amount, amountGroups[i].ID, amountGroups[j].ID) })
+	sort.Slice(amountGroups, func(i, j int) bool {
+		return rankedGreater(amountGroups[i].Amount, amountGroups[j].Amount, amountGroups[i].ID, amountGroups[j].ID)
+	})
 	sort.Slice(quantityGroups, func(i, j int) bool {
 		return rankedGreater(quantityGroups[i].Quantity, quantityGroups[j].Quantity, quantityGroups[i].ID, quantityGroups[j].ID)
 	})
@@ -264,6 +302,12 @@ func rankedGreater(left, right float64, leftID, rightID string) bool {
 }
 
 func includePackedReportRow(dict []string, row SalesAnalysisPackedRow, filter reportMemoFilter, level string) bool {
+	if filter.itemCodes != nil {
+		code := strings.TrimSpace(packedString(dict, row.Ac))
+		if _, ok := filter.itemCodes[code]; !ok {
+			return false
+		}
+	}
 	text := packedString(dict, row.An) + " " + packedString(dict, row.Ac) + " " + packedString(dict, row.Br)
 	categoryNames := []string{
 		packedString(dict, row.C1), packedString(dict, row.C2), packedString(dict, row.C3),

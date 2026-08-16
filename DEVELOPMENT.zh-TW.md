@@ -4,7 +4,7 @@
 
 一般使用請看 [README.zh-TW.md](README.zh-TW.md)。這份文件給要改程式、跑命令列、或把套件嵌進別的 Go 專案的人。
 
-Windows 桌面程式是 **RTA 銷售分析**（安裝清單寫 RTA Sales Analyzer）。執行檔還是 `RTA-Excel-Filler.exe`，舊檔名沒改，是為了少動安裝與 CI。畫面標題已經換成新名字。
+Windows 桌面程式的產品名稱、捷徑、開始功能表名稱都是 **RTA 銷售分析**；英文介面稱為 **RTA Sales Analyzer**。執行檔還是 `RTA-Excel-Filler.exe`，舊檔名沒改，是為了少動安裝與 CI。視窗標題是 **RTA 銷售分析**。
 
 同一個 repo 裡還有：
 

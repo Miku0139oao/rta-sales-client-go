@@ -45,12 +45,19 @@ type AccProduct = RankedItem & { category2Code: string; category3Code: string; c
 interface PeriodAccumulator {
   products: Map<string, AccProduct>;
   categories: Map<string, { id: string; code: string; name: string; amount: number; quantity: number; products: Map<string, RankedItem> }>;
+  totals?: SalesAnalysisTotals;
   focusGroups?: FocusGroup[];
   focusCatalog?: boolean;
 }
 
 export interface SalesReportAccumulator {
   periods: Map<string, PeriodAccumulator>;
+}
+
+export interface SalesReportScope {
+  groupId: string;
+  groupName: string;
+  itemCodes: string[];
 }
 
 interface RankedItem {
@@ -150,11 +157,12 @@ export async function prepareSalesAnalysisFont(
   categoryLevel: SalesReportCategoryLevel,
   locale: Locale,
   filter: SalesReportFilter = defaultSalesReportFilter(),
+  scope?: SalesReportScope,
 ): Promise<string> {
   try {
     const [fontBytes, subsetter] = await Promise.all([loadFontBytes(), import('./subsetReportFont')]);
     try {
-      const glyphs = collectReportGlyphs(result, categoryLevel, locale, filter);
+      const glyphs = collectReportGlyphs(result, categoryLevel, locale, filter, scope);
       return bytesToBase64(await subsetter.subsetReportFont(fontBytes, glyphs));
     } finally {
       releaseLoadedReportFont();
@@ -200,13 +208,14 @@ export async function generateSalesAnalysisPDF(
   filter: SalesReportFilter = defaultSalesReportFilter(),
   fontBase64?: string,
   accumulator?: SalesReportAccumulator,
+  scope?: SalesReportScope,
 ): Promise<Uint8Array> {
   try {
     const [resolvedFont, { jsPDF: PDFDocument }] = await Promise.all([
-      fontBase64 ? Promise.resolve(fontBase64) : prepareSalesAnalysisFont(result, categoryLevel, locale, filter),
+      fontBase64 ? Promise.resolve(fontBase64) : prepareSalesAnalysisFont(result, categoryLevel, locale, filter, scope),
       import('jspdf'),
     ]);
-    return renderSalesAnalysisPDF(result, storeId, categoryLevel, locale, resolvedFont, PDFDocument, filter, accumulator);
+    return renderSalesAnalysisPDF(result, storeId, categoryLevel, locale, resolvedFont, PDFDocument, filter, accumulator, scope);
   } catch (error) {
     if (error instanceof AppError) throw error;
     throw new AppError('pdf_failed', error instanceof Error ? error.message : String(error));
@@ -220,10 +229,11 @@ export async function buildSalesAnalysisPDF(
   locale: Locale,
   fontBase64: string,
   filter: SalesReportFilter = defaultSalesReportFilter(),
+  scope?: SalesReportScope,
 ): Promise<Uint8Array> {
   try {
     const { jsPDF: PDFDocument } = await import('jspdf');
-    return renderSalesAnalysisPDF(result, storeId, categoryLevel, locale, fontBase64, PDFDocument, filter);
+    return renderSalesAnalysisPDF(result, storeId, categoryLevel, locale, fontBase64, PDFDocument, filter, undefined, scope);
   } catch (error) {
     if (error instanceof AppError) throw error;
     throw new AppError('pdf_failed', error instanceof Error ? error.message : String(error));
@@ -239,17 +249,19 @@ function renderSalesAnalysisPDF(
   PDFDocument: typeof import('jspdf').jsPDF,
   filter: SalesReportFilter = defaultSalesReportFilter(),
   accumulator?: SalesReportAccumulator,
+  scope?: SalesReportScope,
 ): Uint8Array {
   const labels = reportLabels(locale);
   const combined = isAllStoresReport(storeId);
-  const periods = storePeriods(result, storeId, filter, categoryLevel, accumulator, labels.uncategorized);
+  const periods = storePeriods(result, storeId, filter, categoryLevel, accumulator, labels.uncategorized, scope);
   const current = periodByKey(periods, 'current') ?? periods[0];
   if (!current) throw new AppError('pdf_failed', 'The selected store has no current sales period');
 
   const stores = listSuccessfulReportStores(result);
   const store = stores.find((candidate) => candidate.businessId === storeId);
   const headerId = combined ? 'ALL' : storeId;
-  const storeLabel = combined ? `${labels.allStores} (${stores.length})` : (store?.label.trim() || storeId);
+  const baseStoreLabel = combined ? `${labels.allStores} (${stores.length})` : (store?.label.trim() || storeId);
+  const storeLabel = scope ? `${baseStoreLabel} · ${scope.groupName}` : baseStoreLabel;
   const doc = new PDFDocument({
     orientation: 'landscape', unit: 'mm', format: 'a4', compress: true, putOnlyUsedFonts: true,
   });
@@ -257,26 +269,26 @@ function renderSalesAnalysisPDF(
   doc.addFont('NotoSansTC-Regular.ttf', FONT, 'normal');
   doc.setFont(FONT, 'normal');
   doc.setProperties({
-    title: `RTA Sales Analysis - ${headerId}`,
-    subject: `${current.from} - ${current.to}`,
-    author: 'RTA Sales Analyzer',
-    creator: 'RTA Sales Analyzer',
+    title: `RTA Sales Analysis - ${headerId}${scope ? ` - ${scope.groupName}` : ''}`,
+    subject: `${current.from} - ${current.to}${scope ? ` · ${scope.groupName}` : ''}`,
+    author: 'RTA 銷售分析',
+    creator: 'RTA 銷售分析',
   });
 
   drawSummaryPage(doc, periods, current, headerId, storeLabel, categoryLevel, labels, locale);
-  const weeks = weeksForReport(result.weeks ?? [], storeId, combined);
+  const weeks = scope ? [] : weeksForReport(result.weeks ?? [], storeId, combined);
   if (weeks.length) {
     doc.addPage();
     drawWeeklyPages(doc, weeks, current, headerId, storeLabel, labels, locale);
   }
-  if (combined && stores.length > 1) {
+  if (!scope && combined && stores.length > 1) {
     doc.addPage();
     drawStoreComparisonPage(doc, result, headerId, storeLabel, labels, locale);
   }
   doc.addPage();
   drawOverallRankingsPage(doc, current, headerId, storeLabel, categoryLevel, labels, locale);
   const yearAgoNext = periodByKey(periods, 'yearAgoNext');
-  if (yearAgoNext) {
+  if (yearAgoNext && (!scope || periodHasFocusRows(yearAgoNext))) {
     doc.addPage();
     drawFocusPage(doc, yearAgoNext, current, headerId, storeLabel, labels);
   }
@@ -284,14 +296,18 @@ function renderSalesAnalysisPDF(
   for (const key of ['current', 'yearAgo', 'yearAgoNext']) {
     const period = periodByKey(periods, key);
     if (!period) continue;
-    doc.addPage();
-    drawCategoryRankingPage(doc, period, headerId, storeLabel, categoryLevel, 'amount', labels, locale);
+    if (!scope || periodHasCategoryRows(period, 'amount')) {
+      doc.addPage();
+      drawCategoryRankingPage(doc, period, headerId, storeLabel, categoryLevel, 'amount', labels, locale);
+    }
   }
   for (const key of ['current', 'previous', 'previous2']) {
     const period = periodByKey(periods, key);
     if (!period) continue;
-    doc.addPage();
-    drawCategoryRankingPage(doc, period, headerId, storeLabel, categoryLevel, 'quantity', labels, locale);
+    if (!scope || periodHasCategoryRows(period, 'quantity')) {
+      doc.addPage();
+      drawCategoryRankingPage(doc, period, headerId, storeLabel, categoryLevel, 'quantity', labels, locale);
+    }
   }
 
   addFooters(doc, headerId);
@@ -322,12 +338,13 @@ export function isAllStoresReport(storeId: string): boolean {
   return storeId === ALL_STORES_REPORT_ID;
 }
 
-export function salesAnalysisPDFFilename(storeId: string, from: string, to: string): string {
+export function salesAnalysisPDFFilename(storeId: string, from: string, to: string, groupName = ''): string {
   const safeStore = isAllStoresReport(storeId) ? 'all' : (storeId.trim().replace(/[^\p{L}\p{N}_-]+/gu, '-') || 'store');
+  const safeGroup = groupName.trim().replace(/[^\p{L}\p{N}_-]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 64);
   const start = from.replaceAll('-', '') || 'report';
   const end = to.replaceAll('-', '');
   const period = end && end !== start ? `${start}-${end}` : start;
-  return `RTA-Sales-${safeStore}-${period}.pdf`;
+  return `RTA-Sales-${safeStore}${safeGroup ? `-${safeGroup}` : ''}-${period}.pdf`;
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {
@@ -396,6 +413,7 @@ export function collectReportGlyphs(
   categoryLevel: SalesReportCategoryLevel,
   locale: Locale,
   filter: SalesReportFilter = defaultSalesReportFilter(),
+  scope?: SalesReportScope,
 ): string {
   const glyphs = new Set(REQUIRED_GLYPHS);
   const add = (value: string | undefined) => {
@@ -405,10 +423,12 @@ export function collectReportGlyphs(
   add('RTA SALES');
   add('RTA Sales Analysis');
   add('Page');
+  add(scope?.groupName);
   add(reportLabels(locale).title);
   for (const value of Object.values(reportLabels(locale))) add(value);
   add(result.from);
   add(result.to);
+  const scopeCodes = itemCodeSet(scope);
   for (const store of listSuccessfulReportStores(result)) {
     add(store.businessId);
     add(store.label);
@@ -424,6 +444,7 @@ export function collectReportGlyphs(
     }
     for (const item of period.items ?? result.items ?? []) {
       if (!includeInSalesReport(item, filter, categoryLevel)) continue;
+      if (scope && !scopeCodes.has(item.articleCode.trim())) continue;
       add(item.storeId);
       add(item.storeLabel);
       add(item.articleCode);
@@ -538,6 +559,7 @@ function periodAccumulatorFromMemo(period: SalesAnalysisPeriodMemo): PeriodAccum
   return {
     products,
     categories,
+    totals: period.totals,
     focusCatalog: period.focusCatalog,
     focusGroups: period.focusGroups
       ? period.focusGroups.map((group) => ({
@@ -616,15 +638,19 @@ function storePeriods(
   level: SalesReportCategoryLevel,
   accumulator?: SalesReportAccumulator,
   uncategorized = 'Uncategorized',
+  scope?: SalesReportScope,
 ): StorePeriod[] {
+  const scopeCodes = itemCodeSet(scope);
   return normalizedPeriods(result).flatMap((period) => {
     const memo = accumulator ? storePeriodMemo(accumulator, period.key, uncategorized, period.key === 'yearAgoNext') : undefined;
-    const keep = (item: SalesAnalysisItem) => includeInSalesReport(item, filter, level);
+    const keep = (item: SalesAnalysisItem) => includeInSalesReport(item, filter, level)
+      && (!scope || scopeCodes.has(item.articleCode.trim()));
     if (isAllStoresReport(storeId)) {
+      const items = memo ? [] : (period.items ?? []).filter(keep);
       return [{
         key: period.key, label: period.label, from: period.from, to: period.to,
-        totals: period.totals,
-        items: memo ? [] : (period.items ?? []).filter(keep),
+        totals: memo?.totals ?? (scope ? aggregateScopedTotals(items) : period.totals),
+        items,
         ...memo,
       }];
     }
@@ -633,7 +659,7 @@ function storePeriods(
     if (!summary && items.length === 0 && !memo && period.key !== 'current') return [];
     return [{
       key: period.key, label: period.label, from: period.from, to: period.to,
-      totals: summary?.totals ?? aggregateTotals(items), items,
+      totals: memo?.totals ?? (scope ? aggregateScopedTotals(items) : (summary?.totals ?? aggregateTotals(items))), items,
       ...memo,
     }];
   });
@@ -644,10 +670,12 @@ function storePeriodMemo(
   periodKey: string,
   uncategorized: string,
   includeFocus = false,
-): Pick<StorePeriod, 'amountGroups' | 'quantityGroups' | 'topAmount' | 'topQuantity' | 'focusGroups' | 'focusCatalog'> | undefined {
+): (Pick<StorePeriod, 'amountGroups' | 'quantityGroups' | 'topAmount' | 'topQuantity' | 'focusGroups' | 'focusCatalog'>
+  & { totals?: SalesAnalysisTotals }) | undefined {
   const period = accumulator.periods.get(periodKey);
   if (!period) return undefined;
   return {
+    ...(period.totals ? { totals: period.totals } : {}),
     amountGroups: groupsFromAccumulator(period, 'amount', uncategorized),
     quantityGroups: groupsFromAccumulator(period, 'quantity', uncategorized),
     topAmount: sortRankedItems([...period.products.values()], 'amount').slice(0, 15),
@@ -731,6 +759,29 @@ function aggregateTotals(items: SalesAnalysisItem[]): SalesAnalysisTotals {
     saleQuantity: 0, saleAmount: 0, returnQuantity: 0, returnAmount: 0,
     netQuantity: 0, netSalesAmount: 0, transactionCount: 0, trendNetSalesAmount: 0,
   });
+}
+
+function aggregateScopedTotals(items: SalesAnalysisItem[]): SalesAnalysisTotals {
+  const totals = aggregateTotals(items);
+  delete totals.transactionCount;
+  delete totals.trendNetSalesAmount;
+  return totals;
+}
+
+function itemCodeSet(scope: SalesReportScope | undefined): Set<string> {
+  return new Set((scope?.itemCodes ?? []).map((code) => code.trim()).filter(Boolean));
+}
+
+function periodHasFocusRows(period: StorePeriod): boolean {
+  const groups = period.focusGroups
+    ?? (period.focusCatalog ? [] : buildFocusGroups(period.items, [], 1));
+  return groups.some((group) => group.sales.length > 0 || group.quantity.length > 0);
+}
+
+function periodHasCategoryRows(period: StorePeriod, metric: Metric): boolean {
+  const groups = metric === 'amount' ? period.amountGroups : period.quantityGroups;
+  if (groups) return groups.length > 0;
+  return period.items.some((item) => metric === 'amount' ? item.netSalesAmount !== 0 : item.netQuantity !== 0);
 }
 
 function periodByKey(periods: StorePeriod[], key: string): StorePeriod | undefined {

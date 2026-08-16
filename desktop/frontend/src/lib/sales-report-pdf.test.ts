@@ -126,6 +126,7 @@ describe('sales analysis PDF', () => {
     expect(listSuccessfulReportStores(resultFixture()).map((store) => store.businessId)).toEqual(['107', '108']);
     expect(salesAnalysisPDFFilename('107', '2026-08-01', '2026-08-16')).toBe('RTA-Sales-107-20260801-20260816.pdf');
     expect(salesAnalysisPDFFilename(ALL_STORES_REPORT_ID, '2026-08-01', '2026-08-16')).toBe('RTA-Sales-all-20260801-20260816.pdf');
+    expect(salesAnalysisPDFFilename('107', '2026-08-01', '2026-08-16', 'Promoter A')).toBe('RTA-Sales-107-Promoter-A-20260801-20260816.pdf');
   });
 
   it('builds a combined all-stores report with a store comparison page', async () => {
@@ -150,6 +151,23 @@ describe('sales analysis PDF', () => {
     const pdf = await buildSalesAnalysisPDF(result, ALL_STORES_REPORT_ID, 'category2', 'zh-TW', await reportFont(result));
     expect(new TextDecoder().decode(pdf.slice(0, 8))).toBe('%PDF-1.3');
     expect(new TextDecoder('latin1').decode(pdf).match(/\/Type \/Page\b/g)).toHaveLength(10);
+  });
+
+  it('omits whole-store-only and blank pages from promoter-group PDFs', async () => {
+    const result = resultFixture();
+    result.weeks = [weekRow('2026-08-03', '2026-08-09', 200, 100)];
+    const fontBase64 = await reportFont(result);
+    const groupPDF = await buildSalesAnalysisPDF(
+      result, ALL_STORES_REPORT_ID, 'category2', 'zh-TW', fontBase64, defaultSalesReportFilter(),
+      { groupId: 'promoter-a', groupName: 'Promoter A', itemCodes: ['107001'] },
+    );
+    expect(new TextDecoder('latin1').decode(groupPDF).match(/\/Type \/Page\b/g)).toHaveLength(9);
+
+    const emptyPDF = await buildSalesAnalysisPDF(
+      result, ALL_STORES_REPORT_ID, 'category2', 'zh-TW', fontBase64, defaultSalesReportFilter(),
+      { groupId: 'missing', groupName: 'Missing Group', itemCodes: ['not-present'] },
+    );
+    expect(new TextDecoder('latin1').decode(emptyPDF).match(/\/Type \/Page\b/g)).toHaveLength(2);
   });
 
   it('keeps a three-category store on nine pages without placeholder cards', async () => {
@@ -240,11 +258,13 @@ describe('sales analysis PDF', () => {
     const fromMemo = salesReportAccumulatorFromMemo({
       periods: [{
         key: 'current',
+        totals: { saleQuantity: 1, saleAmount: 10, returnQuantity: 0, returnAmount: 0, netQuantity: 1, netSalesAmount: 10 },
         topAmount: [{ id: 'x', code: 'x', name: '測試', amount: 10, quantity: 1 }],
         amountGroups: [{ id: 'A02', code: 'A02', name: 'BEAUTY CARE', amount: 10, quantity: 1, items: [{ id: 'x', code: 'x', name: '測試', amount: 10, quantity: 1 }] }],
       }],
     });
     expect(fromMemo.periods.get('current')?.products.get('x')?.amount).toBe(10);
+    expect(fromMemo.periods.get('current')?.totals?.netSalesAmount).toBe(10);
   });
 
   it('builds a per-store report when period store summaries are missing', async () => {

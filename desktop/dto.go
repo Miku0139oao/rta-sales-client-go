@@ -305,6 +305,7 @@ type SalesAnalysisPackedItems struct {
 type SalesAnalysisReportMemoRequest struct {
 	OperationID      string   `json:"operationId"`
 	StoreID          string   `json:"storeId,omitempty"`
+	GroupID          string   `json:"groupId,omitempty"`
 	CategoryLevel    string   `json:"categoryLevel"`
 	ExcludeZeroGifts bool     `json:"excludeZeroGifts"`
 	ExcludeStamps    bool     `json:"excludeStamps"`
@@ -318,6 +319,7 @@ type SalesAnalysisReportMemo struct {
 
 type SalesAnalysisPeriodMemo struct {
 	Key            string                       `json:"key"`
+	Totals         *SalesAnalysisTotals         `json:"totals,omitempty"`
 	TopAmount      []SalesAnalysisRankedItem    `json:"topAmount,omitempty"`
 	TopQuantity    []SalesAnalysisRankedItem    `json:"topQuantity,omitempty"`
 	AmountGroups   []SalesAnalysisCategoryGroup `json:"amountGroups,omitempty"`

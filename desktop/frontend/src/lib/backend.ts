@@ -7,6 +7,7 @@ import type {
   ApplyRequest,
   ApplyResult,
   BackendApi,
+  ManCodeCatalogTransferResult,
   ManCodeGroup,
   PreviewRow,
   Profile,
@@ -28,7 +29,6 @@ import type {
   SalesAnalysisResult,
   SalesAnalysisStore,
   SalesAnalysisTotals,
-  ManCodeGroup,
   WorkbookScan,
 } from './types';
 import { AppError } from './types';
@@ -46,6 +46,7 @@ interface BackendInjection {
   methods: MethodSource;
   events?: EventSource;
   fileDrops?: FileDropSource;
+  fallbackOnUnavailable?: boolean;
 }
 
 declare global {
@@ -101,6 +102,34 @@ function asAppError(error: unknown): AppError {
   return new AppError('backend_error', String(error));
 }
 
+function mapManCodeTransferError(error: unknown): AppError {
+  const appError = asAppError(error);
+  if (appError.code !== 'backend_error') return appError;
+  const message = appError.message.toLowerCase();
+  if (message.includes('duplicate')) return new AppError('mancode_catalog_duplicate', appError.message);
+  if (message.includes('version')) return new AppError('mancode_catalog_version', appError.message);
+  if (
+    message.includes('decode') ||
+    message.includes('invalid') ||
+    message.includes('exceeds') ||
+    message.includes('unsupported') ||
+    message.includes('directory') ||
+    message.includes('groups must be an array') ||
+    message.includes('contains trailing data') ||
+    message.includes('must use the .json extension') ||
+    message.includes('regular file')
+  ) {
+    return new AppError('mancode_catalog_invalid', appError.message);
+  }
+  return appError;
+}
+
+function isExplicitBackendUnavailable(error: unknown): boolean {
+  if (error instanceof ReferenceError) return true;
+  if (!(error instanceof Error)) return false;
+  return /^call\.byname failed(?:$|:.*(?:not found|unknown|unavailable))/i.test(error.message.trim());
+}
+
 async function invoke<T>(names: string[], args: unknown[], fallback: () => Promise<T>): Promise<T> {
   const method = findMethod(names);
   if (!method) {
@@ -110,7 +139,9 @@ async function invoke<T>(names: string[], args: unknown[], fallback: () => Promi
   try {
     return (await method(...args)) as T;
   } catch (error) {
-    if (import.meta.env.DEV) return fallback();
+    const unavailableBridge = injection?.fallbackOnUnavailable
+      && isExplicitBackendUnavailable(error);
+    if (import.meta.env.DEV && (!injection || unavailableBridge)) return fallback();
     throw asAppError(error);
   }
 }
@@ -545,6 +576,30 @@ export const backend: BackendApi = {
 
   replaceManCodeGroupCodes: (request: ReplaceManCodeGroupCodesRequest) =>
     invoke(['ReplaceManCodeGroupCodes'], [request], async () => mockReplaceManCodeGroupCodes(request)),
+
+  async exportManCodeCatalog() {
+    try {
+      return await invoke<ManCodeCatalogTransferResult>(['ExportManCodeCatalog'], [], async () => ({
+        cancelled: false,
+        path: 'C:\\Users\\Demo\\Documents\\item-codes.json',
+        groups: mockManCodeGroups.map(cloneManCodeGroup),
+      }));
+    } catch (error) {
+      throw mapManCodeTransferError(error);
+    }
+  },
+
+  async importManCodeCatalog() {
+    try {
+      return await invoke<ManCodeCatalogTransferResult>(['ImportManCodeCatalog'], [], async () => ({
+        cancelled: false,
+        path: 'C:\\Users\\Demo\\Documents\\item-codes.json',
+        groups: mockManCodeGroups.map(cloneManCodeGroup),
+      }));
+    } catch (error) {
+      throw mapManCodeTransferError(error);
+    }
+  },
 
   getLatestArticleNames: async () => ({ ...lastArticleNames }),
 

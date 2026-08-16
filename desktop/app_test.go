@@ -22,10 +22,14 @@ type fakeDialogs struct {
 	open      string
 	directory string
 	save      string
+	lastOpen  fileDialogOptions
 	lastSave  fileDialogOptions
 }
 
-func (d *fakeDialogs) OpenFile(context.Context, fileDialogOptions) (string, error) {
+func (d *fakeDialogs) OpenFile(_ context.Context, options fileDialogOptions) (string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.lastOpen = options
 	return d.open, nil
 }
 

@@ -56,16 +56,10 @@ func (r *FileManCodeRepository) List() ([]ManCodeGroup, error) {
 func (r *FileManCodeRepository) Replace(groups []ManCodeGroup) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	normalized, err := normalizeManCodeGroups(groups)
+	data, err := encodeManCodeCatalog(groups)
 	if err != nil {
 		return err
 	}
-	document := manCodeDocument{Version: manCodeFileVersion, Groups: normalized}
-	data, err := json.MarshalIndent(document, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode mancode catalog: %w", err)
-	}
-	data = append(data, '\n')
 	return writeManCodeFile(r.path, data)
 }
 
@@ -89,16 +83,61 @@ func (r *FileManCodeRepository) load() ([]ManCodeGroup, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read mancode catalog: %w", err)
 	}
+	return decodeManCodeCatalog(data)
+}
+
+func encodeManCodeCatalog(groups []ManCodeGroup) ([]byte, error) {
+	normalized, err := normalizeManCodeGroups(groups)
+	if err != nil {
+		return nil, err
+	}
+	if normalized == nil {
+		normalized = []ManCodeGroup{}
+	}
+	document := manCodeDocument{Version: manCodeFileVersion, Groups: normalized}
+	data, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode mancode catalog: %w", err)
+	}
+	data = append(data, '\n')
+	if int64(len(data)) > maximumManCodeBytes {
+		return nil, errors.New("mancode catalog exceeds 1 MiB")
+	}
+	return data, nil
+}
+
+func decodeManCodeCatalog(data []byte) ([]ManCodeGroup, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	var document manCodeDocument
+	var document struct {
+		Version int             `json:"version"`
+		Groups  *[]ManCodeGroup `json:"groups"`
+	}
 	if err := decoder.Decode(&document); err != nil {
 		return nil, fmt.Errorf("decode mancode catalog: %w", err)
+	}
+	if err := rejectTrailingManCodeJSON(decoder); err != nil {
+		return nil, err
 	}
 	if document.Version != manCodeFileVersion {
 		return nil, fmt.Errorf("unsupported mancode catalog version %d", document.Version)
 	}
-	return normalizeManCodeGroups(document.Groups)
+	if document.Groups == nil {
+		return nil, errors.New("mancode catalog groups must be an array")
+	}
+	return normalizeManCodeGroups(*document.Groups)
+}
+
+func rejectTrailingManCodeJSON(decoder *json.Decoder) error {
+	var extra json.RawMessage
+	err := decoder.Decode(&extra)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("decode mancode catalog: %w", err)
+	}
+	return errors.New("mancode catalog contains trailing data")
 }
 
 func (a *App) ListManCodeGroups() ([]ManCodeGroup, error) {
@@ -323,4 +362,12 @@ func cloneManCodeGroup(group ManCodeGroup) ManCodeGroup {
 		group.Codes = []string{}
 	}
 	return group
+}
+
+func cloneManCodeGroups(groups []ManCodeGroup) []ManCodeGroup {
+	cloned := make([]ManCodeGroup, 0, len(groups))
+	for _, group := range groups {
+		cloned = append(cloned, cloneManCodeGroup(group))
+	}
+	return cloned
 }

@@ -16,12 +16,21 @@ afterEach(() => {
 
 describe('desktop application shell', () => {
   it('starts in Traditional Chinese with the five primary destinations', () => {
-    render(App);
+    const { container } = render(App);
     expect(screen.getByRole('heading', { name: '從活頁簿開始' })).toBeInTheDocument();
     expect(screen.getAllByText('Excel 填入').length).toBeGreaterThan(0);
     expect(screen.getAllByText('帳號').length).toBeGreaterThan(0);
     expect(screen.getAllByText('商品代碼').length).toBeGreaterThan(0);
     expect(screen.getAllByText('設定').length).toBeGreaterThan(0);
+    const itemCodeNavigation = screen.getAllByRole('button', { name: /商品代碼/ });
+    expect(itemCodeNavigation).toHaveLength(2);
+    itemCodeNavigation.forEach((entry) => {
+      expect(entry.querySelector('.material-symbols-rounded')).toHaveTextContent('tag');
+      expect(entry.querySelector('.material-symbols-rounded')).not.toHaveTextContent('barcode');
+      expect(entry.querySelector('.material-symbols-rounded')).not.toHaveTextContent('qr_code_2');
+    });
+    expect(container).not.toHaveTextContent('qr_code_2');
+    expect(container).not.toHaveTextContent('barcode');
   });
 
   it('opens the ItemCode page from the nav and lists the mock groups', async () => {

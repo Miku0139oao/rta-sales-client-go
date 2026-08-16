@@ -21,6 +21,7 @@ function eventData(payload: unknown): unknown {
 
 configureBackend({
   methods,
+  fallbackOnUnavailable: true,
   events: {
     on(name, listener) {
       return Events.On(name, (event) => listener(eventData(event)));

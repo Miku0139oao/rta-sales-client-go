@@ -34,7 +34,7 @@
     { id: 'excel', icon: 'table_view', label: 'nav.excel' },
     { id: 'analysis', icon: 'query_stats', label: 'nav.analysis' },
     { id: 'accounts', icon: 'manage_accounts', label: 'nav.accounts' },
-    { id: 'itemcodes', icon: 'qr_code_2', label: 'nav.itemcodes' },
+    { id: 'itemcodes', icon: 'tag', label: 'nav.itemcodes' },
     { id: 'settings', icon: 'settings', label: 'nav.settings' },
   ];
 

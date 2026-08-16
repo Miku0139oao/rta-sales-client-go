@@ -49,6 +49,40 @@ describe('Wails backend adapter', () => {
     expect(remove).toHaveBeenCalledWith('g1');
   });
 
+  it('maps ItemCode catalog export and import to the Wails names', async () => {
+    const exported = vi.fn(async () => ({ cancelled: false, path: 'D:\\item-codes.json', groups: [] }));
+    const imported = vi.fn(async () => ({ cancelled: false, path: 'D:\\item-codes.json', groups: [{ id: 'g1', name: '保健', codes: ['1'] }] }));
+    configureBackend({ methods: {
+      ExportManCodeCatalog: exported,
+      ImportManCodeCatalog: imported,
+    } });
+
+    await expect(backend.exportManCodeCatalog()).resolves.toEqual({ cancelled: false, path: 'D:\\item-codes.json', groups: [] });
+    await expect(backend.importManCodeCatalog()).resolves.toEqual({
+      cancelled: false, path: 'D:\\item-codes.json', groups: [{ id: 'g1', name: '保健', codes: ['1'] }],
+    });
+    expect(exported).toHaveBeenCalledTimes(1);
+    expect(imported).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps malformed catalog import errors to a dedicated code', async () => {
+    for (const message of [
+      'decode mancode catalog: unexpected end of JSON input',
+      'mancode catalog groups must be an array',
+      'mancode catalog contains trailing data',
+    ]) {
+      configureBackend({ methods: {
+        ImportManCodeCatalog: vi.fn(async () => {
+          throw new Error(message);
+        }),
+      } });
+
+      await expect(backend.importManCodeCatalog()).rejects.toMatchObject({
+        code: 'mancode_catalog_invalid',
+      });
+    }
+  });
+
   it('reads latest article names from the in-memory analysis cache', async () => {
     const remote = vi.fn(async () => ({ '999': 'should not be used' }));
     configureBackend({ methods: {
@@ -141,6 +175,7 @@ describe('Wails backend adapter', () => {
 
   it('falls back to the mock backend in DEV when a bound method throws', async () => {
     configureBackend({
+      fallbackOnUnavailable: true,
       methods: {
         ListProfiles: vi.fn(async () => {
           throw new Error('Call.ByName failed');
@@ -151,5 +186,38 @@ describe('Wails backend adapter', () => {
     const profiles = await backend.listProfiles();
     expect(profiles.length).toBeGreaterThan(0);
     expect(profiles[0]).toMatchObject({ displayName: '主要帳號' });
+  });
+
+  it('does not hide Wails application errors behind the DEV mock', async () => {
+    const applicationError = new Error('mancode catalog groups must be an array');
+    applicationError.name = 'RuntimeError';
+    configureBackend({
+      fallbackOnUnavailable: true,
+      methods: {
+        ImportManCodeCatalog: vi.fn(async () => {
+          throw applicationError;
+        }),
+      },
+    });
+
+    await expect(backend.importManCodeCatalog()).rejects.toMatchObject({
+      code: 'mancode_catalog_invalid',
+    });
+  });
+
+  it('does not turn ordinary DEV bridge failures into mock success', async () => {
+    configureBackend({
+      fallbackOnUnavailable: true,
+      methods: {
+        ListProfiles: vi.fn(async () => {
+          throw new TypeError('network connection reset');
+        }),
+      },
+    });
+
+    await expect(backend.listProfiles()).rejects.toMatchObject({
+      code: 'backend_error',
+      message: 'network connection reset',
+    });
   });
 });

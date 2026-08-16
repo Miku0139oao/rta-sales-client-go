@@ -1628,6 +1628,14 @@ th.proposed-column {
   color: var(--md-sys-color-error);
 }
 
+.itemcode-heading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
 .itemcodes-search {
   max-width: 420px;
   margin-bottom: 18px;
@@ -2042,6 +2050,12 @@ th.proposed-column {
 
   .split-heading {
     align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .itemcode-heading-actions {
+    width: 100%;
+    align-items: stretch;
     flex-direction: column;
   }
 

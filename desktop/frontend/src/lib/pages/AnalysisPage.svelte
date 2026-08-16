@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { backend } from '../backend';
   import { errorMessage } from '../i18n';
-  import { buildFocusGroups, catalogCodeSet, type FocusGroup } from '../analysisFocus';
+  import { buildFocusGroups, type FocusGroup } from '../analysisFocus';
   import { periodKeysForView, unpackSalesAnalysisItems } from '../salesAnalysisItems';
   import { modal } from '../modal';
   import {
@@ -61,6 +61,8 @@
     id: string; label: string; current?: SalesAnalysisTotals; previous?: SalesAnalysisTotals; yearAgo?: SalesAnalysisTotals;
   };
 
+  const ALL_PRODUCTS_SCOPE_ID = '__all_products__';
+
   const facets: Array<{ key: CategoryKey; label: string }> = [
     { key: 'category1', label: 'analysis.category1' },
     { key: 'category2', label: 'analysis.category2' },
@@ -84,6 +86,10 @@
   let exportFilter: SalesReportFilter = defaultSalesReportFilter();
   let exportIncludeCombined = true;
   let exportStoreIds = new Set<string>();
+  let exportGroupIds = new Set<string>([ALL_PRODUCTS_SCOPE_ID]);
+  let exportTargetTotal = 0;
+  let exportGroupTotal = 1;
+  let exportFilesCount = 0;
   let pdfExportCurrent = 0;
   let pdfExportTotal = 0;
   let error = '';
@@ -101,8 +107,11 @@
   let to = localISODate();
   let activeView: ReportView = 'overview';
   let search = '';
-  let mineOnly = false;
   let manCodeGroups: ManCodeGroup[] = [];
+  let selectedGroupId = '';
+  let selectedGroup: ManCodeGroup | undefined;
+  let selectedGroupCodes = new Set<string>();
+  let groupScopeActive = false;
   let groupLevel: CategoryKey = 'category2';
   let salesRankingKey = 'current';
   let quantityRankingKey = 'current';
@@ -143,38 +152,38 @@
   $: rangeInvalid = periodMode === 'range' && Boolean(from && to && from > to);
   $: reportPeriods = normalizePeriods(result);
   $: currentPeriod = periodByKey(reportPeriods, 'current') ?? reportPeriods[0];
-  $: neededPeriodKeys = periodKeysForView(activeView, [salesRankingKey, quantityRankingKey]);
+  $: neededPeriodKeys = periodKeysForAnalysisView(
+    activeView,
+    [salesRankingKey, quantityRankingKey],
+    groupScopeActive || filtersActive(selections, search),
+  );
   $: if (result && !exportingPDF) void ensurePeriodItems(neededPeriodKeys);
-  $: catalogCodes = catalogCodeSet(manCodeGroups);
+  $: selectedGroup = manCodeGroups.find((group) => group.id === selectedGroupId);
+  $: selectedGroupCodes = new Set((selectedGroup?.codes ?? []).map((code) => code.trim()).filter(Boolean));
+  $: groupScopeActive = Boolean(selectedGroup);
   $: filteredItems = (currentPeriod?.items ?? []).filter((item) => {
     if (!matchesFilters(item, selections, search)) return false;
-    if (!mineOnly || catalogCodes.size === 0) return true;
-    return catalogCodes.has(item.articleCode.trim());
+    return !groupScopeActive || selectedGroupCodes.has(item.articleCode.trim());
   });
-  $: currentTotals = totalsForPeriod(currentPeriod, selections, search);
-  $: previousTotals = totalsForPeriod(periodByKey(reportPeriods, 'previous'), selections, search);
-  $: previous2Totals = totalsForPeriod(periodByKey(reportPeriods, 'previous2'), selections, search);
-  $: yearAgoTotals = totalsForPeriod(periodByKey(reportPeriods, 'yearAgo'), selections, search);
+  $: currentTotals = totalsForPeriod(currentPeriod, selections, search, selectedGroupCodes, groupScopeActive);
+  $: previousTotals = totalsForPeriod(periodByKey(reportPeriods, 'previous'), selections, search, selectedGroupCodes, groupScopeActive);
+  $: previous2Totals = totalsForPeriod(periodByKey(reportPeriods, 'previous2'), selections, search, selectedGroupCodes, groupScopeActive);
+  $: yearAgoTotals = totalsForPeriod(periodByKey(reportPeriods, 'yearAgo'), selections, search, selectedGroupCodes, groupScopeActive);
   $: performanceRows = buildPerformanceRows(currentTotals, previousTotals, yearAgoTotals);
-  $: categoryRows = buildCategoryComparison(reportPeriods, groupLevel, selections, search);
+  $: categoryRows = buildCategoryComparison(reportPeriods, groupLevel, selections, search, selectedGroupCodes, groupScopeActive);
   $: topSales = buildTopItems(filteredItems, 'amount').slice(0, 15);
   $: topQuantity = buildTopItems(filteredItems, 'quantity').slice(0, 15);
   $: salesRankingPeriods = reportPeriods.filter((period) => ['current', 'yearAgo', 'yearAgoNext'].includes(period.key));
   $: quantityRankingPeriods = reportPeriods.filter((period) => ['current', 'previous', 'previous2'].includes(period.key));
   $: salesRankingPeriod = periodByKey(salesRankingPeriods, salesRankingKey) ?? salesRankingPeriods[0];
   $: quantityRankingPeriod = periodByKey(quantityRankingPeriods, quantityRankingKey) ?? quantityRankingPeriods[0];
-  $: salesRankingGroups = buildCategoryRankings(salesRankingPeriod, groupLevel, 'amount', selections, search);
-  $: quantityRankingGroups = buildCategoryRankings(quantityRankingPeriod, groupLevel, 'quantity', selections, search);
-  $: storeRows = buildStoreRows(reportPeriods);
+  $: salesRankingGroups = buildCategoryRankings(salesRankingPeriod, groupLevel, 'amount', selections, search, selectedGroupCodes, groupScopeActive);
+  $: quantityRankingGroups = buildCategoryRankings(quantityRankingPeriod, groupLevel, 'quantity', selections, search, selectedGroupCodes, groupScopeActive);
+  $: storeRows = buildStoreRows(reportPeriods, selections, search, selectedGroupCodes, groupScopeActive);
   $: focusPeriod = periodByKey(reportPeriods, 'yearAgoNext');
-  $: focusGroups = focusPeriod
-    ? buildFocusGroups(
-      (focusPeriod?.items ?? []).filter((item) => includeInSalesReport(item) && matchesFilters(item, selections, search)),
-      (currentPeriod?.items ?? []).filter((item) => includeInSalesReport(item) && matchesFilters(item, selections, search)),
-      10,
-      manCodeGroups,
-    )
-    : [];
+  $: focusGroups = focusGroupsForScope(
+    focusPeriod, currentPeriod, selections, search, selectedGroup, manCodeGroups, selectedGroupCodes, groupScopeActive,
+  );
   $: pageCount = Math.max(1, Math.ceil(filteredItems.length / pageSize));
   $: if (page > pageCount) page = pageCount;
   $: pageRows = filteredItems.slice((page - 1) * pageSize, page * pageSize);
@@ -184,6 +193,9 @@
     weeklyKey = `${weeklyPeriods[0]!.from}:${weeklyPeriods[0]!.to}`;
   }
   $: progressPercent = progress?.total ? Math.round((progress.current / progress.total) * 100) : 0;
+  $: exportTargetTotal = (result, exportIncludeCombined, exportStoreIds, exportTargetCount());
+  $: exportGroupTotal = (exportGroupIds, manCodeGroups, selectedExportGroups().length);
+  $: exportFilesCount = exportTargetTotal * exportGroupTotal;
 
   onMount(() => {
     const unsubscribe = backend.onSalesAnalysisProgress((next) => {
@@ -322,7 +334,7 @@
     }
     for (const key of keep) {
       const period = periods.find((candidate) => candidate.key === key);
-      if (!period || (period.items?.length ?? 0) > 0) continue;
+      if (!period || period.items !== undefined) continue;
       if (!operationId) continue;
       loadingItems = true;
       try {
@@ -360,6 +372,7 @@
     const available = listSuccessfulReportStores(result);
     exportIncludeCombined = available.length > 1;
     exportStoreIds = new Set();
+    exportGroupIds = new Set([selectedGroup?.id ?? ALL_PRODUCTS_SCOPE_ID]);
     exportDialog = true;
   }
 
@@ -377,7 +390,23 @@
     return available.filter((store) => exportStoreIds.has(store.businessId));
   }
 
-  function exportFileCount() {
+  function toggleExportGroup(groupId: string) {
+    const next = new Set(exportGroupIds);
+    if (next.has(groupId)) next.delete(groupId);
+    else next.add(groupId);
+    exportGroupIds = next;
+  }
+
+  function selectedExportGroups(): Array<ManCodeGroup | undefined> {
+    const selected: Array<ManCodeGroup | undefined> = [];
+    if (exportGroupIds.has(ALL_PRODUCTS_SCOPE_ID)) selected.push(undefined);
+    for (const group of manCodeGroups) {
+      if (exportGroupIds.has(group.id)) selected.push(group);
+    }
+    return selected;
+  }
+
+  function exportTargetCount(): number {
     if (!result) return 0;
     const stores = listSuccessfulReportStores(result);
     if (stores.length <= 1) return stores.length;
@@ -415,7 +444,7 @@
   async function exportPDF() {
     if (!result || exportingPDF || loadingItems) return;
     if (exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0) return;
-    if (exportFileCount() === 0) return;
+    if (exportFilesCount === 0) return;
     exportingPDF = true;
     pdfExportCurrent = 0;
     pdfExportTotal = 0;
@@ -429,9 +458,10 @@
       const periodKeys = (result.periods ?? []).map((period) => period.key);
       if (periodKeys.length === 0) throw new AppError('pdf_loading', 'Sales analysis items are still loading');
       const reportStores = selectedExportStores();
+      const reportGroups = selectedExportGroups();
       const writeStoreFiles = reportStores.length > 0;
       const writeCombined = availableStores.length > 1 && exportIncludeCombined;
-      pdfExportTotal = (writeStoreFiles ? reportStores.length : 0) + (writeCombined ? 1 : 0);
+      pdfExportTotal = ((writeStoreFiles ? reportStores.length : 0) + (writeCombined ? 1 : 0)) * reportGroups.length;
       const reportFrom = result.from;
       const reportTo = result.to;
       const operationId = result.operationId;
@@ -444,7 +474,7 @@
       const fontGlyphs = await backend.getSalesAnalysisReportGlyphs(operationId);
       const fontBase64 = await prepareSalesAnalysisFontFromText(fontGlyphs, settings.locale);
       const written: string[] = [];
-      const writePDF = async (storeId: string, memo: SalesAnalysisReportMemo) => {
+      const writePDF = async (storeId: string, memo: SalesAnalysisReportMemo, group?: ManCodeGroup) => {
         pdfExportCurrent += 1;
         await yieldToUI();
         let data: Uint8Array;
@@ -452,6 +482,7 @@
           data = await generateSalesAnalysisPDF(
             slim, storeId, groupLevel, settings.locale, exportFilter, fontBase64,
             salesReportAccumulatorFromMemo(memo),
+            group ? { groupId: group.id, groupName: group.name, itemCodes: group.codes } : undefined,
           );
         } catch (caught) {
           if (caught instanceof AppError) throw caught;
@@ -462,7 +493,7 @@
         try {
           written.push(await backend.writeSalesAnalysisPDF({
             directory,
-            filename: salesAnalysisPDFFilename(storeId, reportFrom, reportTo),
+            filename: salesAnalysisPDFFilename(storeId, reportFrom, reportTo, group?.name),
             dataBase64,
           }));
         } catch (caught) {
@@ -470,9 +501,10 @@
           throw new AppError('pdf_write', caught instanceof Error ? caught.message : String(caught));
         }
       };
-      const loadMemo = (storeId?: string) => backend.getSalesAnalysisReportMemo({
+      const loadMemo = (storeId: string | undefined, group?: ManCodeGroup) => backend.getSalesAnalysisReportMemo({
         operationId,
         storeId,
+        groupId: group?.id,
         categoryLevel: groupLevel,
         excludeZeroGifts: exportFilter.excludeZeroGifts,
         excludeStamps: exportFilter.excludeStamps,
@@ -480,22 +512,24 @@
         categories: exportFilter.categories,
       });
       let loaded = false;
-      if (writeStoreFiles) {
-        for (const store of reportStores) {
-          await yieldToUI();
-          const memo = await loadMemo(store.businessId);
-          if (reportMemoHasRows(memo)) loaded = true;
-          await writePDF(store.businessId, memo);
+      for (const group of reportGroups) {
+        if (writeStoreFiles) {
+          for (const store of reportStores) {
+            await yieldToUI();
+            const memo = await loadMemo(store.businessId, group);
+            if (reportMemoHasRows(memo)) loaded = true;
+            await writePDF(store.businessId, memo, group);
+          }
         }
-      }
-      if (writeCombined) {
-        const memo = await loadMemo();
-        if (reportMemoHasRows(memo)) loaded = true;
-        await writePDF(ALL_STORES_REPORT_ID, memo);
+        if (writeCombined) {
+          const memo = await loadMemo(undefined, group);
+          if (reportMemoHasRows(memo)) loaded = true;
+          await writePDF(ALL_STORES_REPORT_ID, memo, group);
+        }
       }
       if (!loaded) throw new AppError('pdf_loading', 'Sales analysis items are still loading');
       exportDirectory = directory;
-      exportNotice = writeCombined && writeStoreFiles
+      exportNotice = reportGroups.length === 1 && writeCombined && writeStoreFiles
         ? t('analysis.exportedPDFWithCombined', { stores: reportStores.length })
         : t('analysis.exportedPDF', { count: written.length });
     } catch (caught) {
@@ -509,7 +543,8 @@
 
   function reportMemoHasRows(memo: SalesAnalysisReportMemo): boolean {
     return (memo.periods ?? []).some((period) =>
-      (period.topAmount?.length ?? 0) > 0
+      period.totals !== undefined
+      || (period.topAmount?.length ?? 0) > 0
       || (period.amountGroups?.length ?? 0) > 0
       || (period.quantityGroups?.length ?? 0) > 0,
     );
@@ -574,7 +609,7 @@
   function resetFilters() {
     selections = emptySelections();
     search = '';
-    mineOnly = false;
+    selectedGroupId = '';
     groupLevel = 'category2';
     salesRankingKey = 'current';
     quantityRankingKey = 'current';
@@ -631,13 +666,52 @@
     ].some((value) => value.toLocaleLowerCase().includes(term));
   }
 
+  function matchesGroup(item: SalesAnalysisItem, codes: Set<string>, active: boolean): boolean {
+    return !active || codes.has(item.articleCode.trim());
+  }
+
+  function changePromoterGroup(event: Event) {
+    selectedGroupId = (event.currentTarget as HTMLSelectElement).value;
+    page = 1;
+    if (activeView === 'weekly' && selectedGroupId) activeView = 'overview';
+  }
+
+  function focusGroupsForScope(
+    next: SalesAnalysisPeriodResult | undefined,
+    current: SalesAnalysisPeriodResult | undefined,
+    facets: FacetSelections,
+    searchTerm: string,
+    group: ManCodeGroup | undefined,
+    catalog: ManCodeGroup[],
+    codes: Set<string>,
+    scoped: boolean,
+  ): FocusGroup[] {
+    if (!next) return [];
+    const nextItems = (next.items ?? []).filter((item) =>
+      includeInSalesReport(item) && matchesFilters(item, facets, searchTerm) && matchesGroup(item, codes, scoped));
+    const currentItems = (current?.items ?? []).filter((item) =>
+      includeInSalesReport(item) && matchesFilters(item, facets, searchTerm) && matchesGroup(item, codes, scoped));
+    const groups = buildFocusGroups(nextItems, currentItems, 10, group ? [group] : catalog);
+    if (!group || groups.some((candidate) => candidate.id === group.id)) return groups;
+    return [{ id: group.id, prefix: '', name: group.name, sales: [], quantity: [] }];
+  }
+
   function filtersActive(current: FacetSelections, searchTerm: string): boolean {
     return Boolean(searchTerm.trim()) || facets.some(({ key }) => current[key].size > 0);
   }
 
+  function periodKeysForAnalysisView(view: ReportView, rankingKeys: string[], productScopeActive: boolean): string[] {
+    if (productScopeActive && (view === 'overview' || view === 'stores')) {
+      return ['current', 'previous', 'yearAgo'];
+    }
+    return periodKeysForView(view, rankingKeys);
+  }
+
   function facetOptions(key: CategoryKey): string[] {
     if (!currentPeriod) return [];
-    return [...new Set((currentPeriod?.items ?? []).filter((item) => matchesSelections(item, selections, key)).map((item) => categoryValue(item, key)))]
+    return [...new Set((currentPeriod?.items ?? [])
+      .filter((item) => matchesGroup(item, selectedGroupCodes, groupScopeActive) && matchesSelections(item, selections, key))
+      .map((item) => categoryValue(item, key)))]
       .sort((left, right) => left.localeCompare(right, settings.locale));
   }
 
@@ -675,10 +749,17 @@
     return totals;
   }
 
-  function totalsForPeriod(period: SalesAnalysisPeriodResult | undefined, current: FacetSelections, searchTerm: string): FilteredTotals {
+  function totalsForPeriod(
+    period: SalesAnalysisPeriodResult | undefined,
+    current: FacetSelections,
+    searchTerm: string,
+    groupCodes: Set<string>,
+    scoped: boolean,
+  ): FilteredTotals {
     if (!period) return emptyTotals();
-    const matching = (period?.items ?? []).filter((item) => matchesFilters(item, current, searchTerm));
-    if (filtersActive(current, searchTerm)) return summarize(matching);
+    const matching = (period?.items ?? []).filter((item) =>
+      matchesFilters(item, current, searchTerm) && matchesGroup(item, groupCodes, scoped));
+    if (scoped || filtersActive(current, searchTerm)) return summarize(matching);
     const sku = new Set(matching.map((item) => item.articleCode || item.articleName));
     const totals: FilteredTotals = { ...period.totals, skuCount: sku.size };
     if (totals.transactionCount && totals.transactionCount > 0 && totals.trendNetSalesAmount !== undefined) {
@@ -700,12 +781,13 @@
 
   function buildCategoryComparison(
     periods: SalesAnalysisPeriodResult[], key: CategoryKey, current: FacetSelections, searchTerm: string,
+    groupCodes: Set<string>, scoped: boolean,
   ): CategoryComparisonRow[] {
     const grouped = new Map<string, CategoryComparisonRow>();
     for (const period of periods) {
       if (!['current', 'previous', 'previous2', 'yearAgo'].includes(period.key)) continue;
       for (const item of period.items ?? []) {
-        if (!includeInSalesReport(item) || !matchesFilters(item, current, searchTerm)) continue;
+        if (!includeInSalesReport(item) || !matchesFilters(item, current, searchTerm) || !matchesGroup(item, groupCodes, scoped)) continue;
         const name = categoryValue(item, key);
         const code = categoryCode(item, key);
         const id = code || name;
@@ -741,11 +823,13 @@
     sortBy: 'amount' | 'quantity',
     current: FacetSelections,
     searchTerm: string,
+    groupCodes: Set<string>,
+    scoped: boolean,
   ): CategoryRankingGroup[] {
     if (!period) return [];
     const grouped = new Map<string, { code: string; name: string; items: SalesAnalysisItem[]; amount: number; quantity: number }>();
     for (const item of period.items ?? []) {
-      if (!includeInSalesReport(item) || !matchesFilters(item, current, searchTerm)) continue;
+      if (!includeInSalesReport(item) || !matchesFilters(item, current, searchTerm) || !matchesGroup(item, groupCodes, scoped)) continue;
       const code = categoryCode(item, key);
       const name = categoryValue(item, key);
       const id = code || name;
@@ -780,14 +864,35 @@
     ];
   }
 
-  function buildStoreRows(periods: SalesAnalysisPeriodResult[]): StoreComparisonRow[] {
+  function buildStoreRows(
+    periods: SalesAnalysisPeriodResult[],
+    current: FacetSelections,
+    searchTerm: string,
+    groupCodes: Set<string>,
+    groupScoped: boolean,
+  ): StoreComparisonRow[] {
     const grouped = new Map<string, StoreComparisonRow>();
+    const scoped = groupScoped || filtersActive(current, searchTerm);
     for (const period of periods) {
       if (!['current', 'previous', 'yearAgo'].includes(period.key)) continue;
-      for (const store of period.stores ?? []) {
-        const row: StoreComparisonRow = grouped.get(store.businessId) ?? { id: store.businessId, label: store.label };
-        row[period.key as 'current' | 'previous' | 'yearAgo'] = store.totals;
-        grouped.set(store.businessId, row);
+      if (!scoped) {
+        for (const store of period.stores ?? []) {
+          const row: StoreComparisonRow = grouped.get(store.businessId) ?? { id: store.businessId, label: store.label };
+          row[period.key as 'current' | 'previous' | 'yearAgo'] = store.totals;
+          grouped.set(store.businessId, row);
+        }
+        continue;
+      }
+      const labels = new Map((period.stores ?? []).map((store) => [store.businessId, store.label]));
+      for (const item of period.items ?? []) {
+        if (item.storeId && !labels.has(item.storeId)) labels.set(item.storeId, item.storeLabel || item.storeId);
+      }
+      for (const [storeId, label] of labels) {
+        const items = (period.items ?? []).filter((item) => item.storeId === storeId
+          && matchesFilters(item, current, searchTerm) && matchesGroup(item, groupCodes, groupScoped));
+        const row: StoreComparisonRow = grouped.get(storeId) ?? { id: storeId, label };
+        row[period.key as 'current' | 'previous' | 'yearAgo'] = summarize(items);
+        grouped.set(storeId, row);
       }
     }
     return [...grouped.values()].sort((left, right) => (right.current?.netSalesAmount ?? 0) - (left.current?.netSalesAmount ?? 0) || left.id.localeCompare(right.id));
@@ -1067,10 +1172,15 @@
         </div>
         <div class="analysis-filter-tools">
           <div class="analysis-search"><span class="material-symbols-rounded" aria-hidden="true">search</span><input aria-label={t('analysis.search')} placeholder={t('analysis.search')} value={search} oninput={changeSearch} />{#if search}<button type="button" aria-label={t('analysis.clear')} onclick={() => { search = ''; page = 1; }}><span class="material-symbols-rounded" aria-hidden="true">close</span></button>{/if}</div>
-          {#if activeView === 'overview' || activeView === 'products'}
-            <label class="mine-only-toggle" class:active={mineOnly}>
-              <input type="checkbox" aria-label={t('analysis.mineOnly')} checked={mineOnly} onchange={() => { mineOnly = !mineOnly; page = 1; }} />
-              <span>{t('analysis.mineOnly')}</span>
+          {#if manCodeGroups.length > 0}
+            <label class="promoter-group-selector">
+              <span>{t('analysis.promoterGroup')}</span>
+              <select aria-label={t('analysis.promoterGroup')} value={selectedGroupId} onchange={changePromoterGroup}>
+                <option value="">{t('analysis.allProducts')}</option>
+                {#each manCodeGroups as group (group.id)}
+                  <option value={group.id}>{group.name} ({group.codes.length})</option>
+                {/each}
+              </select>
             </label>
           {/if}
         </div>
@@ -1084,7 +1194,7 @@
           { key: 'categories', label: t('analysis.categories'), icon: 'account_tree' },
           { key: 'products', label: t('analysis.products'), icon: 'inventory_2' },
           { key: 'stores', label: t('analysis.stores'), icon: 'storefront' },
-        ] as tab}
+        ].filter((tab) => !groupScopeActive || tab.key !== 'weekly') as tab}
           <button type="button" class:active={activeView === tab.key} role="tab" aria-selected={activeView === tab.key} onclick={() => { activeView = tab.key as ReportView; }}><span class="material-symbols-rounded" aria-hidden="true">{tab.icon}</span>{tab.label}{#if result.pending && ((tab.key === 'weekly' && !result.weeks?.length) || (tab.key === 'focus' && !periodByKey(reportPeriods, 'yearAgoNext')) || (tab.key === 'stores' && reportPeriods.length < 2))}<span class="tab-pending">{t('common.loading')}</span>{/if}</button>
         {/each}
       </div>
@@ -1097,8 +1207,8 @@
           <div><dt>{t('analysis.grossSales')}</dt><dd>{formatMoney(currentTotals.saleAmount)}</dd><span class={deltaClass(delta(currentTotals.saleAmount, previousTotals.saleAmount))}>{formatPercent(delta(currentTotals.saleAmount, previousTotals.saleAmount))} {t('analysis.vsPrevious')}</span></div>
           <div><dt>{t('analysis.returns')}</dt><dd>{formatMoney(currentTotals.returnAmount)}</dd><span>{formatNumber(currentTotals.returnQuantity)} {t('analysis.units')}</span></div>
           <div><dt>{t('analysis.netQuantity')}</dt><dd>{formatNumber(currentTotals.netQuantity)}</dd><span class={deltaClass(delta(currentTotals.netQuantity, yearAgoTotals.netQuantity))}>{formatPercent(delta(currentTotals.netQuantity, yearAgoTotals.netQuantity))} {t('analysis.vsYearAgo')}</span></div>
-          <div><dt>{t('analysis.transactions')}</dt><dd>{formatValue(currentTotals.transactionCount, 'number')}</dd><span>{filtersActive(selections, search) ? t('analysis.wholeStoreOnly') : t('analysis.orders')}</span></div>
-          <div><dt>{t('analysis.basket')}</dt><dd>{formatValue(currentTotals.basketValue, 'money')}</dd><span>{filtersActive(selections, search) ? t('analysis.wholeStoreOnly') : t('analysis.perOrder')}</span></div>
+          <div><dt>{t('analysis.transactions')}</dt><dd>{formatValue(currentTotals.transactionCount, 'number')}</dd><span>{groupScopeActive || filtersActive(selections, search) ? t('analysis.wholeStoreOnly') : t('analysis.orders')}</span></div>
+          <div><dt>{t('analysis.basket')}</dt><dd>{formatValue(currentTotals.basketValue, 'money')}</dd><span>{groupScopeActive || filtersActive(selections, search) ? t('analysis.wholeStoreOnly') : t('analysis.perOrder')}</span></div>
           <div><dt>{t('analysis.skus')}</dt><dd>{formatNumber(currentTotals.skuCount)}</dd><span>{t('analysis.products')}</span></div>
         </dl>
 
@@ -1307,7 +1417,7 @@
           <section class="export-panel" aria-labelledby="export-files-title">
             <div class="export-panel-heading">
               <strong id="export-files-title">{t('analysis.exportFiles')}</strong>
-              <span>{t('analysis.exportFileCount', { count: exportFileCount() })}</span>
+              <span>{t('analysis.exportFileCount', { count: exportFilesCount })}</span>
             </div>
             <label class="export-check">
               <input type="checkbox" checked={exportIncludeCombined} disabled={exportingPDF} onchange={() => { exportIncludeCombined = !exportIncludeCombined; }} />
@@ -1326,6 +1436,27 @@
                   <label><input type="checkbox" checked={exportStoreIds.has(store.businessId)} disabled={exportingPDF} onchange={() => toggleExportStore(store.businessId)} /><span><b>{store.businessId}</b> {store.label}</span></label>
                 {/each}
               </div>
+            </div>
+          </section>
+        {/if}
+        {#if manCodeGroups.length > 0}
+          <section class="export-panel" aria-labelledby="export-groups-title">
+            <div class="export-panel-heading">
+              <strong id="export-groups-title">{t('analysis.exportPromoterGroups')}</strong>
+              <span>{t('analysis.exportPromoterGroupsHint')}</span>
+            </div>
+            <div class="export-categories-heading">
+              <strong>{t('analysis.exportReportScope')}</strong>
+              <div>
+                <button type="button" disabled={exportingPDF} onclick={() => { exportGroupIds = new Set([ALL_PRODUCTS_SCOPE_ID, ...manCodeGroups.map((group) => group.id)]); }}>{t('analysis.selectAll')}</button>
+                <button type="button" disabled={exportingPDF} onclick={() => { exportGroupIds = new Set(); }}>{t('analysis.clear')}</button>
+              </div>
+            </div>
+            <div class="export-category-list pane-scroll">
+              <label><input type="checkbox" checked={exportGroupIds.has(ALL_PRODUCTS_SCOPE_ID)} disabled={exportingPDF} onchange={() => toggleExportGroup(ALL_PRODUCTS_SCOPE_ID)} /><span><b>{t('analysis.allProducts')}</b></span></label>
+              {#each manCodeGroups as group (group.id)}
+                <label><input type="checkbox" checked={exportGroupIds.has(group.id)} disabled={exportingPDF} onchange={() => toggleExportGroup(group.id)} /><span><b>{group.name}</b> · {t('analysis.itemCodeCount', { count: group.codes.length })}</span></label>
+              {/each}
             </div>
           </section>
         {/if}
@@ -1354,14 +1485,16 @@
           </div>
         </section>
       </div>
-      {#if exportFileCount() === 0}
+      {#if exportGroupTotal === 0}
+        <p class="export-dialog-warning">{t('analysis.exportNeedPromoterGroup')}</p>
+      {:else if exportTargetTotal === 0}
         <p class="export-dialog-warning">{t('analysis.exportNeedTarget')}</p>
       {:else if exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0}
         <p class="export-dialog-warning">{t('analysis.exportNeedCategory')}</p>
       {/if}
       <div class="dialog-actions">
         <md-text-button type="button" onclick={closeExportDialog} disabled={exportingPDF}>{t('common.cancel')}</md-text-button>
-        <md-filled-button type="submit" onclick={() => void exportPDF()} disabled={exportingPDF || exportFileCount() === 0 || (exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0)}>{exportingPDF ? t('analysis.exportingPDFProgress', { current: pdfExportCurrent, total: pdfExportTotal }) : t('analysis.exportConfirm')}</md-filled-button>
+        <md-filled-button type="submit" onclick={() => void exportPDF()} disabled={exportingPDF || exportFilesCount === 0 || (exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0)}>{exportingPDF ? t('analysis.exportingPDFProgress', { current: pdfExportCurrent, total: pdfExportTotal }) : t('analysis.exportConfirm')}</md-filled-button>
       </div>
     </form>
   </dialog>
@@ -1409,9 +1542,8 @@
   .analysis-filters { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
   .analysis-filter-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   .analysis-filter-tools .analysis-search { flex: 1; min-width: 220px; }
-  .mine-only-toggle { display: flex; min-height: 44px; align-items: center; gap: 8px; padding: 0 12px; cursor: pointer; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; background: var(--md-sys-color-surface-container-lowest); font-weight: 680; white-space: nowrap; }
-  .mine-only-toggle.active { border-color: var(--app-active-border); background: var(--md-sys-color-secondary-container); }
-  .mine-only-toggle input { width: 18px; height: 18px; accent-color: var(--md-sys-color-primary); }
+  .promoter-group-selector { display: flex; min-height: 44px; align-items: center; gap: 8px; padding-left: 12px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; background: var(--md-sys-color-surface-container-lowest); font-weight: 680; white-space: nowrap; }
+  .promoter-group-selector select { min-width: 190px; min-height: 42px; border: 0; background: transparent; }
   .facet-row { display: flex; flex-wrap: wrap; gap: 8px; }
   .facet-menu { position: relative; }
   .facet-menu > summary { display: flex; min-height: 44px; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; color: var(--md-sys-color-on-surface-variant); background: var(--md-sys-color-surface-container-lowest); list-style: none; }

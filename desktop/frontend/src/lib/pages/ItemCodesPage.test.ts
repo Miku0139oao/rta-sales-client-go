@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/sv
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { configureBackend, setLatestArticleNames } from '../backend';
 import { translator } from '../i18n';
-import type { ManCodeGroup, SaveManCodeGroupRequest } from '../types';
+import type { ManCodeCatalogTransferResult, ManCodeGroup, SaveManCodeGroupRequest } from '../types';
 import ItemCodesPage from './ItemCodesPage.svelte';
 
 const health: ManCodeGroup = { id: 'group-health', name: '保健', codes: ['123456', '234567'] };
@@ -21,6 +21,22 @@ afterEach(() => {
 });
 
 describe('item code management', () => {
+  it('uses a tag icon rather than a QR or barcode for the empty catalog', async () => {
+    configureBackend({ methods: {
+      ListManCodeGroups: vi.fn(async () => []),
+    } });
+    const { container } = render(ItemCodesPage, {
+      props: { t: translator('zh-TW'), locale: 'zh-TW' },
+    });
+
+    await waitFor(() => expect(screen.getByText('尚未建立組別')).toBeInTheDocument());
+    expect(container.querySelector('.empty-state .material-symbols-rounded')).toHaveTextContent('tag');
+    expect(container.querySelector('.empty-state .material-symbols-rounded')).not.toHaveTextContent('qr_code_2');
+    expect(container.querySelector('.empty-state .material-symbols-rounded')).not.toHaveTextContent('barcode');
+    expect(container).not.toHaveTextContent('qr_code_2');
+    expect(container).not.toHaveTextContent('barcode');
+  });
+
   it('lists groups, expands codes, and shows article names from the latest analysis', async () => {
     configureBackend({ methods: {
       ListManCodeGroups: vi.fn(async () => [health, skin]),
@@ -165,5 +181,64 @@ describe('item code management', () => {
 
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
     expect((screen.getByLabelText('貼上商品代碼') as HTMLTextAreaElement).value).toBe('999888');
+  });
+
+  it('exports the catalog and ignores a cancelled save dialog', async () => {
+    const exported = vi.fn(async (): Promise<ManCodeCatalogTransferResult> => (
+      { cancelled: false, path: 'D:\\item-codes.json', groups: [health] }
+    ));
+    configureBackend({ methods: {
+      ListManCodeGroups: vi.fn(async () => [health]),
+      ExportManCodeCatalog: exported,
+    } });
+    const { container } = render(ItemCodesPage, {
+      props: { t: translator('zh-TW'), locale: 'zh-TW' },
+    });
+    await waitFor(() => expect(screen.getByText('保健')).toBeInTheDocument());
+
+    await fireEvent.click(button(container, '匯出'));
+    await waitFor(() => expect(screen.getByText('已匯出商品代碼目錄。')).toBeInTheDocument());
+    expect(exported).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('保健')).toBeInTheDocument();
+
+    exported.mockResolvedValueOnce({ cancelled: true });
+    await fireEvent.click(button(container, '匯出'));
+    await waitFor(() => expect(exported).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('已匯出商品代碼目錄。')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('保健')).toBeInTheDocument();
+  });
+
+  it('imports a catalog, refreshes the list, and leaves the page unchanged when cancelled or invalid', async () => {
+    const incoming: ManCodeGroup[] = [{ id: 'group-care', name: '個護', codes: ['888777'] }];
+    const imported = vi.fn(async (): Promise<ManCodeCatalogTransferResult> => (
+      { cancelled: false, path: 'D:\\item-codes.json', groups: incoming }
+    ));
+    configureBackend({ methods: {
+      ListManCodeGroups: vi.fn(async () => [health, skin]),
+      ImportManCodeCatalog: imported,
+    } });
+    const { container } = render(ItemCodesPage, {
+      props: { t: translator('zh-TW'), locale: 'zh-TW' },
+    });
+    await waitFor(() => expect(screen.getByText('保健')).toBeInTheDocument());
+
+    await fireEvent.click(button(container, '匯入'));
+    await waitFor(() => expect(screen.getByText('個護')).toBeInTheDocument());
+    expect(screen.getByText('已匯入 1 個組別。')).toBeInTheDocument();
+    expect(screen.queryByText('保健')).not.toBeInTheDocument();
+    expect(screen.queryByText('護膚')).not.toBeInTheDocument();
+
+    imported.mockResolvedValueOnce({ cancelled: true });
+    await fireEvent.click(button(container, '匯入'));
+    await waitFor(() => expect(imported).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('個護')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    imported.mockRejectedValueOnce(new Error('decode mancode catalog: unexpected end of JSON'));
+    await fireEvent.click(button(container, '匯入'));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('商品代碼目錄格式不正確，現有資料未變更。'));
+    expect(screen.getByText('個護')).toBeInTheDocument();
+    expect(screen.queryByText('保健')).not.toBeInTheDocument();
   });
 });

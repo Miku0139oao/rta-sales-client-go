@@ -80,6 +80,12 @@ export interface ReplaceManCodeGroupCodesRequest {
   codes?: string[];
 }
 
+export interface ManCodeCatalogTransferResult {
+  cancelled: boolean;
+  path?: string;
+  groups?: ManCodeGroup[];
+}
+
 export interface AnalysisProgress {
   operationId: string;
   stage: AnalysisStage;
@@ -299,6 +305,7 @@ export interface SalesAnalysisPackedItems {
 export interface SalesAnalysisReportMemoRequest {
   operationId: string;
   storeId?: string;
+  groupId?: string;
   categoryLevel: string;
   excludeZeroGifts: boolean;
   excludeStamps: boolean;
@@ -346,14 +353,9 @@ export interface SalesAnalysisFocusGroup {
   quantity?: SalesAnalysisFocusProduct[];
 }
 
-export interface ManCodeGroup {
-  id: string;
-  name: string;
-  codes: string[];
-}
-
 export interface SalesAnalysisPeriodMemo {
   key: string;
+  totals?: SalesAnalysisTotals;
   topAmount?: SalesAnalysisRankedItem[];
   topQuantity?: SalesAnalysisRankedItem[];
   amountGroups?: SalesAnalysisCategoryGroup[];
@@ -449,6 +451,8 @@ export interface BackendApi {
   saveManCodeGroup(request: SaveManCodeGroupRequest): Promise<ManCodeGroup>;
   deleteManCodeGroup(id: string): Promise<void>;
   replaceManCodeGroupCodes(request: ReplaceManCodeGroupCodesRequest): Promise<ManCodeGroup>;
+  exportManCodeCatalog(): Promise<ManCodeCatalogTransferResult>;
+  importManCodeCatalog(): Promise<ManCodeCatalogTransferResult>;
   getLatestArticleNames(): Promise<Record<string, string>>;
   listSalesAnalysisStores(profileId: string, simulateStoreCount?: number): Promise<SalesAnalysisStore[]>;
   listManCodeGroups(): Promise<ManCodeGroup[]>;
