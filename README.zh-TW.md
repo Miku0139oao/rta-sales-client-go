@@ -37,7 +37,7 @@
 
 兩分鐘畫面教學（不用聲音，看字幕即可）：
 
-[使用教學](https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.2.0/RTA-Sales-Analyzer-tutorial.mp4)
+[使用教學](https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.3.0/RTA-Sales-Analyzer-tutorial.mp4)
 
 ### 另外兩個檔是什麼
 

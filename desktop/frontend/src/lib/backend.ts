@@ -133,6 +133,7 @@ let mockProfiles: Profile[] = [
 ];
 const mockListeners = new Set<(progress: AnalysisProgress) => void>();
 const mockSalesAnalysisListeners = new Set<(progress: SalesAnalysisProgress) => void>();
+const mockSalesAnalysisUpdateListeners = new Set<(result: SalesAnalysisResult) => void>();
 let mockCancelled = false;
 let mockSalesCancelled = false;
 
@@ -184,30 +185,12 @@ function mockItemTotals(items: SalesAnalysisItem[]): SalesAnalysisTotals {
   });
 }
 
-async function mockRunSalesAnalysis(request: SalesAnalysisRequest): Promise<SalesAnalysisResult> {
-  mockSalesCancelled = false;
-  const operationId = `mock-sales-${Date.now()}`;
-  const catalog = mockAnalysisStoresFor(request.simulateStoreCount || mockAnalysisStores.length);
-  const selected = catalog.filter((store) => request.storeIds.includes(store.businessId));
-  const requestedPeriods = request.periods?.length ? request.periods : [{
-    key: 'current', label: 'Current', from: request.from ?? '', to: request.to ?? '', includeTrend: false,
-  }];
-  const totalTasks = selected.length * requestedPeriods.length;
-  mockSalesAnalysisListeners.forEach((listener) => listener({ operationId, current: 0, total: totalTasks, status: 'running' }));
-  let completed = 0;
-  for (const period of requestedPeriods) {
-    for (const store of selected) {
-      await pause(20);
-      if (mockSalesCancelled) throw new AppError('cancelled', 'Sales analysis cancelled');
-      completed += 1;
-      mockSalesAnalysisListeners.forEach((listener) => listener({
-        operationId, current: completed, total: totalTasks, storeId: store.businessId, storeLabel: store.label,
-        periodKey: period.key, periodLabel: period.label, status: 'success',
-      }));
-    }
-  }
-  const scales: Record<string, number> = { current: 1, previous: 0.92, previous2: 0.84, yearAgo: 0.88 };
-  const periods: SalesAnalysisPeriodResult[] = requestedPeriods.map((period) => {
+function buildMockPeriods(
+  requestedPeriods: NonNullable<SalesAnalysisRequest['periods']>,
+  selected: SalesAnalysisStore[],
+): SalesAnalysisPeriodResult[] {
+  const scales: Record<string, number> = { current: 1, previous: 0.92, previous2: 0.84, yearAgo: 0.88, yearAgoNext: 1.06 };
+  return requestedPeriods.map((period) => {
     const scale = scales[period.key] ?? 1;
     const templates = mockAnalysisItems.length > 0 ? mockAnalysisItems : [];
     const items = selected.flatMap((store, storeIndex) => {
@@ -245,14 +228,69 @@ async function mockRunSalesAnalysis(request: SalesAnalysisRequest): Promise<Sale
       stores, items, issues: [],
     };
   });
+}
+
+function finishMockSalesResult(
+  operationId: string,
+  selected: SalesAnalysisStore[],
+  periods: SalesAnalysisPeriodResult[],
+  pending: boolean,
+): SalesAnalysisResult {
   const primary = periods[0]!;
   return {
-    operationId, from: primary.from, to: primary.to, complete: true,
+    operationId, from: primary.from, to: primary.to, complete: !pending,
+    pending,
     selectedStores: selected.length, successfulStores: primary.successfulStores, totals: primary.totals,
     stores: primary.stores, items: primary.items, issues: [], periods,
-    weeks: mockWeeklyPeriods(primary.from, primary.to, primary.stores),
-    queryDurationMs: 180,
+    weeks: pending ? [] : mockWeeklyPeriods(primary.from, primary.to, primary.stores),
+    queryDurationMs: pending ? 80 : 180,
   };
+}
+
+async function mockRunSalesAnalysis(request: SalesAnalysisRequest): Promise<SalesAnalysisResult> {
+  mockSalesCancelled = false;
+  const operationId = `mock-sales-${Date.now()}`;
+  const catalog = mockAnalysisStoresFor(request.simulateStoreCount || mockAnalysisStores.length);
+  const selected = catalog.filter((store) => request.storeIds.includes(store.businessId));
+  const requestedPeriods = request.periods?.length ? request.periods : [{
+    key: 'current', label: 'Current', from: request.from ?? '', to: request.to ?? '', includeTrend: false,
+  }];
+  const currentTasks = selected.length;
+  const supplementTasks = Math.max(selected.length * Math.max(requestedPeriods.length - 1, 0), 1);
+  mockSalesAnalysisListeners.forEach((listener) => listener({ operationId, current: 0, total: currentTasks, status: 'running' }));
+  let completed = 0;
+  for (const store of selected) {
+    await pause(20);
+    if (mockSalesCancelled) throw new AppError('cancelled', 'Sales analysis cancelled');
+    completed += 1;
+    mockSalesAnalysisListeners.forEach((listener) => listener({
+      operationId, current: completed, total: currentTasks, storeId: store.businessId, storeLabel: store.label,
+      periodKey: 'current', periodLabel: '本期', status: 'success',
+    }));
+  }
+  const allPeriods = buildMockPeriods(requestedPeriods, selected);
+  const first = allPeriods.filter((period) => period.key === 'current');
+  const staged = first.length > 0 ? first : allPeriods.slice(0, 1);
+  window.setTimeout(() => {
+    if (mockSalesCancelled) return;
+    let extra = 0;
+    const tick = window.setInterval(() => {
+      extra += 1;
+      mockSalesAnalysisListeners.forEach((listener) => listener({
+        operationId, current: extra, total: supplementTasks,
+        periodKey: requestedPeriods[Math.min(extra, requestedPeriods.length - 1)]?.key,
+        periodLabel: requestedPeriods[Math.min(extra, requestedPeriods.length - 1)]?.label,
+        storeId: selected[extra % Math.max(selected.length, 1)]?.businessId,
+        storeLabel: selected[extra % Math.max(selected.length, 1)]?.label,
+        status: 'success',
+      }));
+      if (extra >= supplementTasks) {
+        window.clearInterval(tick);
+        mockSalesAnalysisUpdateListeners.forEach((listener) => listener(finishMockSalesResult(operationId, selected, allPeriods, false)));
+      }
+    }, 350);
+  }, 80);
+  return finishMockSalesResult(operationId, selected, staged, staged.length < allPeriods.length);
 }
 
 function mockWeeklyPeriods(from: string, to: string, stores: SalesAnalysisPeriodResult['stores']): import('./types').SalesAnalysisWeek[] {
@@ -506,7 +544,10 @@ export const backend: BackendApi = {
 
   onSalesAnalysisUpdate(listener: (result: SalesAnalysisResult) => void): () => void {
     const source = eventSource();
-    if (!source) return () => undefined;
+    if (!source) {
+      mockSalesAnalysisUpdateListeners.add(listener);
+      return () => mockSalesAnalysisUpdateListeners.delete(listener);
+    }
     const cleanup = source.on('rta:sales-analysis-update', (payload) => listener(payload as SalesAnalysisResult));
     return () => cleanup?.();
   },
