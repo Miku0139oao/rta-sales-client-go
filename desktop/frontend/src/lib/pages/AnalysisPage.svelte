@@ -1506,25 +1506,25 @@
   .analysis-supplement-meter md-linear-progress { width: 100%; --md-linear-progress-track-height: 8px; --md-linear-progress-active-indicator-height: 8px; }
   .analysis-supplement-meter strong { color: var(--md-sys-color-primary); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .tab-pending { margin-left: 6px; padding: 1px 6px; border-radius: 999px; color: var(--md-sys-color-on-secondary-container); background: var(--md-sys-color-secondary-container); font-size: 10px; font-weight: 700; }
-  :global(.export-dialog) { width: min(calc(100% - 32px), 760px); }
-  .export-dialog-body { display: grid; gap: 14px; }
-  .export-dialog-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
-  .export-panel { display: grid; align-content: start; gap: 10px; min-width: 0; }
+  :global(.export-dialog) { display: flex; width: min(calc(100% - 32px), 820px); max-height: calc(100dvh - 32px); flex-direction: column; overflow: hidden; }
+  .export-dialog-body { display: grid; min-height: 0; flex: 1; gap: 14px; grid-template-rows: minmax(0, 1fr) auto auto; }
+  .export-dialog-grid { display: grid; min-height: 0; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; align-items: stretch; }
+  .export-panel { display: grid; min-height: 0; align-content: start; gap: 10px; grid-template-rows: auto auto auto minmax(0, 1fr); }
   .export-panel-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
   .export-panel-heading span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-variant-numeric: tabular-nums; }
   .export-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .export-mode button { min-height: 40px; padding: 8px 10px; cursor: pointer; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; color: var(--md-sys-color-on-surface-variant); background: var(--md-sys-color-surface-container-lowest); font-weight: 650; text-align: center; }
   .export-mode button.active { border-color: var(--app-active-border); color: var(--md-sys-color-on-secondary-container); background: var(--md-sys-color-secondary-container); }
-  .export-stores { overflow: hidden; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 14px; }
+  .export-stores { display: grid; min-height: 0; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 14px; }
   .export-check { display: flex; align-items: flex-start; gap: 10px; font-size: 14px; line-height: 1.4; }
   .export-check b { display: block; font-weight: 700; }
   .export-check small { display: block; color: var(--md-sys-color-on-surface-variant); font-size: 12px; }
   .export-check input { width: 18px; height: 18px; margin-top: 1px; accent-color: var(--md-sys-color-primary); }
-  .export-categories { overflow: hidden; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 14px; }
+  .export-categories { display: grid; min-height: 0; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 14px; }
   .export-categories-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; background: var(--md-sys-color-surface-container-low); }
   .export-categories-heading > div { display: flex; gap: 8px; }
   .export-categories-heading button { cursor: pointer; border: 0; color: var(--md-sys-color-primary); background: transparent; font-weight: 680; }
-  .export-category-list { display: grid; max-height: 200px; gap: 2px; overflow: auto; padding: 6px; }
+  .export-category-list { display: grid; min-height: 240px; max-height: min(56vh, 520px); gap: 2px; overflow: auto; overscroll-behavior: contain; padding: 6px; }
   .export-category-list label { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 9px; }
   .export-category-list label:hover { background: var(--md-sys-color-surface-container-low); }
   .export-category-list input { width: 18px; height: 18px; accent-color: var(--md-sys-color-primary); }
