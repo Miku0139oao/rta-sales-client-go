@@ -29,8 +29,8 @@ function reportMemo() {
 
 async function confirmExport(files: 'combined' | 'all' = 'combined') {
   await fireEvent.click(screen.getByText('匯出 PDF'));
-  await waitFor(() => expect(screen.getByRole('heading', { name: '匯出前先選一下' })).toBeInTheDocument());
-  if (files === 'all') await fireEvent.click(screen.getByText('總報告 + 各店各一份'));
+  await waitFor(() => expect(screen.getByRole('heading', { name: '匯出篩選' })).toBeInTheDocument());
+  if (files === 'all') await fireEvent.click(screen.getByLabelText('全選門店'));
   const confirm = screen.getByText('選資料夾並匯出').closest('md-filled-button') ?? screen.getByText('選資料夾並匯出');
   await fireEvent.click(confirm);
 }
@@ -370,11 +370,11 @@ describe('sales analysis page', () => {
     await fireEvent.click(screen.getByText('開始分析'));
     await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
     await fireEvent.click(screen.getByText('匯出 PDF'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: '匯出前先選一下' })).toBeInTheDocument());
-    expect(screen.getByText('不要放沒有金額的贈品（現金券會留）')).toBeInTheDocument();
-    expect(screen.getByText('不要放印花')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('heading', { name: '匯出篩選' })).toBeInTheDocument());
+    expect(screen.getByText('忽略沒有金額的贈品（保留現金券）')).toBeInTheDocument();
+    expect(screen.getByText('忽略印花')).toBeInTheDocument();
     await fireEvent.click(screen.getByText('取消'));
-    await waitFor(() => expect(screen.queryByRole('heading', { name: '匯出前先選一下' })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole('heading', { name: '匯出篩選' })).not.toBeInTheDocument());
     expect(writeSalesAnalysisPDF).not.toHaveBeenCalled();
   });
 
@@ -407,14 +407,46 @@ describe('sales analysis page', () => {
     await fireEvent.click(screen.getByText('開始分析'));
     await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
     await fireEvent.click(screen.getByText('匯出 PDF'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: '匯出前先選一下' })).toBeInTheDocument());
-    expect(screen.getByText('只要總報告')).toBeInTheDocument();
-    expect(screen.getByText('1 個 PDF，所有門店放在一起')).toBeInTheDocument();
-    expect(screen.getByText('總報告 + 各店各一份')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('heading', { name: '匯出篩選' })).toBeInTheDocument());
+    expect(screen.getByText('總報告')).toBeInTheDocument();
+    expect(screen.getByText('所有門店合在一份 PDF')).toBeInTheDocument();
+    expect(screen.getByText('分店報告')).toBeInTheDocument();
+    expect(screen.getByLabelText('全選門店')).toBeInTheDocument();
     const confirm = screen.getByText('選資料夾並匯出').closest('md-filled-button') ?? screen.getByText('選資料夾並匯出');
     await fireEvent.click(confirm);
     await waitFor(() => expect(writeSalesAnalysisPDF).toHaveBeenCalledTimes(1));
     expect(writeSalesAnalysisPDF.mock.calls[0]?.[0]).toMatchObject({ filename: 'RTA-Sales-all-20260801-20260831.pdf' });
+  });
+
+  it('keeps query progress visible while later periods load', async () => {
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [{
+        id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
+      }]),
+      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      RunSalesAnalysis: vi.fn(async () => ({
+        ...analysisResult,
+        pending: true,
+        complete: false,
+        periods: [{
+          key: 'current', label: '本期', from: '2026-08-01', to: '2026-08-16',
+          complete: true, successfulStores: 1, totals: analysisResult.totals,
+          stores: [{ businessId: '107', label: '107 - Central', totals: analysisResult.totals }],
+          items: analysisResult.items,
+        }],
+        weeks: [],
+      })),
+      GetSalesAnalysisItems: vi.fn(async () => ({ periodKey: 'current', dict: [''], rows: [] })),
+      ClearSalesAnalysis: vi.fn(async () => undefined),
+      CancelSalesAnalysis: vi.fn(async () => undefined),
+    } });
+    render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
+    await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
+    await fireEvent.click(screen.getByText('開始分析'));
+    await waitFor(() => expect(screen.getByText('本期已可看，正在補其餘資料')).toBeInTheDocument());
+    expect(screen.getByText('0 / 0')).toBeInTheDocument();
+    expect(screen.getByText('取消')).toBeInTheDocument();
+    expect(screen.getByText('匯出 PDF').closest('md-filled-button')).toHaveAttribute('disabled');
   });
 
   it('does not offer analysis when no enabled profile has credentials', async () => {

@@ -81,7 +81,8 @@
   let exportingPDF = false;
   let exportDialog = false;
   let exportFilter: SalesReportFilter = defaultSalesReportFilter();
-  let exportCombinedOnly = true;
+  let exportIncludeCombined = true;
+  let exportStoreIds = new Set<string>();
   let pdfExportCurrent = 0;
   let pdfExportTotal = 0;
   let error = '';
@@ -279,6 +280,7 @@
         simulateStoreCount: settings.simulateStoreCount,
       });
       result = summary;
+      operationId = summary.operationId;
       activeView = 'overview';
     } catch (caught) {
       error = errorMessage(settings.locale, caught);
@@ -327,10 +329,11 @@
   }
 
   async function cancelAnalysis() {
-    if (!operationId || cancelling) return;
+    const id = operationId || result?.operationId;
+    if (!id || cancelling) return;
     cancelling = true;
     try {
-      await backend.cancelSalesAnalysis(operationId);
+      await backend.cancelSalesAnalysis(id);
     } catch (caught) {
       error = errorMessage(settings.locale, caught);
       cancelling = false;
@@ -339,7 +342,31 @@
 
   function openExportDialog() {
     if (!result || result.pending || exportingPDF || loadingItems) return;
+    const available = listSuccessfulReportStores(result);
+    exportIncludeCombined = available.length > 1;
+    exportStoreIds = new Set();
     exportDialog = true;
+  }
+
+  function toggleExportStore(storeId: string) {
+    const next = new Set(exportStoreIds);
+    if (next.has(storeId)) next.delete(storeId);
+    else next.add(storeId);
+    exportStoreIds = next;
+  }
+
+  function selectedExportStores() {
+    if (!result) return [];
+    const available = listSuccessfulReportStores(result);
+    if (available.length === 1) return available;
+    return available.filter((store) => exportStoreIds.has(store.businessId));
+  }
+
+  function exportFileCount() {
+    if (!result) return 0;
+    const stores = listSuccessfulReportStores(result);
+    if (stores.length <= 1) return stores.length;
+    return (exportIncludeCombined ? 1 : 0) + selectedExportStores().length;
   }
 
   function closeExportDialog() {
@@ -373,6 +400,7 @@
   async function exportPDF() {
     if (!result || exportingPDF || loadingItems) return;
     if (exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0) return;
+    if (exportFileCount() === 0) return;
     exportingPDF = true;
     pdfExportCurrent = 0;
     pdfExportTotal = 0;
@@ -381,12 +409,13 @@
     try {
       const directory = await backend.chooseSalesAnalysisPDFDirectory();
       if (!directory) return;
-      const reportStores = listSuccessfulReportStores(result);
-      if (reportStores.length === 0) throw new AppError('pdf_no_stores', 'No successful store is available for PDF export');
+      const availableStores = listSuccessfulReportStores(result);
+      if (availableStores.length === 0) throw new AppError('pdf_no_stores', 'No successful store is available for PDF export');
       const periodKeys = (result.periods ?? []).map((period) => period.key);
       if (periodKeys.length === 0) throw new AppError('pdf_loading', 'Sales analysis items are still loading');
-      const writeStoreFiles = reportStores.length === 1 || !exportCombinedOnly;
-      const writeCombined = reportStores.length > 1;
+      const reportStores = selectedExportStores();
+      const writeStoreFiles = reportStores.length > 0;
+      const writeCombined = availableStores.length > 1 && exportIncludeCombined;
       pdfExportTotal = (writeStoreFiles ? reportStores.length : 0) + (writeCombined ? 1 : 0);
       const reportFrom = result.from;
       const reportTo = result.to;
@@ -989,7 +1018,19 @@
   {#if result && currentPeriod}
     <section class="analysis-results">
       <div class="analysis-toolbar">
-      {#if result.pending}<div class="notice success-notice" role="status"><span class="material-symbols-rounded" aria-hidden="true">sync</span><span>{t('analysis.supplementing')}</span><md-text-button type="button" onclick={() => void cancelAnalysis()} disabled={!operationId || cancelling}>{cancelling ? t('common.loading') : t('common.cancel')}</md-text-button></div>{:else if !result.complete}<div class="notice warning-notice" role="status"><span class="material-symbols-rounded" aria-hidden="true">warning</span><span>{t('analysis.partialResult', { count: result.issues?.length ?? 0 })}</span></div>{/if}
+      {#if result.pending}
+        <section class="analysis-supplement" aria-live="polite">
+          <div class="analysis-supplement-copy">
+            <strong>{t('analysis.supplementing')}</strong>
+            <span>{progress?.periodLabel || progress?.storeLabel ? [progress?.periodLabel, progress?.storeLabel || progress?.storeId].filter(Boolean).join(' · ') : t('analysis.supplementingHint')}</span>
+          </div>
+          <div class="analysis-supplement-meter">
+            <md-linear-progress value={progress?.total ? progress.current / progress.total : 0}></md-linear-progress>
+            <strong>{t('excel.progressCount', { current: progress?.current ?? 0, total: progress?.total ?? 0 })}</strong>
+          </div>
+          <md-outlined-button type="button" onclick={() => void cancelAnalysis()} disabled={!(operationId || result.operationId) || cancelling}>{cancelling ? t('common.loading') : t('common.cancel')}</md-outlined-button>
+        </section>
+      {:else if !result.complete}<div class="notice warning-notice" role="status"><span class="material-symbols-rounded" aria-hidden="true">warning</span><span>{t('analysis.partialResult', { count: result.issues?.length ?? 0 })}</span></div>{/if}
 
       <div class="period-summary" aria-label={t('analysis.periods')}>
         {#each reportPeriods as period}<span class:current={period.key === 'current'}><strong>{period.label}</strong> {period.from} — {period.to}</span>{/each}
@@ -1019,7 +1060,7 @@
           { key: 'products', label: t('analysis.products'), icon: 'inventory_2' },
           { key: 'stores', label: t('analysis.stores'), icon: 'storefront' },
         ] as tab}
-          <button type="button" class:active={activeView === tab.key} role="tab" aria-selected={activeView === tab.key} onclick={() => { activeView = tab.key as ReportView; }}><span class="material-symbols-rounded" aria-hidden="true">{tab.icon}</span>{tab.label}</button>
+          <button type="button" class:active={activeView === tab.key} role="tab" aria-selected={activeView === tab.key} onclick={() => { activeView = tab.key as ReportView; }}><span class="material-symbols-rounded" aria-hidden="true">{tab.icon}</span>{tab.label}{#if result.pending && ((tab.key === 'weekly' && !result.weeks?.length) || (tab.key === 'focus' && !periodByKey(reportPeriods, 'yearAgoNext')) || (tab.key === 'stores' && reportPeriods.length < 2))}<span class="tab-pending">{t('common.loading')}</span>{/if}</button>
         {/each}
       </div>
       </div>
@@ -1229,61 +1270,73 @@
   {/if}
 </section>
 
-{#if exportDialog}
+{#if exportDialog && result}
   <dialog use:modal={{ busy: exportingPDF, onClose: closeExportDialog }} class="app-dialog export-dialog" aria-modal="true" aria-labelledby="export-dialog-title">
     <div class="dialog-header">
-      <div>
-        <h2 id="export-dialog-title">{t('analysis.exportDialogTitle')}</h2>
-        <p class="export-dialog-hint">{t('analysis.exportDialogHint')}</p>
-      </div>
+      <h2 id="export-dialog-title">{t('analysis.exportDialogTitle')}</h2>
       <md-icon-button aria-label={t('common.close')} onclick={closeExportDialog} disabled={exportingPDF}><span class="material-symbols-rounded">close</span></md-icon-button>
     </div>
-    <form onsubmit={(event) => { event.preventDefault(); void exportPDF(); }}>
-      <div class="export-mode" role="radiogroup" aria-label={t('analysis.exportDialogTitle')}>
-        <button type="button" class:active={exportFilter.mode === 'blacklist'} role="radio" aria-checked={exportFilter.mode === 'blacklist'} disabled={exportingPDF} onclick={() => setExportMode('blacklist')}>{t('analysis.exportModeAll')}</button>
-        <button type="button" class:active={exportFilter.mode === 'whitelist'} role="radio" aria-checked={exportFilter.mode === 'whitelist'} disabled={exportingPDF} onclick={() => setExportMode('whitelist')}>{t('analysis.exportModeOnly')}</button>
-      </div>
-      {#if result && listSuccessfulReportStores(result).length > 1}
-        {@const storeCount = listSuccessfulReportStores(result).length}
-        <div class="export-files">
-          <strong>{t('analysis.exportFiles')}</strong>
-          <p class="export-files-hint">{t('analysis.exportFilesHint', { stores: storeCount })}</p>
-          <div class="export-file-cards" role="radiogroup" aria-label={t('analysis.exportFiles')}>
-            <button type="button" class="export-file-card" class:active={exportCombinedOnly} role="radio" aria-checked={exportCombinedOnly} disabled={exportingPDF} onclick={() => { exportCombinedOnly = true; }}>
-              <strong>{t('analysis.exportFilesCombined')}</strong>
-              <span>{t('analysis.exportFilesCombinedHint')}</span>
-            </button>
-            <button type="button" class="export-file-card" class:active={!exportCombinedOnly} role="radio" aria-checked={!exportCombinedOnly} disabled={exportingPDF} onclick={() => { exportCombinedOnly = false; }}>
-              <strong>{t('analysis.exportFilesAll')}</strong>
-              <span>{t('analysis.exportFilesAllHint', { files: storeCount + 1, stores: storeCount })}</span>
-            </button>
+    <form class="export-dialog-body" onsubmit={(event) => { event.preventDefault(); void exportPDF(); }}>
+      <div class="export-dialog-grid">
+        {#if listSuccessfulReportStores(result).length > 1}
+          <section class="export-panel" aria-labelledby="export-files-title">
+            <div class="export-panel-heading">
+              <strong id="export-files-title">{t('analysis.exportFiles')}</strong>
+              <span>{t('analysis.exportFileCount', { count: exportFileCount() })}</span>
+            </div>
+            <label class="export-check">
+              <input type="checkbox" checked={exportIncludeCombined} disabled={exportingPDF} onchange={() => { exportIncludeCombined = !exportIncludeCombined; }} />
+              <span><b>{t('analysis.exportFilesCombined')}</b><small>{t('analysis.exportFilesCombinedHint')}</small></span>
+            </label>
+            <div class="export-stores">
+              <div class="export-categories-heading">
+                <strong>{t('analysis.exportStoreReports')}</strong>
+                <div>
+                  <button type="button" aria-label={t('analysis.exportSelectAllStores')} disabled={exportingPDF} onclick={() => { if (result) exportStoreIds = new Set(listSuccessfulReportStores(result).map((store) => store.businessId)); }}>{t('analysis.selectAll')}</button>
+                  <button type="button" aria-label={t('analysis.exportClearStores')} disabled={exportingPDF} onclick={() => { exportStoreIds = new Set(); }}>{t('analysis.clear')}</button>
+                </div>
+              </div>
+              <div class="export-category-list pane-scroll">
+                {#each listSuccessfulReportStores(result) as store (store.businessId)}
+                  <label><input type="checkbox" checked={exportStoreIds.has(store.businessId)} disabled={exportingPDF} onchange={() => toggleExportStore(store.businessId)} /><span><b>{store.businessId}</b> {store.label}</span></label>
+                {/each}
+              </div>
+            </div>
+          </section>
+        {/if}
+        <section class="export-panel" aria-labelledby="export-content-title">
+          <div class="export-mode" role="radiogroup" aria-label={t('analysis.exportDialogTitle')}>
+            <button type="button" class:active={exportFilter.mode === 'blacklist'} role="radio" aria-checked={exportFilter.mode === 'blacklist'} disabled={exportingPDF} onclick={() => setExportMode('blacklist')}>{t('analysis.exportModeAll')}</button>
+            <button type="button" class:active={exportFilter.mode === 'whitelist'} role="radio" aria-checked={exportFilter.mode === 'whitelist'} disabled={exportingPDF} onclick={() => setExportMode('whitelist')}>{t('analysis.exportModeOnly')}</button>
           </div>
-        </div>
-      {/if}
-      <label class="export-check"><input type="checkbox" checked={exportFilter.excludeZeroGifts} disabled={exportingPDF} onchange={() => { exportFilter = { ...exportFilter, excludeZeroGifts: !exportFilter.excludeZeroGifts }; }} /><span>{t('analysis.exportSkipGifts')}</span></label>
-      <label class="export-check"><input type="checkbox" checked={exportFilter.excludeStamps} disabled={exportingPDF} onchange={() => { exportFilter = { ...exportFilter, excludeStamps: !exportFilter.excludeStamps }; }} /><span>{t('analysis.exportSkipStamps')}</span></label>
-      <div class="export-categories">
-        <div class="export-categories-heading">
-          <strong>{exportFilter.mode === 'whitelist' ? t('analysis.exportKeepCategories') : t('analysis.exportSkipCategories')}</strong>
-          <div>
-            <button type="button" disabled={exportingPDF} onclick={() => { exportFilter = { ...exportFilter, categories: exportCategoryOptions().map((option) => option.id) }; }}>{t('analysis.selectAll')}</button>
-            <button type="button" disabled={exportingPDF} onclick={() => { exportFilter = { ...exportFilter, categories: [] }; }}>{t('analysis.clear')}</button>
+          <label class="export-check"><input type="checkbox" checked={exportFilter.excludeZeroGifts} disabled={exportingPDF} onchange={() => { exportFilter = { ...exportFilter, excludeZeroGifts: !exportFilter.excludeZeroGifts }; }} /><span>{t('analysis.exportSkipGifts')}</span></label>
+          <label class="export-check"><input type="checkbox" checked={exportFilter.excludeStamps} disabled={exportingPDF} onchange={() => { exportFilter = { ...exportFilter, excludeStamps: !exportFilter.excludeStamps }; }} /><span>{t('analysis.exportSkipStamps')}</span></label>
+          <div class="export-categories">
+            <div class="export-categories-heading">
+              <strong id="export-content-title">{exportFilter.mode === 'whitelist' ? t('analysis.exportKeepCategories') : t('analysis.exportSkipCategories')}</strong>
+              <div>
+                <button type="button" disabled={exportingPDF} onclick={() => { exportFilter = { ...exportFilter, categories: exportCategoryOptions().map((option) => option.id) }; }}>{t('analysis.selectAll')}</button>
+                <button type="button" disabled={exportingPDF} onclick={() => { exportFilter = { ...exportFilter, categories: [] }; }}>{t('analysis.clear')}</button>
+              </div>
+            </div>
+            <div class="export-category-list pane-scroll">
+              {#each exportCategoryOptions() as option (option.id)}
+                <label><input type="checkbox" checked={exportFilter.categories.includes(option.id)} disabled={exportingPDF} onchange={() => toggleExportCategory(option.id)} /><span>{option.code ? `${option.code}  ${option.name}` : option.name}</span></label>
+              {:else}
+                <div class="export-category-empty">{t('analysis.noResults')}</div>
+              {/each}
+            </div>
           </div>
-        </div>
-        <div class="export-category-list pane-scroll">
-          {#each exportCategoryOptions() as option (option.id)}
-            <label><input type="checkbox" checked={exportFilter.categories.includes(option.id)} disabled={exportingPDF} onchange={() => toggleExportCategory(option.id)} /><span>{option.code ? `${option.code}  ${option.name}` : option.name}</span></label>
-          {:else}
-            <div class="export-category-empty">{t('analysis.noResults')}</div>
-          {/each}
-        </div>
+        </section>
       </div>
-      {#if exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0}
+      {#if exportFileCount() === 0}
+        <p class="export-dialog-warning">{t('analysis.exportNeedTarget')}</p>
+      {:else if exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0}
         <p class="export-dialog-warning">{t('analysis.exportNeedCategory')}</p>
       {/if}
       <div class="dialog-actions">
         <md-text-button type="button" onclick={closeExportDialog} disabled={exportingPDF}>{t('common.cancel')}</md-text-button>
-        <md-filled-button type="submit" onclick={() => void exportPDF()} disabled={exportingPDF || (exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0)}>{exportingPDF ? t('analysis.exportingPDFProgress', { current: pdfExportCurrent, total: pdfExportTotal }) : t('analysis.exportConfirm')}</md-filled-button>
+        <md-filled-button type="submit" onclick={() => void exportPDF()} disabled={exportingPDF || exportFileCount() === 0 || (exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0)}>{exportingPDF ? t('analysis.exportingPDFProgress', { current: pdfExportCurrent, total: pdfExportTotal }) : t('analysis.exportConfirm')}</md-filled-button>
       </div>
     </form>
   </dialog>
@@ -1445,20 +1498,27 @@
   .ranking-product span, .ranking-values span { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
   .ranking-values { min-width: max-content; justify-items: end; text-align: right; font-variant-numeric: tabular-nums; }
   .ranking-empty { min-height: 120px; display: grid; place-items: center; color: var(--md-sys-color-on-surface-variant); }
-  :global(.export-dialog) { width: min(calc(100% - 32px), 520px); }
-  .export-dialog-hint { margin: 6px 0 0; color: var(--md-sys-color-on-surface-variant); font-size: 13px; line-height: 1.45; }
-  .export-mode { display: grid; gap: 8px; }
-  .export-mode button { min-height: 44px; padding: 8px 12px; cursor: pointer; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; color: var(--md-sys-color-on-surface-variant); background: var(--md-sys-color-surface-container-lowest); font-weight: 650; text-align: left; }
+  .analysis-supplement { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px 16px; padding: 12px 14px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 16px; background: var(--md-sys-color-surface-container-low); }
+  .analysis-supplement-copy { display: grid; gap: 2px; min-width: 0; }
+  .analysis-supplement-copy strong { font-size: 14px; }
+  .analysis-supplement-copy span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .analysis-supplement-meter { display: grid; grid-template-columns: minmax(120px, 1fr) auto; align-items: center; gap: 10px; min-width: 220px; }
+  .analysis-supplement-meter md-linear-progress { width: 100%; --md-linear-progress-track-height: 8px; --md-linear-progress-active-indicator-height: 8px; }
+  .analysis-supplement-meter strong { color: var(--md-sys-color-primary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tab-pending { margin-left: 6px; padding: 1px 6px; border-radius: 999px; color: var(--md-sys-color-on-secondary-container); background: var(--md-sys-color-secondary-container); font-size: 10px; font-weight: 700; }
+  :global(.export-dialog) { width: min(calc(100% - 32px), 760px); }
+  .export-dialog-body { display: grid; gap: 14px; }
+  .export-dialog-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  .export-panel { display: grid; align-content: start; gap: 10px; min-width: 0; }
+  .export-panel-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .export-panel-heading span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .export-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .export-mode button { min-height: 40px; padding: 8px 10px; cursor: pointer; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; color: var(--md-sys-color-on-surface-variant); background: var(--md-sys-color-surface-container-lowest); font-weight: 650; text-align: center; }
   .export-mode button.active { border-color: var(--app-active-border); color: var(--md-sys-color-on-secondary-container); background: var(--md-sys-color-secondary-container); }
-  .export-files { display: grid; gap: 8px; }
-  .export-files > strong { font-size: 14px; }
-  .export-files-hint { margin: 0; color: var(--md-sys-color-on-surface-variant); font-size: 12px; line-height: 1.45; }
-  .export-file-cards { display: grid; gap: 8px; }
-  .export-file-card { display: grid; gap: 4px; min-height: 64px; padding: 12px 14px; cursor: pointer; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 14px; color: var(--md-sys-color-on-surface); background: var(--md-sys-color-surface-container-lowest); text-align: left; }
-  .export-file-card span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; line-height: 1.4; font-weight: 500; }
-  .export-file-card.active { border-color: var(--app-active-border); color: var(--md-sys-color-on-secondary-container); background: var(--md-sys-color-secondary-container); }
-  .export-file-card.active span { color: var(--md-sys-color-on-secondary-container); }
+  .export-stores { overflow: hidden; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 14px; }
   .export-check { display: flex; align-items: flex-start; gap: 10px; font-size: 14px; line-height: 1.4; }
+  .export-check b { display: block; font-weight: 700; }
+  .export-check small { display: block; color: var(--md-sys-color-on-surface-variant); font-size: 12px; }
   .export-check input { width: 18px; height: 18px; margin-top: 1px; accent-color: var(--md-sys-color-primary); }
   .export-categories { overflow: hidden; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 14px; }
   .export-categories-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; background: var(--md-sys-color-surface-container-low); }
@@ -1470,6 +1530,11 @@
   .export-category-list input { width: 18px; height: 18px; accent-color: var(--md-sys-color-primary); }
   .export-category-empty { padding: 18px 8px; color: var(--md-sys-color-on-surface-variant); text-align: center; }
   .export-dialog-warning { margin: 0; color: var(--md-sys-color-error); font-size: 13px; }
+
+  @media (max-width: 720px) {
+    .analysis-supplement { grid-template-columns: 1fr; }
+    .analysis-supplement-meter { min-width: 0; }
+  }
 
   @media (max-width: 1100px) {
     .analysis-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
