@@ -39,6 +39,42 @@ describe('upcoming focus groups', () => {
     expect(groups.some((group) => group.sales.some((product) => product.code === 'X1'))).toBe(false);
   });
 
+  it('matches catalog article codes when any group has codes', () => {
+    const groups = buildFocusGroups([
+      item({ articleCode: 'H1', articleName: '活絡油', category2Code: 'A01', netSalesAmount: 200, netQuantity: 4 }),
+      item({ articleCode: 'H2', articleName: '必理痛', category2Code: 'A01', netSalesAmount: 80, netQuantity: 20 }),
+      item({ articleCode: 'S1', articleName: '面膜', category2Code: 'A02', netSalesAmount: 150, netQuantity: 8 }),
+    ], [
+      item({ articleCode: 'H1', articleName: '活絡油', netSalesAmount: 30, netQuantity: 1 }),
+    ], 10, [
+      { id: 'g-health', name: '保健', codes: ['H1'] },
+      { id: 'g-empty', name: '空組', codes: [] },
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({ id: 'g-health', name: '保健', prefix: '' });
+    expect(groups[0]!.sales.map((product) => product.code)).toEqual(['H1']);
+    expect(groups[0]!.sales[0]).toMatchObject({ currentAmount: 30, currentQuantity: 1 });
+    expect(groups.some((group) => group.id === 'health' || group.id === 'skin')).toBe(false);
+  });
+
+  it('falls back to A01/A02/A03 when the catalog is empty or every group has no codes', () => {
+    const items = [
+      item({ articleCode: 'H1', category2Code: 'A01', netSalesAmount: 200, netQuantity: 4 }),
+      item({ articleCode: 'S1', category2Code: 'A02', netSalesAmount: 150, netQuantity: 8 }),
+    ];
+    expect(buildFocusGroups(items).map((group) => group.id)).toEqual(['health', 'skin']);
+    expect(buildFocusGroups(items, [], 10, []).map((group) => group.id)).toEqual(['health', 'skin']);
+    expect(buildFocusGroups(items, [], 10, [{ id: 'g-empty', name: '空組', codes: [] }]).map((group) => group.id)).toEqual(['health', 'skin']);
+  });
+
+  it('omits a catalog group when none of its codes appear in the rows', () => {
+    const groups = buildFocusGroups([
+      item({ articleCode: 'H1', category2Code: 'A01', netSalesAmount: 200 }),
+    ], [], 10, [{ id: 'g-miss', name: '未命中', codes: ['NOPE'] }]);
+    expect(groups).toEqual([]);
+  });
+
   it('matches Excel-style department prefixes on any category code', () => {
     expect(matchesFocusPrefix(item({ category2Code: 'A0201', category3Code: '' }), 'A02')).toBe(true);
     expect(matchesFocusPrefix(item({ category2Code: 'B05' }), 'A01')).toBe(false);

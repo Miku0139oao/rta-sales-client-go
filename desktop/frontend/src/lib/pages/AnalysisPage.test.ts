@@ -212,6 +212,9 @@ describe('sales analysis page', () => {
     expect(topSales?.querySelector('.top-metrics')).toHaveTextContent('2 件');
     expect(topQuantity?.querySelector('.top-metrics')).toHaveTextContent('2 件');
     expect(topQuantity?.querySelector('.top-metrics')).toHaveTextContent('100.00');
+    await fireEvent.click(screen.getByLabelText('只看我的商品'));
+    expect(topSales).toHaveTextContent('Wipes');
+    await fireEvent.click(screen.getByLabelText('只看我的商品'));
     await confirmExport('all');
     await waitFor(() => expect(writeSalesAnalysisPDF).toHaveBeenCalledTimes(3));
     expect(chooseSalesAnalysisPDFDirectory).toHaveBeenCalledOnce();
@@ -490,5 +493,53 @@ describe('sales analysis page', () => {
     const nextMonthLastYearEnd = new Date(nextMonthLastYear.getFullYear(), nextMonthLastYear.getMonth() + 1, 0);
     expect(periods[4]!.from).toBe(`${nextMonthLastYear.getFullYear()}-${String(nextMonthLastYear.getMonth() + 1).padStart(2, '0')}-01`);
     expect(periods[4]!.to).toBe(`${nextMonthLastYearEnd.getFullYear()}-${String(nextMonthLastYearEnd.getMonth() + 1).padStart(2, '0')}-${String(nextMonthLastYearEnd.getDate()).padStart(2, '0')}`);
+  });
+
+  it('filters overview tops and product rows to catalog codes without changing store KPIs', async () => {
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [{
+        id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
+      }]),
+      ListSalesAnalysisStores: vi.fn(async () => [
+        { businessId: '107', label: '107 - Central' },
+        { businessId: '108', label: '108 - Harbour' },
+      ]),
+      ListManCodeGroups: vi.fn(async () => [
+        { id: 'g-skin', name: '我的護膚', codes: ['552646'] },
+        { id: 'g-empty', name: '空組', codes: [] },
+      ]),
+      RunSalesAnalysis: vi.fn(async () => analysisResult),
+      GetSalesAnalysisItems: vi.fn(async () => ({ periodKey: 'current', dict: [''], rows: [] })),
+      ClearSalesAnalysis: vi.fn(async () => undefined),
+    } });
+    render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
+    await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
+    await fireEvent.click(screen.getByText('開始分析'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
+
+    const topSales = screen.getByRole('heading', { name: '銷售額 Top 15' }).closest('section');
+    expect(topSales).toHaveTextContent('Mask');
+    expect(topSales).toHaveTextContent('Wipes');
+    const transactionKpi = screen.getAllByText('交易次數').find((element) => element.tagName === 'DT');
+    expect(transactionKpi?.parentElement).toHaveTextContent('12');
+    const basketKpi = screen.getAllByText('客單價').find((element) => element.tagName === 'DT');
+    expect(basketKpi?.parentElement).toHaveTextContent('20.00');
+
+    await fireEvent.click(screen.getByLabelText('只看我的商品'));
+    await waitFor(() => expect(topSales).not.toHaveTextContent('Wipes'));
+    expect(topSales).toHaveTextContent('Mask');
+    expect(transactionKpi?.parentElement).toHaveTextContent('12');
+    expect(basketKpi?.parentElement).toHaveTextContent('20.00');
+
+    await fireEvent.click(screen.getByRole('tab', { name: '關注' }));
+    await waitFor(() => expect(screen.getByText('我的護膚')).toBeInTheDocument());
+    expect(screen.queryByText('護膚', { exact: true })).not.toBeInTheDocument();
+    expect(screen.getAllByText('Mask').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Wipes')).not.toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('tab', { name: '商品' }));
+    expect(screen.getByText('Mask')).toBeInTheDocument();
+    expect(screen.queryByText('Wipes')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('只看我的商品')).toBeChecked();
   });
 });

@@ -322,8 +322,15 @@ export interface SalesAnalysisFocusProduct {
 export interface SalesAnalysisFocusGroup {
   id: string;
   prefix: string;
+  name?: string;
   sales?: SalesAnalysisFocusProduct[];
   quantity?: SalesAnalysisFocusProduct[];
+}
+
+export interface ManCodeGroup {
+  id: string;
+  name: string;
+  codes: string[];
 }
 
 export interface SalesAnalysisPeriodMemo {
@@ -419,6 +426,7 @@ export interface BackendApi {
   reorderProfiles(profileIds: string[]): Promise<Profile[]>;
   setProfileEnabled(profileId: string, enabled: boolean): Promise<Profile>;
   listSalesAnalysisStores(profileId: string, simulateStoreCount?: number): Promise<SalesAnalysisStore[]>;
+  listManCodeGroups(): Promise<ManCodeGroup[]>;
   runSalesAnalysis(request: SalesAnalysisRequest): Promise<SalesAnalysisResult>;
   getSalesAnalysisItems(request: SalesAnalysisItemsRequest): Promise<SalesAnalysisPackedItems>;
   getSalesAnalysisReportGlyphs(operationId: string): Promise<string>;

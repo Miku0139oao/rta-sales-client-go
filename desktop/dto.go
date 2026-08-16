@@ -349,6 +349,7 @@ type SalesAnalysisCategoryGroup struct {
 type SalesAnalysisFocusGroup struct {
 	ID       string                      `json:"id"`
 	Prefix   string                      `json:"prefix"`
+	Name     string                      `json:"name,omitempty"`
 	Sales    []SalesAnalysisFocusProduct `json:"sales,omitempty"`
 	Quantity []SalesAnalysisFocusProduct `json:"quantity,omitempty"`
 }

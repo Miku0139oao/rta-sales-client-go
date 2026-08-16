@@ -107,6 +107,17 @@ func (a *App) ListManCodeGroups() ([]ManCodeGroup, error) {
 	return a.mancodes.List()
 }
 
+func (a *App) listedManCodeGroups() []ManCodeGroup {
+	if a == nil || a.mancodes == nil {
+		return nil
+	}
+	groups, err := a.mancodes.List()
+	if err != nil {
+		return nil
+	}
+	return groups
+}
+
 func (a *App) SaveManCodeGroup(request SaveManCodeGroupRequest) (ManCodeGroup, error) {
 	name := strings.TrimSpace(request.Name)
 	if name == "" {

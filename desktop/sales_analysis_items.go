@@ -80,6 +80,9 @@ func (a *App) GetSalesAnalysisReportGlyphs(request OperationRequest) (string, er
 			add(value)
 		}
 	}
+	for _, group := range a.listedManCodeGroups() {
+		add(group.Name)
+	}
 	var builder strings.Builder
 	builder.Grow(len(seen))
 	for character := range seen {

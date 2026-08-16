@@ -14,8 +14,15 @@ export interface FocusProduct {
 export interface FocusGroup {
   id: string;
   prefix: string;
+  name?: string;
   sales: FocusProduct[];
   quantity: FocusProduct[];
+}
+
+export interface FocusCatalogGroup {
+  id: string;
+  name: string;
+  codes: string[];
 }
 
 export const FOCUS_GROUP_PREFIXES = [
@@ -30,10 +37,11 @@ export function buildFocusGroups(
   yearAgoNextItems: SalesAnalysisItem[],
   currentItems: SalesAnalysisItem[] = [],
   topN = TOP_N,
+  catalog: readonly FocusCatalogGroup[] = [],
 ): FocusGroup[] {
   const currentByCode = aggregateProducts(currentItems);
-  return FOCUS_GROUP_PREFIXES.map((group) => {
-    const products = aggregateProducts(yearAgoNextItems.filter((item) => matchesFocusPrefix(item, group.prefix)));
+  return resolveFocusSpecs(catalog).map((group) => {
+    const products = aggregateProducts(yearAgoNextItems.filter((item) => matchesFocusSpec(item, group)));
     const ranked = [...products.values()].map((product) => {
       const current = currentByCode.get(product.code);
       return {
@@ -45,10 +53,22 @@ export function buildFocusGroups(
     return {
       id: group.id,
       prefix: group.prefix,
+      name: group.name || undefined,
       sales: [...ranked].sort(compareFocusSales).slice(0, topN),
       quantity: [...ranked].sort(compareFocusQuantity).slice(0, topN),
     };
   }).filter((group) => group.sales.length > 0 || group.quantity.length > 0);
+}
+
+export function catalogCodeSet(catalog: readonly FocusCatalogGroup[]): Set<string> {
+  const codes = new Set<string>();
+  for (const group of catalog) {
+    for (const code of group.codes ?? []) {
+      const trimmed = code.trim();
+      if (trimmed) codes.add(trimmed);
+    }
+  }
+  return codes;
 }
 
 export function matchesFocusPrefix(item: SalesAnalysisItem, prefix: string): boolean {
@@ -56,6 +76,31 @@ export function matchesFocusPrefix(item: SalesAnalysisItem, prefix: string): boo
   if (department) return department === prefix || department.startsWith(prefix);
   const fallback = item.category3Code?.trim() || item.category4Code?.trim() || '';
   return fallback === prefix || fallback.startsWith(prefix);
+}
+
+interface FocusSpec {
+  id: string;
+  name: string;
+  prefix: string;
+  codes?: Set<string>;
+}
+
+function resolveFocusSpecs(catalog: readonly FocusCatalogGroup[]): FocusSpec[] {
+  const used: FocusSpec[] = [];
+  for (const group of catalog) {
+    const codes = catalogCodeSet([group]);
+    if (codes.size === 0) continue;
+    used.push({ id: group.id, name: group.name, prefix: '', codes });
+  }
+  if (used.length === 0) {
+    return FOCUS_GROUP_PREFIXES.map((group) => ({ id: group.id, name: '', prefix: group.prefix }));
+  }
+  return used;
+}
+
+function matchesFocusSpec(item: SalesAnalysisItem, spec: FocusSpec): boolean {
+  if (spec.codes) return spec.codes.has(item.articleCode.trim());
+  return matchesFocusPrefix(item, spec.prefix);
 }
 
 function aggregateProducts(items: SalesAnalysisItem[]): Map<string, FocusProduct> {

@@ -55,6 +55,7 @@ func (a *App) GetSalesAnalysisReportMemo(request SalesAnalysisReportMemoRequest)
 		filter.mode = "blacklist"
 	}
 	storeID := strings.TrimSpace(request.StoreID)
+	catalog := a.listedManCodeGroups()
 	periods := make([]SalesAnalysisPeriodMemo, 0, len(a.salesResult.Periods))
 	built := make(map[string]periodMemoBuilder, len(a.salesResult.Periods))
 	for _, period := range a.salesResult.Periods {
@@ -71,7 +72,7 @@ func (a *App) GetSalesAnalysisReportMemo(request SalesAnalysisReportMemoRequest)
 			if period.Key != "yearAgoNext" {
 				continue
 			}
-			periods[index].FocusGroups = focusGroupsFromBuilders(next, built["current"])
+			periods[index].FocusGroups = focusGroupsFromBuilders(next, built["current"], catalog)
 		}
 	}
 	return SalesAnalysisReportMemo{Periods: periods}, nil
@@ -338,12 +339,44 @@ func packedCategory(dict []string, row SalesAnalysisPackedRow, level string) (co
 	}
 }
 
-func focusGroupsFromBuilders(yearAgoNext, current periodMemoBuilder) []SalesAnalysisFocusGroup {
-	groups := make([]SalesAnalysisFocusGroup, 0, len(focusGroupPrefixes))
-	for _, spec := range focusGroupPrefixes {
+type focusGroupSpec struct {
+	id     string
+	name   string
+	prefix string
+	codes  map[string]struct{}
+}
+
+func focusGroupSpecs(catalog []ManCodeGroup) []focusGroupSpec {
+	specs := make([]focusGroupSpec, 0, len(catalog))
+	for _, group := range catalog {
+		codes := make(map[string]struct{}, len(group.Codes))
+		for _, code := range group.Codes {
+			code = strings.TrimSpace(code)
+			if code == "" {
+				continue
+			}
+			codes[code] = struct{}{}
+		}
+		if len(codes) == 0 {
+			continue
+		}
+		specs = append(specs, focusGroupSpec{id: group.ID, name: group.Name, codes: codes})
+	}
+	if len(specs) == 0 {
+		for _, spec := range focusGroupPrefixes {
+			specs = append(specs, focusGroupSpec{id: spec.id, prefix: spec.prefix})
+		}
+	}
+	return specs
+}
+
+func focusGroupsFromBuilders(yearAgoNext, current periodMemoBuilder, catalog []ManCodeGroup) []SalesAnalysisFocusGroup {
+	specs := focusGroupSpecs(catalog)
+	groups := make([]SalesAnalysisFocusGroup, 0, len(specs))
+	for _, spec := range specs {
 		ranked := make([]SalesAnalysisFocusProduct, 0)
 		for _, product := range yearAgoNext.products {
-			if !productMatchesFocus(*product, spec.prefix) {
+			if !productMatchesFocusSpec(*product, spec) {
 				continue
 			}
 			live := current.products[product.ID]
@@ -375,9 +408,23 @@ func focusGroupsFromBuilders(yearAgoNext, current periodMemoBuilder) []SalesAnal
 		if len(sales) == 0 && len(quantity) == 0 {
 			continue
 		}
-		groups = append(groups, SalesAnalysisFocusGroup{ID: spec.id, Prefix: spec.prefix, Sales: sales, Quantity: quantity})
+		groups = append(groups, SalesAnalysisFocusGroup{
+			ID: spec.id, Prefix: spec.prefix, Name: spec.name, Sales: sales, Quantity: quantity,
+		})
 	}
 	return groups
+}
+
+func productMatchesFocusSpec(product SalesAnalysisRankedItem, spec focusGroupSpec) bool {
+	if len(spec.codes) > 0 {
+		code := strings.TrimSpace(product.Code)
+		if code == "" {
+			code = strings.TrimSpace(product.ID)
+		}
+		_, ok := spec.codes[code]
+		return ok
+	}
+	return productMatchesFocus(product, spec.prefix)
 }
 
 func productMatchesFocus(product SalesAnalysisRankedItem, prefix string) bool {

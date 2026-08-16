@@ -539,6 +539,7 @@ function periodAccumulatorFromMemo(period: SalesAnalysisPeriodMemo): PeriodAccum
     focusGroups: period.focusGroups?.map((group) => ({
       id: group.id,
       prefix: group.prefix,
+      name: group.name,
       sales: (group.sales ?? []).map((item) => ({
         id: item.id, code: item.code, name: item.name, brand: item.brand ?? '',
         amount: item.amount, quantity: item.quantity,
@@ -1206,11 +1207,25 @@ function drawFocusPage(
     skin: labels.focusSkin,
     pc: labels.focusPC,
   };
+  const usingCatalog = groups.some((group) => Boolean(group.name));
+  const cards: Array<FocusGroup | undefined> = usingCatalog
+    ? groups
+    : FOCUS_GROUP_ORDER.map((id) => groups.find((group) => group.id === id));
   const gap = 4;
   const cardWidth = (277 - gap * 2) / 3;
-  for (let index = 0; index < 3; index += 1) {
-    const group = groups.find((candidate) => candidate.id === FOCUS_GROUP_ORDER[index]);
-    drawFocusGroupCard(doc, 10 + index * (cardWidth + gap), 30, cardWidth, 160, titles[FOCUS_GROUP_ORDER[index]] ?? FOCUS_GROUP_ORDER[index], group, labels);
+  for (let start = 0; start < Math.max(cards.length, 1); start += 3) {
+    if (start > 0) {
+      doc.addPage();
+      drawPageHeader(doc, labels.focusTitle, `${yearAgoNext.from} - ${yearAgoNext.to}`, storeId, storeLabel);
+    }
+    const slice = cards.slice(start, start + 3);
+    const count = usingCatalog ? Math.max(slice.length, 1) : 3;
+    for (let index = 0; index < count; index += 1) {
+      const group = slice[index];
+      const fallbackId = FOCUS_GROUP_ORDER[start + index] ?? group?.id ?? '';
+      const title = group?.name || titles[group?.id ?? fallbackId] || fallbackId;
+      drawFocusGroupCard(doc, 10 + index * (cardWidth + gap), 30, cardWidth, 160, title, group, labels);
+    }
   }
 }
 

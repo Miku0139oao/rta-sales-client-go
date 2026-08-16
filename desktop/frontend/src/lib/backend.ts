@@ -24,6 +24,7 @@ import type {
   SalesAnalysisResult,
   SalesAnalysisStore,
   SalesAnalysisTotals,
+  ManCodeGroup,
   WorkbookScan,
 } from './types';
 import { AppError } from './types';
@@ -59,6 +60,7 @@ let injection: BackendInjection | undefined;
 
 export function configureBackend(next: BackendInjection | undefined): void {
   injection = next;
+  lastArticleNames = {};
 }
 
 function findMethod(names: string[]): AnyMethod | undefined {
@@ -132,6 +134,11 @@ let mockProfiles: Profile[] = [
   { id: 'profile-primary', displayName: '主要帳號', enabled: true, priority: 1, hasCredentials: true, accountHint: 'sa••••01', lastTestStatus: 'success' },
   { id: 'profile-backup', displayName: '備援帳號', enabled: true, priority: 2, hasCredentials: true, accountHint: 'sa••••02', lastTestStatus: 'untested' },
 ];
+let mockManCodeGroups: ManCodeGroup[] = [
+  { id: 'group-health', name: '保健', codes: ['123456', '234567'] },
+  { id: 'group-skin', name: '護膚', codes: ['285627', '552646'] },
+];
+let lastArticleNames: Record<string, string> = {};
 const mockListeners = new Set<(progress: AnalysisProgress) => void>();
 const mockSalesAnalysisListeners = new Set<(progress: SalesAnalysisProgress) => void>();
 const mockSalesAnalysisUpdateListeners = new Set<(result: SalesAnalysisResult) => void>();
@@ -170,6 +177,62 @@ const mockAnalysisItems: SalesAnalysisItem[] = [
     transactionCount: 4, saleQuantity: 6, saleAmount: 239.4, returnTransactionCount: 0, returnQuantity: 0, returnAmount: 0, netQuantity: 6, netSalesAmount: 239.4,
   },
 ];
+
+function rememberArticleNamesFromItems(items?: SalesAnalysisItem[]): void {
+  if (!items) return;
+  for (const item of items) {
+    const code = item.articleCode?.trim();
+    const name = item.articleName?.trim();
+    if (code && name) lastArticleNames[code] = name;
+  }
+}
+
+function rememberArticleNamesFromResult(result: SalesAnalysisResult): void {
+  rememberArticleNamesFromItems(result.items);
+  for (const period of result.periods ?? []) rememberArticleNamesFromItems(period.items);
+}
+
+function rememberArticleNamesFromPacked(packed: SalesAnalysisPackedItems): void {
+  const dict = packed.dict ?? [];
+  for (const row of packed.rows ?? []) {
+    const code = (row.ac === undefined ? '' : dict[row.ac] ?? '').trim();
+    const name = (row.an === undefined ? '' : dict[row.an] ?? '').trim();
+    if (code && name) lastArticleNames[code] = name;
+  }
+}
+
+function cloneManCodeGroup(group: ManCodeGroup): ManCodeGroup {
+  return { ...group, codes: [...group.codes] };
+}
+
+function mockSaveManCodeGroup(request: SaveManCodeGroupRequest): ManCodeGroup {
+  const name = request.name.trim();
+  if (!name) throw new AppError('backend_error', 'group name is required');
+  const current = request.id ? mockManCodeGroups.find((group) => group.id === request.id) : undefined;
+  if (request.id && !current) throw new AppError('backend_error', 'mancode group does not exist');
+  if (mockManCodeGroups.some((group) => group.name === name && group.id !== request.id)) {
+    throw new AppError('backend_error', 'group name already exists');
+  }
+  const saved: ManCodeGroup = {
+    id: current?.id ?? `group-${Date.now()}`,
+    name,
+    codes: current && request.codes === undefined && !request.raw
+      ? [...current.codes]
+      : collectManCodes(request.raw, request.codes),
+  };
+  mockManCodeGroups = current
+    ? mockManCodeGroups.map((group) => group.id === saved.id ? saved : group)
+    : [...mockManCodeGroups, saved];
+  return cloneManCodeGroup(saved);
+}
+
+function mockReplaceManCodeGroupCodes(request: ReplaceManCodeGroupCodesRequest): ManCodeGroup {
+  const index = mockManCodeGroups.findIndex((group) => group.id === request.id);
+  if (index < 0) throw new AppError('backend_error', 'mancode group does not exist');
+  const saved: ManCodeGroup = { ...mockManCodeGroups[index], codes: collectManCodes(request.raw, request.codes) };
+  mockManCodeGroups = mockManCodeGroups.map((group, current) => current === index ? saved : group);
+  return cloneManCodeGroup(saved);
+}
 
 const pause = (duration = 90) => new Promise<void>((resolve) => setTimeout(resolve, duration));
 
@@ -465,6 +528,8 @@ export const backend: BackendApi = {
   listSalesAnalysisStores: (profileId: string, simulateStoreCount = 0) =>
     invoke(['ListSalesAnalysisStores'], [{ profileId, simulateStoreCount }], async () => mockAnalysisStoresFor(simulateStoreCount)),
 
+  listManCodeGroups: () => invoke(['ListManCodeGroups'], [], async (): Promise<ManCodeGroup[]> => []),
+
   runSalesAnalysis: (request: SalesAnalysisRequest) =>
     invoke(['RunSalesAnalysis'], [request], () => mockRunSalesAnalysis(request)),
 
@@ -544,12 +609,16 @@ export const backend: BackendApi = {
   },
 
   onSalesAnalysisUpdate(listener: (result: SalesAnalysisResult) => void): () => void {
+    const wrapped = (result: SalesAnalysisResult) => {
+      rememberArticleNamesFromResult(result);
+      listener(result);
+    };
     const source = eventSource();
     if (!source) {
-      mockSalesAnalysisUpdateListeners.add(listener);
-      return () => mockSalesAnalysisUpdateListeners.delete(listener);
+      mockSalesAnalysisUpdateListeners.add(wrapped);
+      return () => mockSalesAnalysisUpdateListeners.delete(wrapped);
     }
-    const cleanup = source.on('rta:sales-analysis-update', (payload) => listener(payload as SalesAnalysisResult));
+    const cleanup = source.on('rta:sales-analysis-update', (payload) => wrapped(payload as SalesAnalysisResult));
     return () => cleanup?.();
   },
 

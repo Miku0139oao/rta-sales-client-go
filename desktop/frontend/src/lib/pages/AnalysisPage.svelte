@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { backend } from '../backend';
   import { errorMessage } from '../i18n';
-  import { buildFocusGroups, type FocusGroup } from '../analysisFocus';
+  import { buildFocusGroups, catalogCodeSet, type FocusGroup } from '../analysisFocus';
   import { periodKeysForView, unpackSalesAnalysisItems } from '../salesAnalysisItems';
   import { modal } from '../modal';
   import {
@@ -34,6 +34,7 @@
     SalesAnalysisStore,
     SalesAnalysisTotals,
     SalesAnalysisWeek,
+    ManCodeGroup,
   } from '../types';
   import { AppError } from '../types';
 
@@ -100,6 +101,8 @@
   let to = localISODate();
   let activeView: ReportView = 'overview';
   let search = '';
+  let mineOnly = false;
+  let manCodeGroups: ManCodeGroup[] = [];
   let groupLevel: CategoryKey = 'category2';
   let salesRankingKey = 'current';
   let quantityRankingKey = 'current';
@@ -142,7 +145,12 @@
   $: currentPeriod = periodByKey(reportPeriods, 'current') ?? reportPeriods[0];
   $: neededPeriodKeys = periodKeysForView(activeView, [salesRankingKey, quantityRankingKey]);
   $: if (result && !exportingPDF) void ensurePeriodItems(neededPeriodKeys);
-  $: filteredItems = (currentPeriod?.items ?? []).filter((item) => matchesFilters(item, selections, search));
+  $: catalogCodes = catalogCodeSet(manCodeGroups);
+  $: filteredItems = (currentPeriod?.items ?? []).filter((item) => {
+    if (!matchesFilters(item, selections, search)) return false;
+    if (!mineOnly || catalogCodes.size === 0) return true;
+    return catalogCodes.has(item.articleCode.trim());
+  });
   $: currentTotals = totalsForPeriod(currentPeriod, selections, search);
   $: previousTotals = totalsForPeriod(periodByKey(reportPeriods, 'previous'), selections, search);
   $: previous2Totals = totalsForPeriod(periodByKey(reportPeriods, 'previous2'), selections, search);
@@ -163,6 +171,8 @@
     ? buildFocusGroups(
       (focusPeriod?.items ?? []).filter((item) => includeInSalesReport(item) && matchesFilters(item, selections, search)),
       (currentPeriod?.items ?? []).filter((item) => includeInSalesReport(item) && matchesFilters(item, selections, search)),
+      10,
+      manCodeGroups,
     )
     : [];
   $: pageCount = Math.max(1, Math.ceil(filteredItems.length / pageSize));
@@ -200,7 +210,12 @@
     loadingProfiles = true;
     error = '';
     try {
-      profiles = (await backend.listProfiles()).filter((profile) => profile.enabled && profile.hasCredentials);
+      const [listedProfiles, listedGroups] = await Promise.all([
+        backend.listProfiles(),
+        backend.listManCodeGroups().catch(() => [] as ManCodeGroup[]),
+      ]);
+      profiles = listedProfiles.filter((profile) => profile.enabled && profile.hasCredentials);
+      manCodeGroups = listedGroups;
       profileId = profiles[0]?.id ?? '';
       loadedSimulateCount = settings.simulateStoreCount;
       if (profileId) await loadStores();
@@ -559,6 +574,7 @@
   function resetFilters() {
     selections = emptySelections();
     search = '';
+    mineOnly = false;
     groupLevel = 'category2';
     salesRankingKey = 'current';
     quantityRankingKey = 'current';
@@ -579,11 +595,12 @@
     return periods.find((period) => period.key === key);
   }
 
-  function focusGroupLabel(id: string): string {
-    if (id === 'health') return t('analysis.focusHealth');
-    if (id === 'skin') return t('analysis.focusSkin');
-    if (id === 'pc') return t('analysis.focusPC');
-    return id;
+  function focusGroupLabel(group: FocusGroup): string {
+    if (group.name) return group.name;
+    if (group.id === 'health') return t('analysis.focusHealth');
+    if (group.id === 'skin') return t('analysis.focusSkin');
+    if (group.id === 'pc') return t('analysis.focusPC');
+    return group.id;
   }
 
   function categoryValue(item: SalesAnalysisItem, key: CategoryKey): string {
@@ -1048,7 +1065,15 @@
             </details>
           {/each}
         </div>
-        <div class="analysis-search"><span class="material-symbols-rounded" aria-hidden="true">search</span><input aria-label={t('analysis.search')} placeholder={t('analysis.search')} value={search} oninput={changeSearch} />{#if search}<button type="button" aria-label={t('analysis.clear')} onclick={() => { search = ''; page = 1; }}><span class="material-symbols-rounded" aria-hidden="true">close</span></button>{/if}</div>
+        <div class="analysis-filter-tools">
+          <div class="analysis-search"><span class="material-symbols-rounded" aria-hidden="true">search</span><input aria-label={t('analysis.search')} placeholder={t('analysis.search')} value={search} oninput={changeSearch} />{#if search}<button type="button" aria-label={t('analysis.clear')} onclick={() => { search = ''; page = 1; }}><span class="material-symbols-rounded" aria-hidden="true">close</span></button>{/if}</div>
+          {#if activeView === 'overview' || activeView === 'products'}
+            <label class="mine-only-toggle" class:active={mineOnly}>
+              <input type="checkbox" aria-label={t('analysis.mineOnly')} checked={mineOnly} onchange={() => { mineOnly = !mineOnly; page = 1; }} />
+              <span>{t('analysis.mineOnly')}</span>
+            </label>
+          {/if}
+        </div>
       </div>
 
       <div class="report-tabs" role="tablist" aria-label={t('analysis.reportViews')}>
@@ -1169,7 +1194,7 @@
             <div class="focus-grid">
               {#each focusGroups as group (group.id)}
                 <article class="focus-group">
-                  <header><strong>{focusGroupLabel(group.id)}</strong><span>{group.prefix}</span></header>
+                  <header><strong>{focusGroupLabel(group)}</strong>{#if group.prefix}<span>{group.prefix}</span>{/if}</header>
                   <div class="focus-columns">
                     <div>
                       <h3>{t('analysis.focusSales')}</h3>
@@ -1382,6 +1407,11 @@
   .analysis-progress-footer { margin-top: 14px; }
   .analysis-progress-footer > strong { color: var(--md-sys-color-on-surface-variant); font-variant-numeric: tabular-nums; }
   .analysis-filters { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
+  .analysis-filter-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .analysis-filter-tools .analysis-search { flex: 1; min-width: 220px; }
+  .mine-only-toggle { display: flex; min-height: 44px; align-items: center; gap: 8px; padding: 0 12px; cursor: pointer; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; background: var(--md-sys-color-surface-container-lowest); font-weight: 680; white-space: nowrap; }
+  .mine-only-toggle.active { border-color: var(--app-active-border); background: var(--md-sys-color-secondary-container); }
+  .mine-only-toggle input { width: 18px; height: 18px; accent-color: var(--md-sys-color-primary); }
   .facet-row { display: flex; flex-wrap: wrap; gap: 8px; }
   .facet-menu { position: relative; }
   .facet-menu > summary { display: flex; min-height: 44px; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; color: var(--md-sys-color-on-surface-variant); background: var(--md-sys-color-surface-container-lowest); list-style: none; }
