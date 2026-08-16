@@ -27,6 +27,28 @@ describe('Wails backend adapter', () => {
     expect(enable).toHaveBeenCalledWith({ profileId: 'p1', enabled: false });
   });
 
+  it('maps ItemCode catalog methods to the Wails names', async () => {
+    const list = vi.fn(async () => [{ id: 'g1', name: '保健', codes: ['1'] }]);
+    const save = vi.fn(async (request) => ({ id: 'g2', name: request.name, codes: [] }));
+    const replace = vi.fn(async (request) => ({ id: request.id, name: '保健', codes: request.codes }));
+    const remove = vi.fn(async () => undefined);
+    configureBackend({ methods: {
+      ListManCodeGroups: list,
+      SaveManCodeGroup: save,
+      ReplaceManCodeGroupCodes: replace,
+      DeleteManCodeGroup: remove,
+    } });
+
+    await expect(backend.listManCodeGroups()).resolves.toEqual([{ id: 'g1', name: '保健', codes: ['1'] }]);
+    await backend.saveManCodeGroup({ name: '護膚' });
+    await backend.replaceManCodeGroupCodes({ id: 'g1', codes: ['1', '2'] });
+    await backend.deleteManCodeGroup('g1');
+
+    expect(save).toHaveBeenCalledWith({ name: '護膚' });
+    expect(replace).toHaveBeenCalledWith({ id: 'g1', codes: ['1', '2'] });
+    expect(remove).toHaveBeenCalledWith('g1');
+  });
+
   it('subscribes to the current and compatibility progress events', () => {
     const listeners = new Map<string, (payload: unknown) => void>();
     const cleanups: string[] = [];

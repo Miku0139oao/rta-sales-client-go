@@ -1,5 +1,5 @@
 export type Locale = 'zh-TW' | 'en';
-export type Page = 'excel' | 'analysis' | 'accounts' | 'settings';
+export type Page = 'excel' | 'analysis' | 'accounts' | 'itemcodes' | 'settings';
 export type ThemePreference = 'system' | 'light' | 'dark';
 export type ResolvedTheme = Exclude<ThemePreference, 'system'>;
 export type AnalysisStage = 'scan' | 'login' | 'stores' | 'query' | 'preview';
@@ -59,6 +59,25 @@ export interface ProfileUpsertRequest {
 export interface ProfileTestResult {
   success: boolean;
   message?: string;
+}
+
+export interface ManCodeGroup {
+  id: string;
+  name: string;
+  codes: string[];
+}
+
+export interface SaveManCodeGroupRequest {
+  id?: string;
+  name: string;
+  codes?: string[];
+  raw?: string;
+}
+
+export interface ReplaceManCodeGroupCodesRequest {
+  id: string;
+  raw?: string;
+  codes?: string[];
 }
 
 export interface AnalysisProgress {
@@ -426,6 +445,11 @@ export interface BackendApi {
   deleteProfile(profileId: string): Promise<void>;
   reorderProfiles(profileIds: string[]): Promise<Profile[]>;
   setProfileEnabled(profileId: string, enabled: boolean): Promise<Profile>;
+  listManCodeGroups(): Promise<ManCodeGroup[]>;
+  saveManCodeGroup(request: SaveManCodeGroupRequest): Promise<ManCodeGroup>;
+  deleteManCodeGroup(id: string): Promise<void>;
+  replaceManCodeGroupCodes(request: ReplaceManCodeGroupCodesRequest): Promise<ManCodeGroup>;
+  getLatestArticleNames(): Promise<Record<string, string>>;
   listSalesAnalysisStores(profileId: string, simulateStoreCount?: number): Promise<SalesAnalysisStore[]>;
   listManCodeGroups(): Promise<ManCodeGroup[]>;
   runSalesAnalysis(request: SalesAnalysisRequest): Promise<SalesAnalysisResult>;

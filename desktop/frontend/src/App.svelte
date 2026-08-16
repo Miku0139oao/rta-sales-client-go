@@ -3,6 +3,7 @@
   import AccountsPage from './lib/pages/AccountsPage.svelte';
   import AnalysisPage from './lib/pages/AnalysisPage.svelte';
   import ExcelPage from './lib/pages/ExcelPage.svelte';
+  import ItemCodesPage from './lib/pages/ItemCodesPage.svelte';
   import SettingsPage from './lib/pages/SettingsPage.svelte';
   import { translator } from './lib/i18n';
   import { loadSettings, saveSettings } from './lib/settings';
@@ -17,12 +18,13 @@
   let excelBusy = false;
   let analysisBusy = false;
   let accountsBusy = false;
+  let itemcodesBusy = false;
   let mainContent: HTMLElement;
 
   $: t = translator(settings.locale);
   $: resolvedTheme = resolveTheme(settings.theme, systemDark);
   $: applyTheme(resolvedTheme);
-  $: navigationBusy = activePage === 'excel' ? excelBusy : activePage === 'analysis' ? analysisBusy : activePage === 'accounts' ? accountsBusy : false;
+  $: navigationBusy = activePage === 'excel' ? excelBusy : activePage === 'analysis' ? analysisBusy : activePage === 'accounts' ? accountsBusy : activePage === 'itemcodes' ? itemcodesBusy : false;
   $: if (typeof document !== 'undefined') {
     document.documentElement.lang = settings.locale === 'en' ? 'en' : 'zh-Hant';
     document.title = t('app.name');
@@ -32,6 +34,7 @@
     { id: 'excel', icon: 'table_view', label: 'nav.excel' },
     { id: 'analysis', icon: 'query_stats', label: 'nav.analysis' },
     { id: 'accounts', icon: 'manage_accounts', label: 'nav.accounts' },
+    { id: 'itemcodes', icon: 'qr_code_2', label: 'nav.itemcodes' },
     { id: 'settings', icon: 'settings', label: 'nav.settings' },
   ];
 
@@ -156,6 +159,8 @@
         />
       {:else if activePage === 'accounts'}
         <AccountsPage {t} locale={settings.locale} onBusyChange={(busy) => (accountsBusy = busy)} />
+      {:else if activePage === 'itemcodes'}
+        <ItemCodesPage {t} locale={settings.locale} onBusyChange={(busy) => (itemcodesBusy = busy)} />
       {:else}
         <SettingsPage {t} {settings} onChange={updateSettings} onThemeChange={updateThemePreference} />
       {/if}

@@ -20,6 +20,7 @@ describe('desktop application shell', () => {
     expect(screen.getByRole('heading', { name: '從活頁簿開始' })).toBeInTheDocument();
     expect(screen.getAllByText('Excel 填入').length).toBeGreaterThan(0);
     expect(screen.getAllByText('帳號').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('商品代碼').length).toBeGreaterThan(0);
     expect(screen.getAllByText('設定').length).toBeGreaterThan(0);
   });
 

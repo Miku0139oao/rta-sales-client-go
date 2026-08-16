@@ -1,0 +1,149 @@
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { configureBackend } from '../backend';
+import { translator } from '../i18n';
+import type { ManCodeGroup, SaveManCodeGroupRequest } from '../types';
+import ItemCodesPage from './ItemCodesPage.svelte';
+
+const health: ManCodeGroup = { id: 'group-health', name: '保健', codes: ['123456', '234567'] };
+const skin: ManCodeGroup = { id: 'group-skin', name: '護膚', codes: ['552646'] };
+
+function button(container: HTMLElement, label: string): Element {
+  const found = [...container.querySelectorAll('md-filled-button, md-filled-tonal-button, md-outlined-button, md-text-button')]
+    .find((element) => element.textContent?.includes(label));
+  if (!found) throw new Error(`Button not found: ${label}`);
+  return found;
+}
+
+afterEach(() => {
+  cleanup();
+  configureBackend(undefined);
+});
+
+describe('item code management', () => {
+  it('lists groups, expands codes, and shows article names from the latest analysis', async () => {
+    configureBackend({ methods: {
+      ListManCodeGroups: vi.fn(async () => [health, skin]),
+      GetLatestArticleNames: vi.fn(async () => ({ '552646': 'AHC 安瓶精華纖維面膜' })),
+    } });
+    const { container } = render(ItemCodesPage, {
+      props: { t: translator('zh-TW'), locale: 'zh-TW' },
+    });
+
+    await waitFor(() => expect(screen.getByText('保健')).toBeInTheDocument());
+    expect(screen.getByText('2 個代碼')).toBeInTheDocument();
+    expect(screen.getByText('護膚')).toBeInTheDocument();
+    expect(screen.queryByText('552646')).not.toBeInTheDocument();
+
+    await fireEvent.click(container.querySelector('[aria-label="展開 護膚"]')!);
+    await waitFor(() => expect(screen.getByText('552646')).toBeInTheDocument());
+    expect(screen.getByText('AHC 安瓶精華纖維面膜')).toBeInTheDocument();
+  });
+
+  it('shows codes only when no analysis names are available', async () => {
+    configureBackend({ methods: {
+      ListManCodeGroups: vi.fn(async () => [skin]),
+      GetLatestArticleNames: vi.fn(async () => ({})),
+    } });
+    const { container } = render(ItemCodesPage, {
+      props: { t: translator('zh-TW'), locale: 'zh-TW' },
+    });
+    await waitFor(() => expect(screen.getByText('護膚')).toBeInTheDocument());
+    await fireEvent.click(container.querySelector('[aria-label="展開 護膚"]')!);
+    await waitFor(() => expect(screen.getByText('552646')).toBeInTheDocument());
+    expect(screen.queryByText('AHC 安瓶精華纖維面膜')).not.toBeInTheDocument();
+  });
+
+  it('adds, renames, and confirms deleting a group', async () => {
+    let store: ManCodeGroup[] = [health];
+    const save = vi.fn(async (input: unknown) => {
+      const request = input as SaveManCodeGroupRequest;
+      if (request.id) {
+        const updated = { ...store.find((group) => group.id === request.id)!, name: request.name };
+        store = store.map((group) => group.id === updated.id ? updated : group);
+        return updated;
+      }
+      const created = { id: 'group-new', name: request.name, codes: [] };
+      store = [...store, created];
+      return created;
+    });
+    const remove = vi.fn(async () => { store = store.filter((group) => group.id !== health.id); });
+    configureBackend({ methods: {
+      ListManCodeGroups: vi.fn(async () => store),
+      SaveManCodeGroup: save,
+      DeleteManCodeGroup: remove,
+    } });
+    const { container } = render(ItemCodesPage, {
+      props: { t: translator('zh-TW'), locale: 'zh-TW' },
+    });
+    await waitFor(() => expect(screen.getByText('保健')).toBeInTheDocument());
+
+    await fireEvent.click(button(container, '新增組別'));
+    await fireEvent.input(screen.getByLabelText('組別名稱'), { target: { value: '個護' } });
+    await fireEvent.click(button(container, '儲存'));
+    await waitFor(() => expect(screen.getByText('個護')).toBeInTheDocument());
+    expect(save).toHaveBeenCalledWith({ name: '個護' });
+
+    await fireEvent.click(container.querySelector('[aria-label="重新命名 保健"]')!);
+    await fireEvent.input(screen.getByLabelText('組別名稱'), { target: { value: '保健品' } });
+    await fireEvent.click(button(container, '儲存'));
+    await waitFor(() => expect(screen.getByText('保健品')).toBeInTheDocument());
+    expect(save).toHaveBeenLastCalledWith({ id: health.id, name: '保健品' });
+
+    await fireEvent.click(container.querySelector('[aria-label="刪除 保健品"]')!);
+    expect(screen.getByText('刪除組別？')).toBeInTheDocument();
+    await fireEvent.click(button(container, '刪除'));
+    await waitFor(() => expect(screen.queryByText('保健品')).not.toBeInTheDocument());
+    expect(remove).toHaveBeenCalledWith(health.id);
+  });
+
+  it('pastes a batch of codes, skips duplicates, and deletes a single code', async () => {
+    let group: ManCodeGroup = { ...health };
+    const replace = vi.fn(async (input: unknown) => {
+      const request = input as { id: string; codes?: string[] };
+      group = { ...group, codes: request.codes ?? [] };
+      return group;
+    });
+    configureBackend({ methods: {
+      ListManCodeGroups: vi.fn(async () => [group]),
+      ReplaceManCodeGroupCodes: replace,
+    } });
+    const { container } = render(ItemCodesPage, {
+      props: { t: translator('zh-TW'), locale: 'zh-TW' },
+    });
+    await waitFor(() => expect(screen.getByText('保健')).toBeInTheDocument());
+    await fireEvent.click(container.querySelector('[aria-label="展開 保健"]')!);
+    await waitFor(() => expect(screen.getByLabelText('貼上商品代碼')).toBeInTheDocument());
+
+    await fireEvent.input(screen.getByLabelText('貼上商品代碼'), { target: { value: '123456, 999888，888777 999888' } });
+    await fireEvent.click(button(container, '加入代碼'));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith({
+      id: health.id, codes: ['123456', '234567', '999888', '888777'],
+    }));
+    expect(screen.getByText('已略過 2 個重複代碼。')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('999888')).toBeInTheDocument());
+
+    await fireEvent.click(container.querySelector('[aria-label="刪除 234567"]')!);
+    await waitFor(() => expect(replace).toHaveBeenLastCalledWith({
+      id: health.id, codes: ['123456', '999888', '888777'],
+    }));
+    expect(screen.queryByText('234567')).not.toBeInTheDocument();
+  });
+
+  it('filters groups by name or code', async () => {
+    configureBackend({ methods: {
+      ListManCodeGroups: vi.fn(async () => [health, skin]),
+    } });
+    render(ItemCodesPage, { props: { t: translator('zh-TW'), locale: 'zh-TW' } });
+    await waitFor(() => expect(screen.getByText('護膚')).toBeInTheDocument());
+
+    await fireEvent.input(screen.getByLabelText('搜尋組別或代碼'), { target: { value: '護膚' } });
+    expect(screen.getByText('護膚')).toBeInTheDocument();
+    expect(screen.queryByText('保健')).not.toBeInTheDocument();
+
+    await fireEvent.input(screen.getByLabelText('搜尋組別或代碼'), { target: { value: '123456' } });
+    expect(screen.getByText('保健')).toBeInTheDocument();
+    expect(screen.getByText('123456')).toBeInTheDocument();
+    expect(screen.queryByText('護膚')).not.toBeInTheDocument();
+  });
+});
