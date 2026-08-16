@@ -37,6 +37,7 @@ interface StorePeriod {
   topAmount?: RankedItem[];
   topQuantity?: RankedItem[];
   focusGroups?: FocusGroup[];
+  focusCatalog?: boolean;
 }
 
 type AccProduct = RankedItem & { category2Code: string; category3Code: string; category4Code: string };
@@ -45,6 +46,7 @@ interface PeriodAccumulator {
   products: Map<string, AccProduct>;
   categories: Map<string, { id: string; code: string; name: string; amount: number; quantity: number; products: Map<string, RankedItem> }>;
   focusGroups?: FocusGroup[];
+  focusCatalog?: boolean;
 }
 
 export interface SalesReportAccumulator {
@@ -536,21 +538,24 @@ function periodAccumulatorFromMemo(period: SalesAnalysisPeriodMemo): PeriodAccum
   return {
     products,
     categories,
-    focusGroups: period.focusGroups?.map((group) => ({
-      id: group.id,
-      prefix: group.prefix,
-      name: group.name,
-      sales: (group.sales ?? []).map((item) => ({
-        id: item.id, code: item.code, name: item.name, brand: item.brand ?? '',
-        amount: item.amount, quantity: item.quantity,
-        currentAmount: item.currentAmount, currentQuantity: item.currentQuantity,
-      })),
-      quantity: (group.quantity ?? []).map((item) => ({
-        id: item.id, code: item.code, name: item.name, brand: item.brand ?? '',
-        amount: item.amount, quantity: item.quantity,
-        currentAmount: item.currentAmount, currentQuantity: item.currentQuantity,
-      })),
-    })),
+    focusCatalog: period.focusCatalog,
+    focusGroups: period.focusGroups
+      ? period.focusGroups.map((group) => ({
+        id: group.id,
+        prefix: group.prefix,
+        name: group.name,
+        sales: (group.sales ?? []).map((item) => ({
+          id: item.id, code: item.code, name: item.name, brand: item.brand ?? '',
+          amount: item.amount, quantity: item.quantity,
+          currentAmount: item.currentAmount, currentQuantity: item.currentQuantity,
+        })),
+        quantity: (group.quantity ?? []).map((item) => ({
+          id: item.id, code: item.code, name: item.name, brand: item.brand ?? '',
+          amount: item.amount, quantity: item.quantity,
+          currentAmount: item.currentAmount, currentQuantity: item.currentQuantity,
+        })),
+      }))
+      : (period.focusCatalog ? [] : undefined),
   };
 }
 
@@ -639,7 +644,7 @@ function storePeriodMemo(
   periodKey: string,
   uncategorized: string,
   includeFocus = false,
-): Pick<StorePeriod, 'amountGroups' | 'quantityGroups' | 'topAmount' | 'topQuantity' | 'focusGroups'> | undefined {
+): Pick<StorePeriod, 'amountGroups' | 'quantityGroups' | 'topAmount' | 'topQuantity' | 'focusGroups' | 'focusCatalog'> | undefined {
   const period = accumulator.periods.get(periodKey);
   if (!period) return undefined;
   return {
@@ -647,8 +652,9 @@ function storePeriodMemo(
     quantityGroups: groupsFromAccumulator(period, 'quantity', uncategorized),
     topAmount: sortRankedItems([...period.products.values()], 'amount').slice(0, 15),
     topQuantity: sortRankedItems([...period.products.values()], 'quantity').slice(0, 15),
+    focusCatalog: period.focusCatalog,
     focusGroups: period.focusGroups
-      ?? (includeFocus ? focusGroupsFromAccumulator(period, accumulator.periods.get('current')) : undefined),
+      ?? (period.focusCatalog ? [] : (includeFocus ? focusGroupsFromAccumulator(period, accumulator.periods.get('current')) : undefined)),
   };
 }
 
@@ -1192,6 +1198,11 @@ function percentCell(change: number | undefined): { text: string; color: RGB; bo
 
 const FOCUS_GROUP_ORDER = ['health', 'skin', 'pc'] as const;
 
+export function focusReportCards(groups: FocusGroup[], catalog: boolean): Array<FocusGroup | undefined> {
+  if (catalog) return groups;
+  return FOCUS_GROUP_ORDER.map((id) => groups.find((group) => group.id === id));
+}
+
 function drawFocusPage(
   doc: jsPDF,
   yearAgoNext: StorePeriod,
@@ -1201,25 +1212,25 @@ function drawFocusPage(
   labels: Labels,
 ): void {
   drawPageHeader(doc, labels.focusTitle, `${yearAgoNext.from} - ${yearAgoNext.to}`, storeId, storeLabel);
-  const groups = yearAgoNext.focusGroups ?? buildFocusGroups(yearAgoNext.items, current.items, 8);
+  const groups = yearAgoNext.focusGroups
+    ?? (yearAgoNext.focusCatalog ? [] : buildFocusGroups(yearAgoNext.items, current.items, 8));
   const titles: Record<string, string> = {
     health: labels.focusHealth,
     skin: labels.focusSkin,
     pc: labels.focusPC,
   };
-  const usingCatalog = groups.some((group) => Boolean(group.name));
-  const cards: Array<FocusGroup | undefined> = usingCatalog
-    ? groups
-    : FOCUS_GROUP_ORDER.map((id) => groups.find((group) => group.id === id));
+  const usingCatalog = Boolean(yearAgoNext.focusCatalog) || groups.some((group) => Boolean(group.name));
+  const cards = focusReportCards(groups, usingCatalog);
+  if (cards.length === 0) return;
   const gap = 4;
   const cardWidth = (277 - gap * 2) / 3;
-  for (let start = 0; start < Math.max(cards.length, 1); start += 3) {
+  for (let start = 0; start < cards.length; start += 3) {
     if (start > 0) {
       doc.addPage();
       drawPageHeader(doc, labels.focusTitle, `${yearAgoNext.from} - ${yearAgoNext.to}`, storeId, storeLabel);
     }
     const slice = cards.slice(start, start + 3);
-    const count = usingCatalog ? Math.max(slice.length, 1) : 3;
+    const count = usingCatalog ? slice.length : 3;
     for (let index = 0; index < count; index += 1) {
       const group = slice[index];
       const fallbackId = FOCUS_GROUP_ORDER[start + index] ?? group?.id ?? '';

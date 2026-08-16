@@ -323,6 +323,7 @@ type SalesAnalysisPeriodMemo struct {
 	AmountGroups   []SalesAnalysisCategoryGroup `json:"amountGroups,omitempty"`
 	QuantityGroups []SalesAnalysisCategoryGroup `json:"quantityGroups,omitempty"`
 	FocusGroups    []SalesAnalysisFocusGroup    `json:"focusGroups,omitempty"`
+	FocusCatalog   bool                         `json:"focusCatalog,omitempty"`
 }
 
 type SalesAnalysisRankedItem struct {

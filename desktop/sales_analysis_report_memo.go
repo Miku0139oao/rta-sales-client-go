@@ -36,6 +36,7 @@ func (a *App) GetSalesAnalysisReportMemo(request SalesAnalysisReportMemoRequest)
 	if operationID == "" {
 		return SalesAnalysisReportMemo{}, errors.New("operationId is required")
 	}
+	catalog := a.listedManCodeGroups()
 	a.salesResultMu.Lock()
 	defer a.salesResultMu.Unlock()
 	if a.salesResult == nil || a.salesResult.OperationID != operationID {
@@ -55,7 +56,6 @@ func (a *App) GetSalesAnalysisReportMemo(request SalesAnalysisReportMemoRequest)
 		filter.mode = "blacklist"
 	}
 	storeID := strings.TrimSpace(request.StoreID)
-	catalog := a.listedManCodeGroups()
 	periods := make([]SalesAnalysisPeriodMemo, 0, len(a.salesResult.Periods))
 	built := make(map[string]periodMemoBuilder, len(a.salesResult.Periods))
 	for _, period := range a.salesResult.Periods {
@@ -73,6 +73,7 @@ func (a *App) GetSalesAnalysisReportMemo(request SalesAnalysisReportMemoRequest)
 				continue
 			}
 			periods[index].FocusGroups = focusGroupsFromBuilders(next, built["current"], catalog)
+			periods[index].FocusCatalog = catalogFocusActive(catalog)
 		}
 	}
 	return SalesAnalysisReportMemo{Periods: periods}, nil
@@ -344,6 +345,17 @@ type focusGroupSpec struct {
 	name   string
 	prefix string
 	codes  map[string]struct{}
+}
+
+func catalogFocusActive(catalog []ManCodeGroup) bool {
+	for _, group := range catalog {
+		for _, code := range group.Codes {
+			if strings.TrimSpace(code) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func focusGroupSpecs(catalog []ManCodeGroup) []focusGroupSpec {

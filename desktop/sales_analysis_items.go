@@ -38,6 +38,7 @@ func (a *App) GetSalesAnalysisItems(request SalesAnalysisItemsRequest) (SalesAna
 // the report font without sending article rows to the webview.
 func (a *App) GetSalesAnalysisReportGlyphs(request OperationRequest) (string, error) {
 	operationID := strings.TrimSpace(request.OperationID)
+	catalog := a.listedManCodeGroups()
 	a.salesResultMu.Lock()
 	defer a.salesResultMu.Unlock()
 	if a.salesResult == nil || (operationID != "" && a.salesResult.OperationID != operationID) {
@@ -80,7 +81,7 @@ func (a *App) GetSalesAnalysisReportGlyphs(request OperationRequest) (string, er
 			add(value)
 		}
 	}
-	for _, group := range a.listedManCodeGroups() {
+	for _, group := range catalog {
 		add(group.Name)
 	}
 	var builder strings.Builder

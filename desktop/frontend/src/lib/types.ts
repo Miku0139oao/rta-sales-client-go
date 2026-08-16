@@ -340,6 +340,7 @@ export interface SalesAnalysisPeriodMemo {
   amountGroups?: SalesAnalysisCategoryGroup[];
   quantityGroups?: SalesAnalysisCategoryGroup[];
   focusGroups?: SalesAnalysisFocusGroup[];
+  focusCatalog?: boolean;
 }
 
 export interface SalesAnalysisReportMemo {

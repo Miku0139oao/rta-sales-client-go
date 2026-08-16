@@ -48,7 +48,11 @@ func TestGetSalesAnalysisReportMemoKeepsOneStoreAndDropsZeroGifts(t *testing.T) 
 
 func TestGetSalesAnalysisReportMemoFocusGroupsFallbackToPrefixes(t *testing.T) {
 	memo := reportMemoWithFocusCatalog(t, &App{})
-	groups := yearAgoNextFocusGroups(memo)
+	period := yearAgoNextMemo(memo)
+	if period.FocusCatalog {
+		t.Fatalf("empty catalog should not set focusCatalog: %#v", period)
+	}
+	groups := period.FocusGroups
 	if len(groups) != 2 || groups[0].ID != "health" || groups[0].Prefix != "A01" || groups[1].ID != "skin" {
 		t.Fatalf("fallback groups=%#v", groups)
 	}
@@ -70,7 +74,11 @@ func TestGetSalesAnalysisReportMemoFocusGroupsUseCatalogCodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	memo := reportMemoWithFocusCatalog(t, app)
-	groups := yearAgoNextFocusGroups(memo)
+	period := yearAgoNextMemo(memo)
+	if !period.FocusCatalog {
+		t.Fatalf("catalog memo should set focusCatalog: %#v", period)
+	}
+	groups := period.FocusGroups
 	if len(groups) != 1 || groups[0].ID != created.ID || groups[0].Name != "保健" {
 		t.Fatalf("catalog groups=%#v", groups)
 	}
@@ -85,9 +93,28 @@ func TestGetSalesAnalysisReportMemoFocusGroupsEmptyCatalogGroupsFallback(t *test
 		t.Fatal(err)
 	}
 	memo := reportMemoWithFocusCatalog(t, app)
-	groups := yearAgoNextFocusGroups(memo)
+	period := yearAgoNextMemo(memo)
+	if period.FocusCatalog {
+		t.Fatalf("empty-code catalog should not set focusCatalog: %#v", period)
+	}
+	groups := period.FocusGroups
 	if len(groups) != 2 || groups[0].ID != "health" || groups[1].ID != "skin" {
 		t.Fatalf("empty-code catalog should keep prefixes: %#v", groups)
+	}
+}
+
+func TestGetSalesAnalysisReportMemoFocusGroupsCatalogMissStaysEmpty(t *testing.T) {
+	app, _, _ := newTestApp(t, new(fakeEngine), fakeClients{})
+	if _, err := app.SaveManCodeGroup(SaveManCodeGroupRequest{Name: "未命中", Codes: []string{"NOPE"}}); err != nil {
+		t.Fatal(err)
+	}
+	memo := reportMemoWithFocusCatalog(t, app)
+	period := yearAgoNextMemo(memo)
+	if !period.FocusCatalog {
+		t.Fatalf("catalog miss should still mark focusCatalog: %#v", period)
+	}
+	if len(period.FocusGroups) != 0 {
+		t.Fatalf("catalog miss should not resurrect prefixes: %#v", period.FocusGroups)
 	}
 }
 
@@ -127,11 +154,11 @@ func reportMemoWithFocusCatalog(t *testing.T, app *App) SalesAnalysisReportMemo 
 	return memo
 }
 
-func yearAgoNextFocusGroups(memo SalesAnalysisReportMemo) []SalesAnalysisFocusGroup {
+func yearAgoNextMemo(memo SalesAnalysisReportMemo) SalesAnalysisPeriodMemo {
 	for _, period := range memo.Periods {
 		if period.Key == "yearAgoNext" {
-			return period.FocusGroups
+			return period
 		}
 	}
-	return nil
+	return SalesAnalysisPeriodMemo{}
 }

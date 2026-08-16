@@ -8,6 +8,7 @@ import {
   categoryCardRowMetrics,
   categoryRankingCardSlots,
   createSalesReportAccumulator,
+  focusReportCards,
   generateSalesAnalysisPDF,
   listSuccessfulReportStores,
   prepareSalesAnalysisFont,
@@ -285,5 +286,59 @@ describe('sales analysis PDF', () => {
     expect(six[0]?.height).toBe(six[3]?.height);
     expect(categoryCardRowMetrics(166).limit).toBeGreaterThan(15);
     expect(categoryCardRowMetrics(81).limit).toBeGreaterThanOrEqual(15);
+  });
+
+  it('keeps catalog focus cards named and does not reserve Health/Skin/PC slots', () => {
+    const named = (id: string, name: string) => ({
+      id, prefix: '', name, sales: [], quantity: [],
+    });
+    const four = [named('g1', 'Alpha'), named('g2', 'Beta'), named('g3', 'Gamma'), named('g4', 'Delta')];
+    expect(focusReportCards(four, true).map((group) => group?.name)).toEqual(['Alpha', 'Beta', 'Gamma', 'Delta']);
+    expect(focusReportCards([named('g1', 'Alpha')], true)).toHaveLength(1);
+    expect(focusReportCards([], true)).toEqual([]);
+    expect(focusReportCards([], false).map((group) => group?.id)).toEqual([undefined, undefined, undefined]);
+    const fromMemo = salesReportAccumulatorFromMemo({
+      periods: [{
+        key: 'yearAgoNext',
+        focusCatalog: true,
+        focusGroups: [],
+      }],
+    });
+    expect(fromMemo.periods.get('yearAgoNext')).toMatchObject({ focusCatalog: true, focusGroups: [] });
+  });
+
+  it('paginates catalog focus groups and stays empty when none match', async () => {
+    const result = resultFixture();
+    const fontBase64 = await reportFont(result);
+    const named = (id: string, name: string) => ({
+      id, prefix: '', name,
+      sales: [{ id: 'x', code: 'x', name: 'Item', brand: '', amount: 1, quantity: 1, currentAmount: 0, currentQuantity: 0 }],
+      quantity: [],
+    });
+    const withGroups = async (groups: ReturnType<typeof named>[], catalog: boolean) => {
+      const accumulator = createSalesReportAccumulator();
+      for (const period of result.periods ?? []) {
+        addSalesReportPeriodItems(accumulator, period.key, period.items ?? [], defaultSalesReportFilter(), 'category2');
+      }
+      const next = accumulator.periods.get('yearAgoNext');
+      if (next) {
+        next.focusCatalog = catalog;
+        next.focusGroups = groups;
+      }
+      const slim = {
+        ...result,
+        items: undefined,
+        periods: (result.periods ?? []).map((period) => ({ ...period, items: undefined })),
+      };
+      return generateSalesAnalysisPDF(slim, '107', 'category2', 'en', defaultSalesReportFilter(), fontBase64, accumulator);
+    };
+    const fourPages = new TextDecoder('latin1').decode(await withGroups([
+      named('g1', 'Alpha'), named('g2', 'Beta'), named('g3', 'Gamma'), named('g4', 'Delta'),
+    ], true));
+    expect(fourPages.match(/\/Type \/Page\b/g)).toHaveLength(10);
+    const onePages = new TextDecoder('latin1').decode(await withGroups([named('g1', 'Alpha')], true));
+    expect(onePages.match(/\/Type \/Page\b/g)).toHaveLength(9);
+    const missPages = new TextDecoder('latin1').decode(await withGroups([], true));
+    expect(missPages.match(/\/Type \/Page\b/g)).toHaveLength(9);
   });
 });
