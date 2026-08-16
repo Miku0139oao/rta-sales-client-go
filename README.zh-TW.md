@@ -2,7 +2,7 @@
 
 [English](README.md) | 繁體中文
 
-這是給 **主管** 看門店、出報告、把數字填進公司 Excel 用的 **Windows 桌面程式**。  
+這是用來看門店、出報告、把數字填進公司 Excel 的 **Windows 桌面程式**。  
 裝好之後用滑鼠操作即可，**不用寫程式、不用開命令列**。
 
 它可以幫你：
@@ -37,7 +37,7 @@
 
 兩分鐘畫面教學（不用聲音，看字幕即可）：
 
-[教學影片](https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.2.0/RTA-Sales-Analyzer-tutorial.mp4)
+[使用教學](https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.2.0/RTA-Sales-Analyzer-tutorial.mp4)
 
 ### 另外兩個檔是什麼
 
@@ -78,7 +78,7 @@
 
 ## 銷售分析
 
-適合：看這個月賣得怎麼樣、跟去年比、匯出給主管的 PDF。
+適合：看這個月賣得怎麼樣、跟去年比、匯出 PDF。
 
 1. 左邊選 **「銷售分析」**。
 2. 選一本已啟用的帳號。

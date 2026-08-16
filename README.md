@@ -2,7 +2,7 @@
 
 English | [繁體中文](README.zh-TW.md)
 
-A **Windows desktop app for managers**: review stores, export a meeting PDF, and fill the company Excel file.  
+A **Windows desktop app** to review stores, export a meeting PDF, and fill the company Excel file.  
 After install you only need the mouse. **No programming and no command line.**
 
 It can:
@@ -37,7 +37,7 @@ Only one window can run at a time. If a click seems to do nothing, check the tas
 
 A two-minute silent walkthrough with captions:
 
-[Tutorial video](https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.2.0/RTA-Sales-Analyzer-tutorial.mp4)
+[Usage tutorial](https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.2.0/RTA-Sales-Analyzer-tutorial.mp4)
 
 ### The other files
 
@@ -78,7 +78,7 @@ Deleting an account also deletes its password.
 
 ## Sales analysis
 
-Use this to review a month, compare it with last year, and export PDFs for a manager.
+Use this to review a month, compare it with last year, and export PDFs.
 
 1. Open **Sales analysis**.
 2. Pick an enabled account.

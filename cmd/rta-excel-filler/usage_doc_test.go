@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestUsageDocMatchesShippedManagerFlow(t *testing.T) {
+func TestUsageDocMatchesShippedUsageFlow(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locate test file")
@@ -20,7 +20,7 @@ func TestUsageDocMatchesShippedManagerFlow(t *testing.T) {
 	}
 	text := string(raw)
 	for _, needle := range []string{
-		"主管",
+		"使用教學",
 		"怎麼安裝",
 		"第一次使用：先加帳號",
 		"銷售分析",
@@ -33,7 +33,7 @@ func TestUsageDocMatchesShippedManagerFlow(t *testing.T) {
 		"RTA 銷售分析",
 	} {
 		if !strings.Contains(text, needle) {
-			t.Errorf("README.zh-TW.md must tell managers about %q", needle)
+			t.Errorf("README.zh-TW.md must mention %q", needle)
 		}
 	}
 	for _, banned := range []string{"拖曳", "點點拖曳", "Drag the handle"} {
