@@ -21,6 +21,7 @@ const progressEventName = "rta:progress"
 
 type appDependencies struct {
 	profiles    profileRepository
+	mancodes    manCodeRepository
 	credentials securestore.CredentialStore
 	cookies     profileCookieStore
 	clients     clientFactory
@@ -34,6 +35,7 @@ type appDependencies struct {
 // and workbook preview values remain exclusively in this process.
 type App struct {
 	profiles    profileRepository
+	mancodes    manCodeRepository
 	credentials securestore.CredentialStore
 	cookies     profileCookieStore
 	clients     clientFactory
@@ -46,6 +48,7 @@ type App struct {
 	contextMu              sync.RWMutex
 	ctx                    context.Context
 	profileMu              sync.Mutex
+	manCodeMu              sync.Mutex
 	operationMu            sync.Mutex
 	active                 *operationState
 	profileMutationRunning bool
@@ -74,13 +77,14 @@ type operationState struct {
 }
 
 func newApp(dependencies appDependencies) (*App, error) {
-	if dependencies.profiles == nil || dependencies.credentials == nil || dependencies.cookies == nil ||
-		dependencies.clients == nil || dependencies.engine == nil || dependencies.dialogs == nil ||
-		dependencies.events == nil || dependencies.runtime == nil {
+	if dependencies.profiles == nil || dependencies.mancodes == nil || dependencies.credentials == nil ||
+		dependencies.cookies == nil || dependencies.clients == nil || dependencies.engine == nil ||
+		dependencies.dialogs == nil || dependencies.events == nil || dependencies.runtime == nil {
 		return nil, errors.New("desktop backend dependencies are incomplete")
 	}
 	return &App{
 		profiles:    dependencies.profiles,
+		mancodes:    dependencies.mancodes,
 		credentials: dependencies.credentials,
 		cookies:     dependencies.cookies,
 		clients:     dependencies.clients,

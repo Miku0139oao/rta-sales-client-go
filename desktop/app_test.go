@@ -252,9 +252,13 @@ func newTestApp(t *testing.T, engine batchEngine, clients clientFactory) (*App, 
 	if err != nil {
 		t.Fatal(err)
 	}
+	mancodes, err := NewFileManCodeRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	events := new(fakeEvents)
 	app, err := newApp(appDependencies{
-		profiles: repository, credentials: securestore.NewMemoryCredentialStore(),
+		profiles: repository, mancodes: mancodes, credentials: securestore.NewMemoryCredentialStore(),
 		cookies: new(fakeCookies), clients: clients, engine: engine,
 		dialogs: new(fakeDialogs), events: events, runtime: fakeRuntime{},
 	})
@@ -416,12 +420,16 @@ func TestProfileUpdateReportsMetadataAndCredentialRollbackFailures(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	mancodes, err := NewFileManCodeRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	repository := &replaceFailRepository{delegate: fileRepository, err: metadataErr}
 	credentials := &failNthPutCredentialStore{
 		delegate: securestore.NewMemoryCredentialStore(), failPutAt: 3, err: rollbackErr,
 	}
 	app, err := newApp(appDependencies{
-		profiles: repository, credentials: credentials, cookies: new(fakeCookies),
+		profiles: repository, mancodes: mancodes, credentials: credentials, cookies: new(fakeCookies),
 		clients: fakeClients{byAccount: map[string]accountClient{}}, engine: new(fakeEngine),
 		dialogs: new(fakeDialogs), events: new(fakeEvents), runtime: fakeRuntime{},
 	})
@@ -444,7 +452,12 @@ func TestProfileUpdateReportsMetadataAndCredentialRollbackFailures(t *testing.T)
 }
 
 func TestProfileMutationBlocksAccountAndWorkbookOperations(t *testing.T) {
-	fileRepository, err := NewFileProfileRepository(t.TempDir())
+	root := t.TempDir()
+	fileRepository, err := NewFileProfileRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mancodes, err := NewFileManCodeRepository(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +465,7 @@ func TestProfileMutationBlocksAccountAndWorkbookOperations(t *testing.T) {
 		delegate: fileRepository, started: make(chan struct{}), release: make(chan struct{}),
 	}
 	app, err := newApp(appDependencies{
-		profiles: repository, credentials: securestore.NewMemoryCredentialStore(), cookies: new(fakeCookies),
+		profiles: repository, mancodes: mancodes, credentials: securestore.NewMemoryCredentialStore(), cookies: new(fakeCookies),
 		clients: fakeClients{byAccount: map[string]accountClient{
 			"account-one": &fakeAccountClient{stores: []rtasales.Store{{BusinessID: "store-one"}}},
 		}},
@@ -502,7 +515,12 @@ func TestProfileMutationBlocksAccountAndWorkbookOperations(t *testing.T) {
 
 func TestDeleteProfileRestoresSecretsWhenMetadataUpdateFails(t *testing.T) {
 	metadataErr := errors.New("injected metadata failure")
-	fileRepository, err := NewFileProfileRepository(t.TempDir())
+	root := t.TempDir()
+	fileRepository, err := NewFileProfileRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mancodes, err := NewFileManCodeRepository(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,7 +528,7 @@ func TestDeleteProfileRestoresSecretsWhenMetadataUpdateFails(t *testing.T) {
 	credentials := securestore.NewMemoryCredentialStore()
 	cookies := new(fakeCookies)
 	app, err := newApp(appDependencies{
-		profiles: repository, credentials: credentials, cookies: cookies,
+		profiles: repository, mancodes: mancodes, credentials: credentials, cookies: cookies,
 		clients: fakeClients{byAccount: map[string]accountClient{}}, engine: new(fakeEngine),
 		dialogs: new(fakeDialogs), events: new(fakeEvents), runtime: fakeRuntime{},
 	})

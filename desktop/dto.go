@@ -446,3 +446,22 @@ type SalesAnalysisProgress struct {
 	PeriodLabel string `json:"periodLabel,omitempty"`
 	Status      string `json:"status,omitempty"`
 }
+
+type ManCodeGroup struct {
+	ID    string   `json:"id"`
+	Name  string   `json:"name"`
+	Codes []string `json:"codes"`
+}
+
+type SaveManCodeGroupRequest struct {
+	ID    string   `json:"id"`
+	Name  string   `json:"name"`
+	Codes []string `json:"codes,omitempty"`
+	Raw   string   `json:"raw,omitempty"`
+}
+
+type ReplaceManCodeGroupCodesRequest struct {
+	ID    string   `json:"id"`
+	Raw   string   `json:"raw,omitempty"`
+	Codes []string `json:"codes,omitempty"`
+}

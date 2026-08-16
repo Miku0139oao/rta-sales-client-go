@@ -15,8 +15,12 @@ func NewNativeApp() (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	mancodes, err := NewFileManCodeRepository(native.Root)
+	if err != nil {
+		return nil, err
+	}
 	return newApp(appDependencies{
-		profiles: profiles, credentials: native.Credentials,
+		profiles: profiles, mancodes: mancodes, credentials: native.Credentials,
 		cookies: nativeCookieStore{native: native}, clients: rtaClientFactory{},
 		engine: newXLSXEngine(), dialogs: wailsDialogService{}, events: wailsEventSink{},
 		runtime: nativeRuntimeChecker{},
