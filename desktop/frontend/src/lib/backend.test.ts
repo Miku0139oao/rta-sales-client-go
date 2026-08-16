@@ -49,6 +49,29 @@ describe('Wails backend adapter', () => {
     expect(remove).toHaveBeenCalledWith('g1');
   });
 
+  it('reads latest article names from the in-memory analysis cache', async () => {
+    const remote = vi.fn(async () => ({ '999': 'should not be used' }));
+    configureBackend({ methods: {
+      GetLatestArticleNames: remote,
+      RunSalesAnalysis: vi.fn(async () => ({
+        operationId: 'op1', from: '2026-08-01', to: '2026-08-14', complete: true,
+        selectedStores: 1, successfulStores: 1, queryDurationMs: 1,
+        totals: { saleQuantity: 0, saleAmount: 0, returnQuantity: 0, returnAmount: 0, netQuantity: 0, netSalesAmount: 0 },
+        stores: [],
+        items: [{
+          storeId: '107', storeLabel: '107', category1: '', category2: '', category3: '', category4: '', category5: '',
+          articleCode: '552646', articleName: 'AHC 安瓶精華纖維面膜',
+          transactionCount: 1, saleQuantity: 1, saleAmount: 1, returnQuantity: 0, returnTransactionCount: 0,
+          returnAmount: 0, netQuantity: 1, netSalesAmount: 1,
+        }],
+      })),
+    } });
+
+    await backend.runSalesAnalysis({ storeIds: ['107'], concurrency: 1 });
+    await expect(backend.getLatestArticleNames()).resolves.toEqual({ '552646': 'AHC 安瓶精華纖維面膜' });
+    expect(remote).not.toHaveBeenCalled();
+  });
+
   it('subscribes to the current and compatibility progress events', () => {
     const listeners = new Map<string, (payload: unknown) => void>();
     const cleanups: string[] = [];

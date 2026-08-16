@@ -15,13 +15,21 @@ afterEach(() => {
 });
 
 describe('desktop application shell', () => {
-  it('starts in Traditional Chinese with the three primary destinations', () => {
+  it('starts in Traditional Chinese with the five primary destinations', () => {
     render(App);
     expect(screen.getByRole('heading', { name: '從活頁簿開始' })).toBeInTheDocument();
     expect(screen.getAllByText('Excel 填入').length).toBeGreaterThan(0);
     expect(screen.getAllByText('帳號').length).toBeGreaterThan(0);
     expect(screen.getAllByText('商品代碼').length).toBeGreaterThan(0);
     expect(screen.getAllByText('設定').length).toBeGreaterThan(0);
+  });
+
+  it('opens the ItemCode page from the nav and lists the mock groups', async () => {
+    render(App);
+    await fireEvent.click(screen.getAllByRole('button', { name: /商品代碼/ })[0]);
+    await waitFor(() => expect(screen.getByRole('heading', { name: '商品代碼' })).toBeInTheDocument());
+    expect(screen.getByText('保健')).toBeInTheDocument();
+    expect(screen.getByText('護膚')).toBeInTheDocument();
   });
 
   it('opens and scans an xlsx workbook with the file range selected', async () => {

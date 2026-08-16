@@ -67,6 +67,10 @@ export function configureBackend(next: BackendInjection | undefined): void {
   lastArticleNames = {};
 }
 
+export function setLatestArticleNames(names: Record<string, string>): void {
+  lastArticleNames = { ...names };
+}
+
 function findMethod(names: string[]): AnyMethod | undefined {
   if (injection?.methods) {
     for (const name of names) {
@@ -542,7 +546,7 @@ export const backend: BackendApi = {
   replaceManCodeGroupCodes: (request: ReplaceManCodeGroupCodesRequest) =>
     invoke(['ReplaceManCodeGroupCodes'], [request], async () => mockReplaceManCodeGroupCodes(request)),
 
-  getLatestArticleNames: () => invoke(['GetLatestArticleNames'], [], async () => ({ ...lastArticleNames })),
+  getLatestArticleNames: async () => ({ ...lastArticleNames }),
 
   listSalesAnalysisStores: (profileId: string, simulateStoreCount = 0) =>
     invoke(['ListSalesAnalysisStores'], [{ profileId, simulateStoreCount }], async () => mockAnalysisStoresFor(simulateStoreCount)),

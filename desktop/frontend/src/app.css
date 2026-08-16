@@ -1963,6 +1963,7 @@ th.proposed-column {
   }
 
   .itemcode-card .profile-actions {
+    grid-column: 1 / -1;
     justify-content: flex-end;
   }
 

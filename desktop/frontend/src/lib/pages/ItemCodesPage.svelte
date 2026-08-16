@@ -34,6 +34,21 @@
   $: visibleGroups = query
     ? groups.filter((group) => group.name.toLowerCase().includes(query) || group.codes.some((code) => code.toLowerCase().includes(query)))
     : groups;
+  $: expandGroupsMatchingQuery(query, groups);
+
+  let appliedSearchExpand = '';
+
+  function expandGroupsMatchingQuery(nextQuery: string, nextGroups: ManCodeGroup[]) {
+    const key = `${nextQuery}\0${nextGroups.map((group) => group.id).join(',')}`;
+    if (key === appliedSearchExpand) return;
+    appliedSearchExpand = key;
+    if (!nextQuery) return;
+    const next = new Set(expandedIds);
+    for (const group of nextGroups) {
+      if (group.codes.some((code) => code.toLowerCase().includes(nextQuery))) next.add(group.id);
+    }
+    expandedIds = next;
+  }
 
   onMount(() => {
     void load();
@@ -43,13 +58,16 @@
     loading = true;
     error = '';
     try {
-      const [listed, names] = await Promise.all([backend.listManCodeGroups(), backend.getLatestArticleNames()]);
-      groups = listed;
-      articleNames = names;
+      groups = await backend.listManCodeGroups();
     } catch (caught) {
       error = errorMessage(locale, caught);
     } finally {
       loading = false;
+    }
+    try {
+      articleNames = await backend.getLatestArticleNames();
+    } catch {
+      articleNames = {};
     }
   }
 
@@ -175,13 +193,16 @@
       added.push(code);
     }
     duplicateNotice = skipped ? t('itemcodes.duplicateNotice', { count: skipped }) : '';
-    pasteDrafts = { ...pasteDrafts, [group.id]: '' };
-    if (added.length === 0) return;
+    if (added.length === 0) {
+      pasteDrafts = { ...pasteDrafts, [group.id]: '' };
+      return;
+    }
     codesBusyId = group.id;
     error = '';
     try {
       const saved = await backend.replaceManCodeGroupCodes({ id: group.id, codes: [...group.codes, ...added] });
       groups = groups.map((candidate) => candidate.id === saved.id ? saved : candidate);
+      pasteDrafts = { ...pasteDrafts, [group.id]: '' };
     } catch (caught) {
       error = errorMessage(locale, caught);
     } finally {
@@ -255,7 +276,7 @@
   {:else}
     <ol class="itemcode-list" aria-label={t('itemcodes.title')}>
       {#each visibleGroups as group (group.id)}
-        {@const expanded = expandedIds.has(group.id) || Boolean(query && group.codes.some((code) => code.toLowerCase().includes(query)))}
+        {@const expanded = expandedIds.has(group.id)}
         <li class="surface-card itemcode-card" data-group-id={group.id}>
           <div class="itemcode-main">
             <div class="profile-title-row">
