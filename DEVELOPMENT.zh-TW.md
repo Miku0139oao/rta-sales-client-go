@@ -108,7 +108,7 @@ report, err := xlsxfill.Apply(ctx, plan, xlsxfill.ApplyRequest{
 - Go 1.25 或更新（CI 使用 1.25.13，govulncheck 才不會掃到已修的標準庫漏洞）
 - [Bun 1.3.14](https://bun.sh)（frontend 指定 Bun，別改用 npm）
 - Git、PowerShell
-- 本機要有 WebView2，不然視窗開不起來
+- 本機要有 WebView2（Windows 10/11 通常已隨 Edge 安裝），不然視窗開不起來
 - 只有要做安裝檔時才需要 NSIS 3.12：`choco install nsis --version 3.12.0`
 
 Wails 釘在 `v3.0.0-beta.8`。不必先手動裝，腳本找不到就會 `go run github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.8`。想先裝也可以：

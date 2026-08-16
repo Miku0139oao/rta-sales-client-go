@@ -23,7 +23,7 @@
 - 可以連到 RTA 的網路
 - 一組（或多組）有權限的 **RTA 帳號密碼**
 
-一般同事請裝「安裝檔」。電腦沒有 WebView2 時，安裝程式會幫忙下載。
+一般同事請裝「安裝檔」。Windows 10/11 通常已隨 Edge 提供 WebView2；少數缺少 Runtime 的電腦，安裝程式會協助下載。
 
 ---
 
@@ -37,14 +37,14 @@
 
 兩分鐘畫面教學（不用聲音，看字幕即可）：
 
-[使用教學](https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.4.0/RTA-Sales-Analyzer-tutorial.mp4)
+[使用教學](https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.4.1/RTA-Sales-Analyzer-tutorial.mp4)
 
 ### 另外兩個檔是什麼
 
 | 檔案 | 什麼時候用 |
 | --- | --- |
 | `RTA-Excel-Filler-setup.exe` | **一般請用這個** |
-| `RTA-Excel-Filler-portable.exe` | 不想安裝、直接雙擊就能跑。電腦必須已經有 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) |
+| `RTA-Excel-Filler-portable.exe` | 免安裝、直接雙擊。Windows 10/11 通常已隨 Edge 提供 WebView2；若無法啟動，再安裝 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) 或改用安裝版 |
 | `SHA256SUMS.txt` | 給資訊人員核對檔案有沒有被改過，一般使用可略過 |
 
 ---
@@ -207,7 +207,7 @@ C 欄如果不是 RTA 門店編號，到「設定」打開本機對照檔（JSON
 ## 常見問題
 
 **程式打不開、視窗閃一下就沒了**  
-請改用安裝檔 `RTA-Excel-Filler-setup.exe`。免安裝版需要電腦已有 WebView2。
+Windows 10/11 通常已有 Edge WebView2。若可攜版仍無法啟動，請改用 `RTA-Excel-Filler-setup.exe`，安裝程式會處理少數缺少 Runtime 的情況。
 
 **同時開了兩個，後面那個立刻關掉**  
 這是正常的，同時只能開一個。

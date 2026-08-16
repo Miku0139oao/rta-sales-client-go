@@ -126,7 +126,6 @@ describe('sales analysis PDF', () => {
     expect(listSuccessfulReportStores(resultFixture()).map((store) => store.businessId)).toEqual(['107', '108']);
     expect(salesAnalysisPDFFilename('107', '2026-08-01', '2026-08-16')).toBe('RTA-Sales-107-20260801-20260816.pdf');
     expect(salesAnalysisPDFFilename(ALL_STORES_REPORT_ID, '2026-08-01', '2026-08-16')).toBe('RTA-Sales-all-20260801-20260816.pdf');
-    expect(salesAnalysisPDFFilename('107', '2026-08-01', '2026-08-16', 'Promoter A')).toBe('RTA-Sales-107-Promoter-A-20260801-20260816.pdf');
   });
 
   it('builds a combined all-stores report with a store comparison page', async () => {
@@ -168,6 +167,23 @@ describe('sales analysis PDF', () => {
       { groupId: 'missing', groupName: 'Missing Group', itemCodes: ['not-present'] },
     );
     expect(new TextDecoder('latin1').decode(emptyPDF).match(/\/Type \/Page\b/g)).toHaveLength(2);
+  });
+
+  it('appends promoter-group chapters inside the same all-products PDF', async () => {
+    const result = resultFixture();
+    result.weeks = [weekRow('2026-08-03', '2026-08-09', 200, 100)];
+    const fontBase64 = await reportFont(result);
+    const basePDF = await buildSalesAnalysisPDF(result, ALL_STORES_REPORT_ID, 'category2', 'zh-TW', fontBase64);
+    const withChapters = await buildSalesAnalysisPDF(
+      result, ALL_STORES_REPORT_ID, 'category2', 'zh-TW', fontBase64, defaultSalesReportFilter(),
+      undefined,
+      [{ groupId: 'promoter-a', groupName: 'Promoter A', itemCodes: ['107001'] }],
+    );
+    const basePages = new TextDecoder('latin1').decode(basePDF).match(/\/Type \/Page\b/g)?.length ?? 0;
+    const chapterPages = new TextDecoder('latin1').decode(withChapters).match(/\/Type \/Page\b/g)?.length ?? 0;
+    expect(chapterPages).toBeGreaterThan(basePages);
+    expect(chapterPages).toBe(basePages + 9);
+    expect(new TextDecoder('latin1').decode(withChapters)).toContain('Promoter A');
   });
 
   it('keeps a three-category store on nine pages without placeholder cards', async () => {

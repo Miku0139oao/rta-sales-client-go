@@ -23,7 +23,7 @@ The installer is still called `RTA-Excel-Filler-setup.exe`. That is the old file
 - A network connection that can reach RTA
 - One or more RTA accounts that can see the stores you care about
 
-Most people should use the installer. If the PC does not already have WebView2, the installer downloads it.
+Most people should use the installer. Windows 10/11 normally provides WebView2 with Edge; on the few PCs missing the runtime, the installer downloads it.
 
 ---
 
@@ -37,14 +37,14 @@ Only one window can run at a time. If a click seems to do nothing, check the tas
 
 A two-minute silent walkthrough with captions:
 
-[Usage tutorial](https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.4.0/RTA-Sales-Analyzer-tutorial.mp4)
+[Usage tutorial](https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.4.1/RTA-Sales-Analyzer-tutorial.mp4)
 
 ### The other files
 
 | File | When to use it |
 | --- | --- |
 | `RTA-Excel-Filler-setup.exe` | **Use this** |
-| `RTA-Excel-Filler-portable.exe` | No installer; double-click to run. The PC must already have [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) |
+| `RTA-Excel-Filler-portable.exe` | No installer; double-click to run. Windows 10/11 normally provides WebView2 with Edge; if it does not start, install [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) or use the installer |
 | `SHA256SUMS.txt` | For IT to check the file was not altered. Everyday users can ignore it |
 
 ---
@@ -207,7 +207,7 @@ After changing workload or mapping, click **Save**.
 ## Common questions
 
 **The app will not start, or the window flashes and disappears**  
-Use the installer `RTA-Excel-Filler-setup.exe`. The portable build needs WebView2 already installed.
+Windows 10/11 normally already has Edge WebView2. If the portable build still does not start, use `RTA-Excel-Filler-setup.exe`; it handles the uncommon case where the runtime is missing.
 
 **A second window closes immediately**  
 That is expected. Only one copy can run.

@@ -18,8 +18,10 @@
     prepareSalesAnalysisFontFromText,
     salesReportAccumulatorFromMemo,
     ALL_STORES_REPORT_ID,
+    isAllStoresReport,
     listSuccessfulReportStores,
     salesAnalysisPDFFilename,
+    type SalesReportChapter,
   } from '../sales-report-pdf';
   import type { Translator } from '../i18n';
   import type {
@@ -61,8 +63,6 @@
     id: string; label: string; current?: SalesAnalysisTotals; previous?: SalesAnalysisTotals; yearAgo?: SalesAnalysisTotals;
   };
 
-  const ALL_PRODUCTS_SCOPE_ID = '__all_products__';
-
   const facets: Array<{ key: CategoryKey; label: string }> = [
     { key: 'category1', label: 'analysis.category1' },
     { key: 'category2', label: 'analysis.category2' },
@@ -86,9 +86,8 @@
   let exportFilter: SalesReportFilter = defaultSalesReportFilter();
   let exportIncludeCombined = true;
   let exportStoreIds = new Set<string>();
-  let exportGroupIds = new Set<string>([ALL_PRODUCTS_SCOPE_ID]);
+  let exportGroupIds = new Set<string>();
   let exportTargetTotal = 0;
-  let exportGroupTotal = 1;
   let exportFilesCount = 0;
   let pdfExportCurrent = 0;
   let pdfExportTotal = 0;
@@ -194,8 +193,7 @@
   }
   $: progressPercent = progress?.total ? Math.round((progress.current / progress.total) * 100) : 0;
   $: exportTargetTotal = (result, exportIncludeCombined, exportStoreIds, exportTargetCount());
-  $: exportGroupTotal = (exportGroupIds, manCodeGroups, selectedExportGroups().length);
-  $: exportFilesCount = exportTargetTotal * exportGroupTotal;
+  $: exportFilesCount = exportTargetTotal;
 
   onMount(() => {
     const unsubscribe = backend.onSalesAnalysisProgress((next) => {
@@ -372,7 +370,7 @@
     const available = listSuccessfulReportStores(result);
     exportIncludeCombined = available.length > 1;
     exportStoreIds = new Set();
-    exportGroupIds = new Set([selectedGroup?.id ?? ALL_PRODUCTS_SCOPE_ID]);
+    exportGroupIds = new Set(selectedGroup ? [selectedGroup.id] : []);
     exportDialog = true;
   }
 
@@ -397,13 +395,8 @@
     exportGroupIds = next;
   }
 
-  function selectedExportGroups(): Array<ManCodeGroup | undefined> {
-    const selected: Array<ManCodeGroup | undefined> = [];
-    if (exportGroupIds.has(ALL_PRODUCTS_SCOPE_ID)) selected.push(undefined);
-    for (const group of manCodeGroups) {
-      if (exportGroupIds.has(group.id)) selected.push(group);
-    }
-    return selected;
+  function selectedExportGroups(): ManCodeGroup[] {
+    return manCodeGroups.filter((group) => exportGroupIds.has(group.id));
   }
 
   function exportTargetCount(): number {
@@ -461,7 +454,7 @@
       const reportGroups = selectedExportGroups();
       const writeStoreFiles = reportStores.length > 0;
       const writeCombined = availableStores.length > 1 && exportIncludeCombined;
-      pdfExportTotal = ((writeStoreFiles ? reportStores.length : 0) + (writeCombined ? 1 : 0)) * reportGroups.length;
+      pdfExportTotal = (writeStoreFiles ? reportStores.length : 0) + (writeCombined ? 1 : 0);
       const reportFrom = result.from;
       const reportTo = result.to;
       const operationId = result.operationId;
@@ -471,36 +464,9 @@
         periods: (result.periods ?? []).map((period) => ({ ...period, items: undefined })),
       };
       result = slim;
-      const fontGlyphs = await backend.getSalesAnalysisReportGlyphs(operationId);
+      const fontGlyphs = `${await backend.getSalesAnalysisReportGlyphs(operationId)}${reportGroups.map((group) => group.name).join('')}`;
       const fontBase64 = await prepareSalesAnalysisFontFromText(fontGlyphs, settings.locale);
       const written: string[] = [];
-      const writePDF = async (storeId: string, memo: SalesAnalysisReportMemo, group?: ManCodeGroup) => {
-        pdfExportCurrent += 1;
-        await yieldToUI();
-        let data: Uint8Array;
-        try {
-          data = await generateSalesAnalysisPDF(
-            slim, storeId, groupLevel, settings.locale, exportFilter, fontBase64,
-            salesReportAccumulatorFromMemo(memo),
-            group ? { groupId: group.id, groupName: group.name, itemCodes: group.codes } : undefined,
-          );
-        } catch (caught) {
-          if (caught instanceof AppError) throw caught;
-          throw new AppError('pdf_failed', caught instanceof Error ? caught.message : String(caught));
-        }
-        const dataBase64 = bytesToBase64(data);
-        data = new Uint8Array();
-        try {
-          written.push(await backend.writeSalesAnalysisPDF({
-            directory,
-            filename: salesAnalysisPDFFilename(storeId, reportFrom, reportTo, group?.name),
-            dataBase64,
-          }));
-        } catch (caught) {
-          if (caught instanceof AppError && caught.code !== 'backend_error') throw caught;
-          throw new AppError('pdf_write', caught instanceof Error ? caught.message : String(caught));
-        }
-      };
       const loadMemo = (storeId: string | undefined, group?: ManCodeGroup) => backend.getSalesAnalysisReportMemo({
         operationId,
         storeId,
@@ -512,24 +478,57 @@
         categories: exportFilter.categories,
       });
       let loaded = false;
-      for (const group of reportGroups) {
-        if (writeStoreFiles) {
-          for (const store of reportStores) {
-            await yieldToUI();
-            const memo = await loadMemo(store.businessId, group);
-            if (reportMemoHasRows(memo)) loaded = true;
-            await writePDF(store.businessId, memo, group);
-          }
-        }
-        if (writeCombined) {
-          const memo = await loadMemo(undefined, group);
+      const writePDF = async (storeId: string) => {
+        pdfExportCurrent += 1;
+        await yieldToUI();
+        const memoStoreId = isAllStoresReport(storeId) ? undefined : storeId;
+        const baseMemo = await loadMemo(memoStoreId);
+        if (reportMemoHasRows(baseMemo)) loaded = true;
+        const extraChapters: SalesReportChapter[] = [];
+        for (const group of reportGroups) {
+          const memo = await loadMemo(memoStoreId, group);
           if (reportMemoHasRows(memo)) loaded = true;
-          await writePDF(ALL_STORES_REPORT_ID, memo, group);
+          extraChapters.push({
+            scope: { groupId: group.id, groupName: group.name, itemCodes: group.codes },
+            accumulator: salesReportAccumulatorFromMemo(memo),
+          });
         }
+        let data: Uint8Array;
+        try {
+          data = await generateSalesAnalysisPDF(
+            slim, storeId, groupLevel, settings.locale, exportFilter, fontBase64,
+            salesReportAccumulatorFromMemo(baseMemo),
+            extraChapters,
+          );
+        } catch (caught) {
+          if (caught instanceof AppError) throw caught;
+          throw new AppError('pdf_failed', caught instanceof Error ? caught.message : String(caught));
+        }
+        const dataBase64 = bytesToBase64(data);
+        data = new Uint8Array();
+        try {
+          written.push(await backend.writeSalesAnalysisPDF({
+            directory,
+            filename: salesAnalysisPDFFilename(storeId, reportFrom, reportTo),
+            dataBase64,
+          }));
+        } catch (caught) {
+          if (caught instanceof AppError && caught.code !== 'backend_error') throw caught;
+          throw new AppError('pdf_write', caught instanceof Error ? caught.message : String(caught));
+        }
+      };
+      if (writeStoreFiles) {
+        for (const store of reportStores) {
+          await yieldToUI();
+          await writePDF(store.businessId);
+        }
+      }
+      if (writeCombined) {
+        await writePDF(ALL_STORES_REPORT_ID);
       }
       if (!loaded) throw new AppError('pdf_loading', 'Sales analysis items are still loading');
       exportDirectory = directory;
-      exportNotice = reportGroups.length === 1 && writeCombined && writeStoreFiles
+      exportNotice = writeCombined && writeStoreFiles
         ? t('analysis.exportedPDFWithCombined', { stores: reportStores.length })
         : t('analysis.exportedPDF', { count: written.length });
     } catch (caught) {
@@ -1412,87 +1411,96 @@
       <md-icon-button aria-label={t('common.close')} onclick={closeExportDialog} disabled={exportingPDF}><span class="material-symbols-rounded">close</span></md-icon-button>
     </div>
     <form class="export-dialog-body" onsubmit={(event) => { event.preventDefault(); void exportPDF(); }}>
-      <div class="export-dialog-grid">
-        {#if listSuccessfulReportStores(result).length > 1}
-          <section class="export-panel" aria-labelledby="export-files-title">
-            <div class="export-panel-heading">
-              <strong id="export-files-title">{t('analysis.exportFiles')}</strong>
-              <span>{t('analysis.exportFileCount', { count: exportFilesCount })}</span>
-            </div>
-            <label class="export-check">
-              <input type="checkbox" checked={exportIncludeCombined} disabled={exportingPDF} onchange={() => { exportIncludeCombined = !exportIncludeCombined; }} />
-              <span><b>{t('analysis.exportFilesCombined')}</b><small>{t('analysis.exportFilesCombinedHint')}</small></span>
-            </label>
-            <div class="export-stores">
-              <div class="export-categories-heading">
-                <strong>{t('analysis.exportStoreReports')}</strong>
-                <div>
-                  <button type="button" aria-label={t('analysis.exportSelectAllStores')} disabled={exportingPDF} onclick={() => { if (result) exportStoreIds = new Set(listSuccessfulReportStores(result).map((store) => store.businessId)); }}>{t('analysis.selectAll')}</button>
-                  <button type="button" aria-label={t('analysis.exportClearStores')} disabled={exportingPDF} onclick={() => { exportStoreIds = new Set(); }}>{t('analysis.clear')}</button>
+      <div class="export-dialog-scroll pane-scroll" tabindex="-1" data-autofocus>
+        <div class="export-dialog-grid">
+          {#if listSuccessfulReportStores(result).length > 1}
+            <section class="export-section" aria-labelledby="export-files-title">
+              <div class="export-section-heading">
+                <h3 id="export-files-title">{t('analysis.exportFiles')}</h3>
+                <span>{t('analysis.exportFileCount', { count: exportFilesCount })}</span>
+              </div>
+              <label class="export-check export-check-card">
+                <input type="checkbox" checked={exportIncludeCombined} disabled={exportingPDF} onchange={() => { exportIncludeCombined = !exportIncludeCombined; }} />
+                <span><b>{t('analysis.exportFilesCombined')}</b><small>{t('analysis.exportFilesCombinedHint')}</small></span>
+              </label>
+              <div class="export-choice-panel">
+                <div class="export-choice-heading">
+                  <strong>{t('analysis.exportStoreReports')}</strong>
+                  <div>
+                    <button type="button" aria-label={t('analysis.exportSelectAllStores')} disabled={exportingPDF} onclick={() => { if (result) exportStoreIds = new Set(listSuccessfulReportStores(result).map((store) => store.businessId)); }}>{t('analysis.selectAll')}</button>
+                    <button type="button" aria-label={t('analysis.exportClearStores')} disabled={exportingPDF} onclick={() => { exportStoreIds = new Set(); }}>{t('analysis.clear')}</button>
+                  </div>
+                </div>
+                <div class="export-choice-list pane-scroll">
+                  {#each listSuccessfulReportStores(result) as store (store.businessId)}
+                    <label><input type="checkbox" checked={exportStoreIds.has(store.businessId)} disabled={exportingPDF} onchange={() => toggleExportStore(store.businessId)} /><span><b>{store.businessId}</b> {store.label}</span></label>
+                  {/each}
                 </div>
               </div>
-              <div class="export-category-list pane-scroll">
-                {#each listSuccessfulReportStores(result) as store (store.businessId)}
-                  <label><input type="checkbox" checked={exportStoreIds.has(store.businessId)} disabled={exportingPDF} onchange={() => toggleExportStore(store.businessId)} /><span><b>{store.businessId}</b> {store.label}</span></label>
+            </section>
+          {/if}
+          {#if manCodeGroups.length > 0}
+            <section class="export-section" aria-labelledby="export-groups-title">
+              <div class="export-section-heading">
+                <div>
+                  <h3 id="export-groups-title">{t('analysis.exportPromoterGroups')}</h3>
+                  <p>{t('analysis.exportPromoterGroupsHint')}</p>
+                </div>
+              </div>
+              <div class="export-choice-panel">
+                <div class="export-choice-heading">
+                  <strong>{t('analysis.exportReportScope')}</strong>
+                  <div>
+                    <button type="button" disabled={exportingPDF} onclick={() => { exportGroupIds = new Set(manCodeGroups.map((group) => group.id)); }}>{t('analysis.selectAll')}</button>
+                    <button type="button" disabled={exportingPDF} onclick={() => { exportGroupIds = new Set(); }}>{t('analysis.clear')}</button>
+                  </div>
+                </div>
+                <div class="export-choice-list pane-scroll">
+                  {#each manCodeGroups as group (group.id)}
+                    <label><input type="checkbox" checked={exportGroupIds.has(group.id)} disabled={exportingPDF} onchange={() => toggleExportGroup(group.id)} /><span><b>{group.name}</b> · {t('analysis.itemCodeCount', { count: group.codes.length })}</span></label>
+                  {/each}
+                </div>
+              </div>
+            </section>
+          {/if}
+          <section class="export-section export-section-categories" aria-labelledby="export-category-title">
+            <div class="export-section-heading">
+              <h3 id="export-category-title">{t('analysis.exportCategorySection')}</h3>
+            </div>
+            <div class="export-mode" role="radiogroup" aria-label={t('analysis.exportCategorySection')}>
+              <button type="button" class:active={exportFilter.mode === 'blacklist'} role="radio" aria-checked={exportFilter.mode === 'blacklist'} disabled={exportingPDF} onclick={() => setExportMode('blacklist')}>{t('analysis.exportModeAll')}</button>
+              <button type="button" class:active={exportFilter.mode === 'whitelist'} role="radio" aria-checked={exportFilter.mode === 'whitelist'} disabled={exportingPDF} onclick={() => setExportMode('whitelist')}>{t('analysis.exportModeOnly')}</button>
+            </div>
+            <div class="export-flags">
+              <label class="export-check"><input type="checkbox" checked={exportFilter.excludeZeroGifts} disabled={exportingPDF} onchange={() => { exportFilter = { ...exportFilter, excludeZeroGifts: !exportFilter.excludeZeroGifts }; }} /><span>{t('analysis.exportSkipGifts')}</span></label>
+              <label class="export-check"><input type="checkbox" checked={exportFilter.excludeStamps} disabled={exportingPDF} onchange={() => { exportFilter = { ...exportFilter, excludeStamps: !exportFilter.excludeStamps }; }} /><span>{t('analysis.exportSkipStamps')}</span></label>
+            </div>
+            <div class="export-choice-panel">
+              <div class="export-choice-heading">
+                <strong id="export-content-title">{exportFilter.mode === 'whitelist' ? t('analysis.exportKeepCategories') : t('analysis.exportSkipCategories')}</strong>
+                <div>
+                  <button type="button" disabled={exportingPDF} onclick={() => { exportFilter = { ...exportFilter, categories: exportCategoryOptions().map((option) => option.id) }; }}>{t('analysis.selectAll')}</button>
+                  <button type="button" disabled={exportingPDF} onclick={() => { exportFilter = { ...exportFilter, categories: [] }; }}>{t('analysis.clear')}</button>
+                </div>
+              </div>
+              <div class="export-choice-list export-choice-list-categories pane-scroll">
+                {#each exportCategoryOptions() as option (option.id)}
+                  <label><input type="checkbox" checked={exportFilter.categories.includes(option.id)} disabled={exportingPDF} onchange={() => toggleExportCategory(option.id)} /><span>{option.code ? `${option.code}  ${option.name}` : option.name}</span></label>
+                {:else}
+                  <div class="export-choice-empty">{t('analysis.noResults')}</div>
                 {/each}
               </div>
             </div>
           </section>
-        {/if}
-        {#if manCodeGroups.length > 0}
-          <section class="export-panel" aria-labelledby="export-groups-title">
-            <div class="export-panel-heading">
-              <strong id="export-groups-title">{t('analysis.exportPromoterGroups')}</strong>
-              <span>{t('analysis.exportPromoterGroupsHint')}</span>
-            </div>
-            <div class="export-categories-heading">
-              <strong>{t('analysis.exportReportScope')}</strong>
-              <div>
-                <button type="button" disabled={exportingPDF} onclick={() => { exportGroupIds = new Set([ALL_PRODUCTS_SCOPE_ID, ...manCodeGroups.map((group) => group.id)]); }}>{t('analysis.selectAll')}</button>
-                <button type="button" disabled={exportingPDF} onclick={() => { exportGroupIds = new Set(); }}>{t('analysis.clear')}</button>
-              </div>
-            </div>
-            <div class="export-category-list pane-scroll">
-              <label><input type="checkbox" checked={exportGroupIds.has(ALL_PRODUCTS_SCOPE_ID)} disabled={exportingPDF} onchange={() => toggleExportGroup(ALL_PRODUCTS_SCOPE_ID)} /><span><b>{t('analysis.allProducts')}</b></span></label>
-              {#each manCodeGroups as group (group.id)}
-                <label><input type="checkbox" checked={exportGroupIds.has(group.id)} disabled={exportingPDF} onchange={() => toggleExportGroup(group.id)} /><span><b>{group.name}</b> · {t('analysis.itemCodeCount', { count: group.codes.length })}</span></label>
-              {/each}
-            </div>
-          </section>
-        {/if}
-        <section class="export-panel" aria-labelledby="export-content-title">
-          <div class="export-mode" role="radiogroup" aria-label={t('analysis.exportDialogTitle')}>
-            <button type="button" class:active={exportFilter.mode === 'blacklist'} role="radio" aria-checked={exportFilter.mode === 'blacklist'} disabled={exportingPDF} onclick={() => setExportMode('blacklist')}>{t('analysis.exportModeAll')}</button>
-            <button type="button" class:active={exportFilter.mode === 'whitelist'} role="radio" aria-checked={exportFilter.mode === 'whitelist'} disabled={exportingPDF} onclick={() => setExportMode('whitelist')}>{t('analysis.exportModeOnly')}</button>
-          </div>
-          <label class="export-check"><input type="checkbox" checked={exportFilter.excludeZeroGifts} disabled={exportingPDF} onchange={() => { exportFilter = { ...exportFilter, excludeZeroGifts: !exportFilter.excludeZeroGifts }; }} /><span>{t('analysis.exportSkipGifts')}</span></label>
-          <label class="export-check"><input type="checkbox" checked={exportFilter.excludeStamps} disabled={exportingPDF} onchange={() => { exportFilter = { ...exportFilter, excludeStamps: !exportFilter.excludeStamps }; }} /><span>{t('analysis.exportSkipStamps')}</span></label>
-          <div class="export-categories">
-            <div class="export-categories-heading">
-              <strong id="export-content-title">{exportFilter.mode === 'whitelist' ? t('analysis.exportKeepCategories') : t('analysis.exportSkipCategories')}</strong>
-              <div>
-                <button type="button" disabled={exportingPDF} onclick={() => { exportFilter = { ...exportFilter, categories: exportCategoryOptions().map((option) => option.id) }; }}>{t('analysis.selectAll')}</button>
-                <button type="button" disabled={exportingPDF} onclick={() => { exportFilter = { ...exportFilter, categories: [] }; }}>{t('analysis.clear')}</button>
-              </div>
-            </div>
-            <div class="export-category-list pane-scroll">
-              {#each exportCategoryOptions() as option (option.id)}
-                <label><input type="checkbox" checked={exportFilter.categories.includes(option.id)} disabled={exportingPDF} onchange={() => toggleExportCategory(option.id)} /><span>{option.code ? `${option.code}  ${option.name}` : option.name}</span></label>
-              {:else}
-                <div class="export-category-empty">{t('analysis.noResults')}</div>
-              {/each}
-            </div>
-          </div>
-        </section>
+        </div>
       </div>
-      {#if exportGroupTotal === 0}
-        <p class="export-dialog-warning">{t('analysis.exportNeedPromoterGroup')}</p>
-      {:else if exportTargetTotal === 0}
+      {#if exportTargetTotal === 0}
         <p class="export-dialog-warning">{t('analysis.exportNeedTarget')}</p>
       {:else if exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0}
         <p class="export-dialog-warning">{t('analysis.exportNeedCategory')}</p>
       {/if}
-      <div class="dialog-actions">
+      <div class="dialog-actions export-dialog-actions">
+        <span class="export-file-count">{t('analysis.exportFileCount', { count: exportFilesCount })}</span>
         <md-text-button type="button" onclick={closeExportDialog} disabled={exportingPDF}>{t('common.cancel')}</md-text-button>
         <md-filled-button type="submit" onclick={() => void exportPDF()} disabled={exportingPDF || exportFilesCount === 0 || (exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0)}>{exportingPDF ? t('analysis.exportingPDFProgress', { current: pdfExportCurrent, total: pdfExportTotal }) : t('analysis.exportConfirm')}</md-filled-button>
       </div>
@@ -1540,10 +1548,13 @@
   .analysis-progress-footer { margin-top: 14px; }
   .analysis-progress-footer > strong { color: var(--md-sys-color-on-surface-variant); font-variant-numeric: tabular-nums; }
   .analysis-filters { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
-  .analysis-filter-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-  .analysis-filter-tools .analysis-search { flex: 1; min-width: 220px; }
-  .promoter-group-selector { display: flex; min-height: 44px; align-items: center; gap: 8px; padding-left: 12px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; background: var(--md-sys-color-surface-container-lowest); font-weight: 680; white-space: nowrap; }
-  .promoter-group-selector select { min-width: 190px; min-height: 42px; border: 0; background: transparent; }
+  .analysis-filter-tools { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(260px, 360px); align-items: stretch; gap: 8px; }
+  .analysis-filter-tools .analysis-search { min-width: 0; }
+  .promoter-group-selector { display: grid; min-width: 0; min-height: 44px; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; padding-left: 12px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; background: var(--md-sys-color-surface-container-lowest); }
+  .promoter-group-selector:focus-within { border-color: var(--md-sys-color-primary); box-shadow: 0 0 0 3px var(--app-field-ring); }
+  .promoter-group-selector > span { color: var(--md-sys-color-on-surface-variant); font-size: 11px; font-weight: 680; white-space: nowrap; }
+  .promoter-group-selector select { width: 100%; min-width: 0; min-height: 42px; overflow: hidden; padding: 0 30px 0 0; border: 0; outline: 0; color: var(--md-sys-color-on-surface); background-color: transparent; font-weight: 680; text-overflow: ellipsis; white-space: nowrap; }
+  .promoter-group-selector option { color: var(--md-sys-color-on-surface); background-color: var(--md-sys-color-surface-container-lowest); }
   .facet-row { display: flex; flex-wrap: wrap; gap: 8px; }
   .facet-menu { position: relative; }
   .facet-menu > summary { display: flex; min-height: 44px; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; color: var(--md-sys-color-on-surface-variant); background: var(--md-sys-color-surface-container-lowest); list-style: none; }
@@ -1668,30 +1679,96 @@
   .analysis-supplement-meter md-linear-progress { width: 100%; --md-linear-progress-track-height: 8px; --md-linear-progress-active-indicator-height: 8px; }
   .analysis-supplement-meter strong { color: var(--md-sys-color-primary); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .tab-pending { margin-left: 6px; padding: 1px 6px; border-radius: 999px; color: var(--md-sys-color-on-secondary-container); background: var(--md-sys-color-secondary-container); font-size: 10px; font-weight: 700; }
-  :global(.export-dialog) { display: flex; width: min(calc(100% - 32px), 820px); max-height: calc(100dvh - 32px); flex-direction: column; overflow: hidden; }
-  .export-dialog-body { display: grid; min-height: 0; flex: 1; gap: 14px; grid-template-rows: minmax(0, 1fr) auto auto; }
-  .export-dialog-grid { display: grid; min-height: 0; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; align-items: stretch; }
-  .export-panel { display: grid; min-height: 0; align-content: start; gap: 10px; grid-template-rows: auto auto auto minmax(0, 1fr); }
-  .export-panel-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-  .export-panel-heading span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-variant-numeric: tabular-nums; }
+  :global(.export-dialog) {
+    display: flex;
+    width: min(calc(100% - 32px), 760px);
+    max-height: calc(100dvh - 32px);
+    flex-direction: column;
+    overflow: hidden;
+    outline: none;
+  }
+  :global(.export-dialog:focus),
+  :global(.export-dialog:focus-visible) { outline: none; }
+  :global(.export-dialog .dialog-header) { flex: 0 0 auto; margin-bottom: 14px; }
+  .export-dialog-body { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; gap: 12px; overflow: hidden; }
+  .export-dialog-scroll { min-height: 0; flex: 1 1 auto; overflow: auto; overscroll-behavior: contain; outline: none; }
+  .export-dialog-scroll:focus,
+  .export-dialog-scroll:focus-visible { outline: none; }
+  .export-dialog-grid { display: grid; min-width: 0; gap: 12px; }
+  .export-section {
+    display: grid;
+    min-width: 0;
+    align-content: start;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid var(--app-border);
+    border-radius: 16px;
+    background: var(--md-sys-color-surface-container-low);
+  }
+  .export-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .export-section-heading h3 { margin: 0; color: var(--app-heading); font-size: 15px; font-weight: 680; }
+  .export-section-heading p { margin: 4px 0 0; color: var(--md-sys-color-on-surface-variant); font-size: 12px; line-height: 1.45; }
+  .export-section-heading span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .export-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .export-mode button { min-height: 40px; padding: 8px 10px; cursor: pointer; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; color: var(--md-sys-color-on-surface-variant); background: var(--md-sys-color-surface-container-lowest); font-weight: 650; text-align: center; }
+  .export-mode button {
+    min-height: 40px;
+    padding: 8px 10px;
+    cursor: pointer;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 12px;
+    color: var(--md-sys-color-on-surface-variant);
+    background: var(--md-sys-color-surface-container-lowest);
+    font-weight: 650;
+    text-align: center;
+  }
+  .export-mode button:hover:not(:disabled) { border-color: var(--app-field-hover); }
+  .export-mode button:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
   .export-mode button.active { border-color: var(--app-active-border); color: var(--md-sys-color-on-secondary-container); background: var(--md-sys-color-secondary-container); }
-  .export-stores { display: grid; min-height: 0; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 14px; }
-  .export-check { display: flex; align-items: flex-start; gap: 10px; font-size: 14px; line-height: 1.4; }
+  .export-flags { display: grid; gap: 8px; }
+  .export-check { display: flex; align-items: flex-start; gap: 10px; min-width: 0; color: var(--md-sys-color-on-surface); font-size: 14px; line-height: 1.4; }
+  .export-check-card { padding: 10px 12px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; background: var(--md-sys-color-surface-container-lowest); }
   .export-check b { display: block; font-weight: 700; }
   .export-check small { display: block; color: var(--md-sys-color-on-surface-variant); font-size: 12px; }
-  .export-check input { width: 18px; height: 18px; margin-top: 1px; accent-color: var(--md-sys-color-primary); }
-  .export-categories { display: grid; min-height: 0; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 14px; }
-  .export-categories-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; background: var(--md-sys-color-surface-container-low); }
-  .export-categories-heading > div { display: flex; gap: 8px; }
-  .export-categories-heading button { cursor: pointer; border: 0; color: var(--md-sys-color-primary); background: transparent; font-weight: 680; }
-  .export-category-list { display: grid; min-height: 240px; max-height: min(56vh, 520px); gap: 2px; overflow: auto; overscroll-behavior: contain; padding: 6px; }
-  .export-category-list label { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 9px; }
-  .export-category-list label:hover { background: var(--md-sys-color-surface-container-low); }
-  .export-category-list input { width: 18px; height: 18px; accent-color: var(--md-sys-color-primary); }
-  .export-category-empty { padding: 18px 8px; color: var(--md-sys-color-on-surface-variant); text-align: center; }
-  .export-dialog-warning { margin: 0; color: var(--md-sys-color-error); font-size: 13px; }
+  .export-check input { flex: 0 0 auto; width: 18px; height: 18px; margin-top: 1px; accent-color: var(--md-sys-color-primary); }
+  .export-check input:focus { outline: none; }
+  .export-check input:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
+  .export-choice-panel {
+    display: grid;
+    min-width: 0;
+    min-height: 0;
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow: hidden;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 14px;
+    background: var(--md-sys-color-surface-container-lowest);
+  }
+  .export-choice-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--md-sys-color-outline-variant); background: var(--md-sys-color-surface-container); }
+  .export-choice-heading strong { min-width: 0; color: var(--md-sys-color-on-surface); font-size: 13px; font-weight: 680; }
+  .export-choice-heading > div { display: flex; flex: 0 0 auto; gap: 8px; }
+  .export-choice-heading button { cursor: pointer; border: 0; color: var(--md-sys-color-primary); background: transparent; font-weight: 680; }
+  .export-choice-heading button:disabled { cursor: default; opacity: .4; }
+  .export-choice-heading button:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; border-radius: 6px; }
+  .export-choice-list { display: grid; min-height: 88px; max-height: min(22vh, 200px); align-content: start; gap: 2px; overflow: auto; overscroll-behavior: contain; padding: 6px; outline: none; }
+  .export-choice-list-categories { max-height: min(28vh, 260px); }
+  .export-choice-list:focus,
+  .export-choice-list:focus-visible { outline: none; }
+  .export-choice-list label { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 8px; border-radius: 9px; color: var(--md-sys-color-on-surface); }
+  .export-choice-list label:hover { background: var(--md-sys-color-surface-container-low); }
+  .export-choice-list label:focus-within { background: var(--md-sys-color-surface-container); }
+  .export-choice-list input { flex: 0 0 auto; width: 18px; height: 18px; accent-color: var(--md-sys-color-primary); }
+  .export-choice-list input:focus { outline: none; }
+  .export-choice-list input:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
+  .export-choice-list span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .export-choice-empty { padding: 18px 8px; color: var(--md-sys-color-on-surface-variant); text-align: center; }
+  .export-dialog-warning { flex: 0 0 auto; margin: 0; color: var(--md-sys-color-error); font-size: 13px; }
+  .export-dialog-actions { flex: 0 0 auto; margin-top: 0; }
+  .export-file-count { margin-right: auto; color: var(--md-sys-color-on-surface-variant); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+  @media (max-width: 900px) {
+    .export-mode { grid-template-columns: 1fr; }
+    .export-choice-heading { align-items: flex-start; flex-wrap: wrap; }
+    .export-section-heading { flex-wrap: wrap; }
+  }
 
   @media (max-width: 720px) {
     .analysis-supplement { grid-template-columns: 1fr; }
@@ -1705,6 +1782,7 @@
   }
 
   @media (max-width: 980px) {
+    .analysis-filter-tools { grid-template-columns: 1fr; }
     .top-grid { grid-template-columns: 1fr; }
     .focus-columns { grid-template-columns: 1fr; }
     .focus-columns > div + div { border-top: 1px solid var(--app-table-border); border-left: 0; }

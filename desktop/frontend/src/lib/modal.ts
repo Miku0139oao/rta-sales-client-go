@@ -27,7 +27,7 @@ export function modal(node: HTMLDialogElement, initial: ModalOptions) {
 
   function handleWheel(event: WheelEvent) {
     const target = event.target as HTMLElement | null;
-    const nested = target?.closest('.pane-scroll, .table-scroll, .facet-options, .store-grid');
+    const nested = target?.closest('.pane-scroll, .table-scroll, .facet-options, .store-grid, .export-dialog-scroll');
     if (nested instanceof HTMLElement) {
       const canScroll = nested.scrollHeight > nested.clientHeight + 1;
       const style = getComputedStyle(nested);

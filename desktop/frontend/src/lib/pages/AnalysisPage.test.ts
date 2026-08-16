@@ -352,7 +352,7 @@ describe('sales analysis page', () => {
     expect(screen.queryByText('發生未預期的錯誤，請再試一次。')).not.toBeInTheDocument();
   });
 
-  it('opens a simple export chooser and can cancel without writing a file', async () => {
+  it('opens a sectioned export dialog with optional group chapters and can cancel', async () => {
     const writeSalesAnalysisPDF = vi.fn(async () => 'D:\\RTA Reports\\report.pdf');
     configureBackend({ methods: {
       ListProfiles: vi.fn(async () => [{
@@ -371,8 +371,11 @@ describe('sales analysis page', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
     await fireEvent.click(screen.getByText('匯出 PDF'));
     await waitFor(() => expect(screen.getByRole('heading', { name: '匯出篩選' })).toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: '分類條件' })).toBeInTheDocument();
     expect(screen.getByText('忽略沒有金額的贈品（保留現金券）')).toBeInTheDocument();
     expect(screen.getByText('忽略印花')).toBeInTheDocument();
+    expect(screen.queryByText('Promoter Group')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: '全部商品' })).not.toBeInTheDocument();
     await fireEvent.click(screen.getByText('取消'));
     await waitFor(() => expect(screen.queryByRole('heading', { name: '匯出篩選' })).not.toBeInTheDocument());
     expect(writeSalesAnalysisPDF).not.toHaveBeenCalled();
@@ -418,7 +421,7 @@ describe('sales analysis page', () => {
     expect(writeSalesAnalysisPDF.mock.calls[0]?.[0]).toMatchObject({ filename: 'RTA-Sales-all-20260801-20260831.pdf' });
   });
 
-  it('exports separate PDFs and memo requests for selected promoter groups', async () => {
+  it('appends selected promoter groups as chapters inside each target PDF', async () => {
     const getSalesAnalysisReportMemo = vi.fn(async (_request: unknown) => reportMemo());
     const writeSalesAnalysisPDF = vi.fn(async (...args: unknown[]) => {
       const request = args[0] as { directory: string; filename: string };
@@ -449,31 +452,118 @@ describe('sales analysis page', () => {
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
     await fireEvent.click(screen.getByText('開始分析'));
     await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
-    await fireEvent.change(screen.getByLabelText('Promoter 群組'), { target: { value: 'g-skin' } });
+    const productScope = screen.getByLabelText('商品範圍');
+    expect(productScope).toHaveValue('');
+    expect(productScope).toHaveTextContent('我的護膚 (1)');
+    expect(productScope).toHaveTextContent('家居組 (1)');
+    await fireEvent.change(productScope, { target: { value: 'g-skin' } });
 
     const exportButton = screen.getByText('匯出 PDF').closest('md-filled-button') ?? screen.getByText('匯出 PDF');
     await waitFor(() => expect(exportButton).not.toBeDisabled());
     await fireEvent.click(exportButton);
     await waitFor(() => expect(screen.getByRole('heading', { name: '匯出篩選' })).toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: '附加群組章節' })).toBeInTheDocument();
+    expect(screen.getByText('加入同一份 PDF，不會另外產生檔案')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '報告範圍' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '分類條件' })).toBeInTheDocument();
+    expect(screen.queryByText('Promoter Group')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: '全部商品' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('我的護膚 · 1 個 Item Code')).toBeChecked();
-    expect(screen.getByLabelText('全部商品')).not.toBeChecked();
+    expect(screen.getByLabelText('家居組 · 1 個 Item Code')).not.toBeChecked();
     await fireEvent.click(screen.getByLabelText('家居組 · 1 個 Item Code'));
+    await fireEvent.click(screen.getByLabelText('全選門店'));
+    expect(screen.getAllByText('3 份 PDF').length).toBeGreaterThan(0);
     const confirm = screen.getByText('選資料夾並匯出').closest('md-filled-button') ?? screen.getByText('選資料夾並匯出');
     await fireEvent.click(confirm);
 
-    await waitFor(() => expect(writeSalesAnalysisPDF).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(writeSalesAnalysisPDF).toHaveBeenCalledTimes(3));
     expect(getSalesAnalysisReportMemo.mock.calls.map((call) => call[0])).toEqual([
-      expect.objectContaining({ groupId: 'g-skin', storeId: undefined }),
-      expect.objectContaining({ groupId: 'g-household', storeId: undefined }),
+      expect.objectContaining({ storeId: '107', groupId: undefined }),
+      expect.objectContaining({ storeId: '107', groupId: 'g-skin' }),
+      expect.objectContaining({ storeId: '107', groupId: 'g-household' }),
+      expect.objectContaining({ storeId: '108', groupId: undefined }),
+      expect.objectContaining({ storeId: '108', groupId: 'g-skin' }),
+      expect.objectContaining({ storeId: '108', groupId: 'g-household' }),
+      expect.objectContaining({ storeId: undefined, groupId: undefined }),
+      expect.objectContaining({ storeId: undefined, groupId: 'g-skin' }),
+      expect.objectContaining({ storeId: undefined, groupId: 'g-household' }),
     ]);
     expect(writeSalesAnalysisPDF.mock.calls.map((call) => call[0])).toEqual([
-      expect.objectContaining({ filename: 'RTA-Sales-all-我的護膚-20260801-20260831.pdf' }),
-      expect.objectContaining({ filename: 'RTA-Sales-all-家居組-20260801-20260831.pdf' }),
+      expect.objectContaining({ filename: 'RTA-Sales-107-20260801-20260831.pdf' }),
+      expect.objectContaining({ filename: 'RTA-Sales-108-20260801-20260831.pdf' }),
+      expect.objectContaining({ filename: 'RTA-Sales-all-20260801-20260831.pdf' }),
     ]);
-    expect(vi.mocked(generateSalesAnalysisPDF).mock.calls.map((call) => call[7])).toEqual([
-      { groupId: 'g-skin', groupName: '我的護膚', itemCodes: ['552646'] },
-      { groupId: 'g-household', groupName: '家居組', itemCodes: ['900001'] },
-    ]);
+    expect(vi.mocked(generateSalesAnalysisPDF)).toHaveBeenCalledTimes(3);
+    for (const call of vi.mocked(generateSalesAnalysisPDF).mock.calls) {
+      expect(call[7]).toEqual([
+        expect.objectContaining({ scope: { groupId: 'g-skin', groupName: '我的護膚', itemCodes: ['552646'] } }),
+        expect.objectContaining({ scope: { groupId: 'g-household', groupName: '家居組', itemCodes: ['900001'] } }),
+      ]);
+    }
+  });
+
+  it('exports the base report without requiring a group chapter', async () => {
+    const writeSalesAnalysisPDF = vi.fn(async (...args: unknown[]) => {
+      const request = args[0] as { directory: string; filename: string };
+      return `${request.directory}\\${request.filename}`;
+    });
+    const { generateSalesAnalysisPDF } = await import('../sales-report-pdf');
+    vi.mocked(generateSalesAnalysisPDF).mockClear();
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [{
+        id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
+      }]),
+      ListSalesAnalysisStores: vi.fn(async () => [
+        { businessId: '107', label: '107 - Central' },
+        { businessId: '108', label: '108 - Harbour' },
+      ]),
+      ListManCodeGroups: vi.fn(async () => [
+        { id: 'g-skin', name: '我的護膚', codes: ['552646'] },
+      ]),
+      RunSalesAnalysis: vi.fn(async () => analysisResult),
+      GetSalesAnalysisItems: vi.fn(async () => ({ periodKey: 'current', dict: [''], rows: [] })),
+      ClearSalesAnalysis: vi.fn(async () => undefined),
+      ChooseSalesAnalysisPDFDirectory: vi.fn(async () => 'D:\\RTA Reports'),
+      GetSalesAnalysisReportMemo: vi.fn(async () => reportMemo()),
+      WriteSalesAnalysisPDF: writeSalesAnalysisPDF,
+    } });
+    render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
+    await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
+    await fireEvent.click(screen.getByText('開始分析'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
+    await fireEvent.click(screen.getByText('匯出 PDF'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: '附加群組章節' })).toBeInTheDocument());
+    expect(screen.getByLabelText('我的護膚 · 1 個 Item Code')).not.toBeChecked();
+    const confirm = screen.getByText('選資料夾並匯出').closest('md-filled-button') ?? screen.getByText('選資料夾並匯出');
+    await fireEvent.click(confirm);
+    await waitFor(() => expect(writeSalesAnalysisPDF).toHaveBeenCalledTimes(1));
+    expect(writeSalesAnalysisPDF.mock.calls[0]?.[0]).toMatchObject({ filename: 'RTA-Sales-all-20260801-20260831.pdf' });
+    expect(vi.mocked(generateSalesAnalysisPDF).mock.calls[0]![7]).toEqual([]);
+  });
+
+  it('keeps English group-chapter copy in the export dialog', async () => {
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [{
+        id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
+      }]),
+      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      ListManCodeGroups: vi.fn(async () => [
+        { id: 'g-skin', name: 'Skin', codes: ['552646'] },
+      ]),
+      RunSalesAnalysis: vi.fn(async () => analysisResult),
+      GetSalesAnalysisItems: vi.fn(async () => ({ periodKey: 'current', dict: [''], rows: [] })),
+      ClearSalesAnalysis: vi.fn(async () => undefined),
+    } });
+    render(AnalysisPage, { props: { t: translator('en'), settings: { ...defaultSettings, locale: 'en' } } });
+    await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
+    await fireEvent.click(screen.getByText('Run analysis'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Top 15 by sales' })).toBeInTheDocument());
+    await fireEvent.click(screen.getByText('Export PDF'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Export filters' })).toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: 'Additional group chapters' })).toBeInTheDocument();
+    expect(screen.getByText('Added to the same PDF; they do not create extra files')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Category options' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'All products' })).not.toBeInTheDocument();
   });
 
   it('keeps query progress visible while later periods load', async () => {
@@ -597,7 +687,7 @@ describe('sales analysis page', () => {
     await fireEvent.click(screen.getByText('開始分析'));
     await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' }).closest('section')).toHaveTextContent('Mask'));
 
-    await fireEvent.change(screen.getByLabelText('Promoter 群組'), { target: { value: 'g-skin' } });
+    await fireEvent.change(screen.getByLabelText('商品範圍'), { target: { value: 'g-skin' } });
     await waitFor(() => {
       const requested = getSalesAnalysisItems.mock.calls.map((call) => (call[0] as { periodKey: string }).periodKey);
       expect(requested).toEqual(expect.arrayContaining(['current', 'previous', 'yearAgo']));
@@ -658,7 +748,11 @@ describe('sales analysis page', () => {
     const netSalesKpi = screen.getAllByText('淨銷售額').find((element) => element.tagName === 'DT');
     expect(netSalesKpi?.parentElement).toHaveTextContent('180.00');
 
-    await fireEvent.change(screen.getByLabelText('Promoter 群組'), { target: { value: 'g-skin' } });
+    const productScope = screen.getByLabelText('商品範圍');
+    expect(productScope).toHaveValue('');
+    expect(productScope).toHaveTextContent('我的護膚 (1)');
+    expect(productScope).toHaveTextContent('家居組 (1)');
+    await fireEvent.change(productScope, { target: { value: 'g-skin' } });
     await waitFor(() => expect(topSales).not.toHaveTextContent('Wipes'));
     expect(topSales).toHaveTextContent('Mask');
     expect(netSalesKpi?.parentElement).toHaveTextContent('100.00');
@@ -666,12 +760,12 @@ describe('sales analysis page', () => {
     expect(basketKpi?.parentElement).toHaveTextContent('—');
     expect(screen.queryByRole('tab', { name: '每週變化' })).not.toBeInTheDocument();
 
-    await fireEvent.change(screen.getByLabelText('Promoter 群組'), { target: { value: 'g-household' } });
+    await fireEvent.change(productScope, { target: { value: 'g-household' } });
     await waitFor(() => expect(topSales).toHaveTextContent('Wipes'));
     expect(topSales).not.toHaveTextContent('Mask');
     expect(netSalesKpi?.parentElement).toHaveTextContent('80.00');
 
-    await fireEvent.change(screen.getByLabelText('Promoter 群組'), { target: { value: 'g-skin' } });
+    await fireEvent.change(productScope, { target: { value: 'g-skin' } });
 
     await fireEvent.click(screen.getByRole('tab', { name: '關注' }));
     await waitFor(() => expect(screen.getByText('我的護膚')).toBeInTheDocument());
@@ -682,6 +776,6 @@ describe('sales analysis page', () => {
     await fireEvent.click(screen.getByRole('tab', { name: '商品' }));
     expect(screen.getByText('Mask')).toBeInTheDocument();
     expect(screen.queryByText('Wipes')).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Promoter 群組')).toHaveValue('g-skin');
+    expect(productScope).toHaveValue('g-skin');
   });
 });

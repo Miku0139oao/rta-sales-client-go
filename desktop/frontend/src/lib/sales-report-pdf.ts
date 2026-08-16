@@ -60,6 +60,11 @@ export interface SalesReportScope {
   itemCodes: string[];
 }
 
+export interface SalesReportChapter {
+  scope: SalesReportScope;
+  accumulator?: SalesReportAccumulator;
+}
+
 interface RankedItem {
   id: string;
   code: string;
@@ -158,11 +163,12 @@ export async function prepareSalesAnalysisFont(
   locale: Locale,
   filter: SalesReportFilter = defaultSalesReportFilter(),
   scope?: SalesReportScope,
+  extraScopes: SalesReportScope[] = [],
 ): Promise<string> {
   try {
     const [fontBytes, subsetter] = await Promise.all([loadFontBytes(), import('./subsetReportFont')]);
     try {
-      const glyphs = collectReportGlyphs(result, categoryLevel, locale, filter, scope);
+      const glyphs = collectReportGlyphs(result, categoryLevel, locale, filter, scope, extraScopes);
       return bytesToBase64(await subsetter.subsetReportFont(fontBytes, glyphs));
     } finally {
       releaseLoadedReportFont();
@@ -208,14 +214,17 @@ export async function generateSalesAnalysisPDF(
   filter: SalesReportFilter = defaultSalesReportFilter(),
   fontBase64?: string,
   accumulator?: SalesReportAccumulator,
-  scope?: SalesReportScope,
+  extraChapters: SalesReportChapter[] = [],
 ): Promise<Uint8Array> {
   try {
+    const extraScopes = extraChapters.map((chapter) => chapter.scope);
     const [resolvedFont, { jsPDF: PDFDocument }] = await Promise.all([
-      fontBase64 ? Promise.resolve(fontBase64) : prepareSalesAnalysisFont(result, categoryLevel, locale, filter, scope),
+      fontBase64 ? Promise.resolve(fontBase64) : prepareSalesAnalysisFont(result, categoryLevel, locale, filter, undefined, extraScopes),
       import('jspdf'),
     ]);
-    return renderSalesAnalysisPDF(result, storeId, categoryLevel, locale, resolvedFont, PDFDocument, filter, accumulator, scope);
+    return renderSalesAnalysisPDF(
+      result, storeId, categoryLevel, locale, resolvedFont, PDFDocument, filter, accumulator, undefined, extraChapters,
+    );
   } catch (error) {
     if (error instanceof AppError) throw error;
     throw new AppError('pdf_failed', error instanceof Error ? error.message : String(error));
@@ -230,10 +239,14 @@ export async function buildSalesAnalysisPDF(
   fontBase64: string,
   filter: SalesReportFilter = defaultSalesReportFilter(),
   scope?: SalesReportScope,
+  extraChapters: SalesReportScope[] = [],
 ): Promise<Uint8Array> {
   try {
     const { jsPDF: PDFDocument } = await import('jspdf');
-    return renderSalesAnalysisPDF(result, storeId, categoryLevel, locale, fontBase64, PDFDocument, filter, undefined, scope);
+    return renderSalesAnalysisPDF(
+      result, storeId, categoryLevel, locale, fontBase64, PDFDocument, filter, undefined, scope,
+      extraChapters.map((chapter) => ({ scope: chapter })),
+    );
   } catch (error) {
     if (error instanceof AppError) throw error;
     throw new AppError('pdf_failed', error instanceof Error ? error.message : String(error));
@@ -250,18 +263,19 @@ function renderSalesAnalysisPDF(
   filter: SalesReportFilter = defaultSalesReportFilter(),
   accumulator?: SalesReportAccumulator,
   scope?: SalesReportScope,
+  extraChapters: SalesReportChapter[] = [],
 ): Uint8Array {
   const labels = reportLabels(locale);
   const combined = isAllStoresReport(storeId);
-  const periods = storePeriods(result, storeId, filter, categoryLevel, accumulator, labels.uncategorized, scope);
-  const current = periodByKey(periods, 'current') ?? periods[0];
-  if (!current) throw new AppError('pdf_failed', 'The selected store has no current sales period');
-
   const stores = listSuccessfulReportStores(result);
   const store = stores.find((candidate) => candidate.businessId === storeId);
   const headerId = combined ? 'ALL' : storeId;
   const baseStoreLabel = combined ? `${labels.allStores} (${stores.length})` : (store?.label.trim() || storeId);
-  const storeLabel = scope ? `${baseStoreLabel} · ${scope.groupName}` : baseStoreLabel;
+  const firstPeriods = storePeriods(result, storeId, filter, categoryLevel, accumulator, labels.uncategorized, scope);
+  const firstCurrent = periodByKey(firstPeriods, 'current') ?? firstPeriods[0];
+  if (!firstCurrent) throw new AppError('pdf_failed', 'The selected store has no current sales period');
+
+  const chapterNames = extraChapters.map((chapter) => chapter.scope.groupName).filter(Boolean);
   const doc = new PDFDocument({
     orientation: 'landscape', unit: 'mm', format: 'a4', compress: true, putOnlyUsedFonts: true,
   });
@@ -270,12 +284,63 @@ function renderSalesAnalysisPDF(
   doc.setFont(FONT, 'normal');
   doc.setProperties({
     title: `RTA Sales Analysis - ${headerId}${scope ? ` - ${scope.groupName}` : ''}`,
-    subject: `${current.from} - ${current.to}${scope ? ` · ${scope.groupName}` : ''}`,
+    subject: `${firstCurrent.from} - ${firstCurrent.to}${chapterNames.length ? ` · ${chapterNames.join(' · ')}` : scope ? ` · ${scope.groupName}` : ''}`,
     author: 'RTA 銷售分析',
     creator: 'RTA 銷售分析',
   });
 
-  drawSummaryPage(doc, periods, current, headerId, storeLabel, categoryLevel, labels, locale);
+  const footers: FooterChapter[] = [];
+  appendReportSection(doc, {
+    result, storeId, categoryLevel, locale, filter, labels, headerId, baseStoreLabel, combined, stores,
+    accumulator, scope, startOnCurrentPage: true,
+  }, footers);
+  for (const chapter of extraChapters) {
+    appendReportSection(doc, {
+      result, storeId, categoryLevel, locale, filter, labels, headerId, baseStoreLabel, combined, stores,
+      accumulator: chapter.accumulator, scope: chapter.scope, startOnCurrentPage: false,
+    }, footers);
+  }
+
+  addFooters(doc, headerId, footers);
+  return new Uint8Array(doc.output('arraybuffer'));
+}
+
+interface ReportSectionOptions {
+  result: SalesAnalysisResult;
+  storeId: string;
+  categoryLevel: SalesReportCategoryLevel;
+  locale: Locale;
+  filter: SalesReportFilter;
+  labels: Labels;
+  headerId: string;
+  baseStoreLabel: string;
+  combined: boolean;
+  stores: SalesAnalysisStore[];
+  accumulator?: SalesReportAccumulator;
+  scope?: SalesReportScope;
+  startOnCurrentPage: boolean;
+}
+
+interface FooterChapter {
+  start: number;
+  end: number;
+  label: string;
+}
+
+function appendReportSection(doc: jsPDF, options: ReportSectionOptions, footers: FooterChapter[]): void {
+  const {
+    result, storeId, categoryLevel, locale, filter, labels, headerId, baseStoreLabel, combined, stores,
+    accumulator, scope, startOnCurrentPage,
+  } = options;
+  const periods = storePeriods(result, storeId, filter, categoryLevel, accumulator, labels.uncategorized, scope);
+  const current = periodByKey(periods, 'current') ?? periods[0];
+  if (!current) return;
+  if (!startOnCurrentPage) doc.addPage();
+  const start = doc.getNumberOfPages();
+  const storeLabel = scope ? `${baseStoreLabel} · ${scope.groupName}` : baseStoreLabel;
+  const pageTitle = (title: string) => scope ? `${title} · ${scope.groupName}` : title;
+
+  drawSummaryPage(doc, periods, current, headerId, storeLabel, categoryLevel, labels, locale, pageTitle(labels.summary));
   const weeks = scope ? [] : weeksForReport(result.weeks ?? [], storeId, combined);
   if (weeks.length) {
     doc.addPage();
@@ -286,11 +351,11 @@ function renderSalesAnalysisPDF(
     drawStoreComparisonPage(doc, result, headerId, storeLabel, labels, locale);
   }
   doc.addPage();
-  drawOverallRankingsPage(doc, current, headerId, storeLabel, categoryLevel, labels, locale);
+  drawOverallRankingsPage(doc, current, headerId, storeLabel, categoryLevel, labels, locale, pageTitle(`${labels.topSales} / ${labels.topQuantity}`));
   const yearAgoNext = periodByKey(periods, 'yearAgoNext');
   if (yearAgoNext && (!scope || periodHasFocusRows(yearAgoNext))) {
     doc.addPage();
-    drawFocusPage(doc, yearAgoNext, current, headerId, storeLabel, labels);
+    drawFocusPage(doc, yearAgoNext, current, headerId, storeLabel, labels, pageTitle(labels.focusTitle));
   }
 
   for (const key of ['current', 'yearAgo', 'yearAgoNext']) {
@@ -298,7 +363,7 @@ function renderSalesAnalysisPDF(
     if (!period) continue;
     if (!scope || periodHasCategoryRows(period, 'amount')) {
       doc.addPage();
-      drawCategoryRankingPage(doc, period, headerId, storeLabel, categoryLevel, 'amount', labels, locale);
+      drawCategoryRankingPage(doc, period, headerId, storeLabel, categoryLevel, 'amount', labels, locale, pageTitle);
     }
   }
   for (const key of ['current', 'previous', 'previous2']) {
@@ -306,12 +371,11 @@ function renderSalesAnalysisPDF(
     if (!period) continue;
     if (!scope || periodHasCategoryRows(period, 'quantity')) {
       doc.addPage();
-      drawCategoryRankingPage(doc, period, headerId, storeLabel, categoryLevel, 'quantity', labels, locale);
+      drawCategoryRankingPage(doc, period, headerId, storeLabel, categoryLevel, 'quantity', labels, locale, pageTitle);
     }
   }
 
-  addFooters(doc, headerId);
-  return new Uint8Array(doc.output('arraybuffer'));
+  footers.push({ start, end: doc.getNumberOfPages(), label: scope?.groupName ?? '' });
 }
 
 export function listSuccessfulReportStores(result: SalesAnalysisResult): SalesAnalysisStore[] {
@@ -338,13 +402,12 @@ export function isAllStoresReport(storeId: string): boolean {
   return storeId === ALL_STORES_REPORT_ID;
 }
 
-export function salesAnalysisPDFFilename(storeId: string, from: string, to: string, groupName = ''): string {
+export function salesAnalysisPDFFilename(storeId: string, from: string, to: string): string {
   const safeStore = isAllStoresReport(storeId) ? 'all' : (storeId.trim().replace(/[^\p{L}\p{N}_-]+/gu, '-') || 'store');
-  const safeGroup = groupName.trim().replace(/[^\p{L}\p{N}_-]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 64);
   const start = from.replaceAll('-', '') || 'report';
   const end = to.replaceAll('-', '');
   const period = end && end !== start ? `${start}-${end}` : start;
-  return `RTA-Sales-${safeStore}${safeGroup ? `-${safeGroup}` : ''}-${period}.pdf`;
+  return `RTA-Sales-${safeStore}-${period}.pdf`;
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {
@@ -414,6 +477,7 @@ export function collectReportGlyphs(
   locale: Locale,
   filter: SalesReportFilter = defaultSalesReportFilter(),
   scope?: SalesReportScope,
+  extraScopes: SalesReportScope[] = [],
 ): string {
   const glyphs = new Set(REQUIRED_GLYPHS);
   const add = (value: string | undefined) => {
@@ -424,6 +488,7 @@ export function collectReportGlyphs(
   add('RTA Sales Analysis');
   add('Page');
   add(scope?.groupName);
+  for (const extra of extraScopes) add(extra.groupName);
   add(reportLabels(locale).title);
   for (const value of Object.values(reportLabels(locale))) add(value);
   add(result.from);
@@ -797,8 +862,9 @@ function drawSummaryPage(
   level: SalesReportCategoryLevel,
   labels: Labels,
   locale: Locale,
+  title = labels.summary,
 ): void {
-  drawPageHeader(doc, labels.summary, `${current.from} - ${current.to}`, storeId, storeLabel);
+  drawPageHeader(doc, title, `${current.from} - ${current.to}`, storeId, storeLabel);
   const previous = periodByKey(periods, 'previous');
   const yearAgo = periodByKey(periods, 'yearAgo');
   const metrics = [
@@ -1052,8 +1118,9 @@ function drawOverallRankingsPage(
   level: SalesReportCategoryLevel,
   labels: Labels,
   locale: Locale,
+  title = `${labels.topSales} / ${labels.topQuantity}`,
 ): void {
-  drawPageHeader(doc, `${labels.topSales} / ${labels.topQuantity}`, `${current.from} - ${current.to}`, storeId, storeLabel);
+  drawPageHeader(doc, title, `${current.from} - ${current.to}`, storeId, storeLabel);
   drawRankingPanel(doc, 10, 31, 136.5, 159, labels.topSales, current.topAmount ?? rankItems(current.items, 'amount').slice(0, 15), 'amount', level, labels, locale);
   drawRankingPanel(doc, 150.5, 31, 136.5, 159, labels.topQuantity, current.topQuantity ?? rankItems(current.items, 'quantity').slice(0, 15), 'quantity', level, labels, locale);
 }
@@ -1067,8 +1134,9 @@ function drawCategoryRankingPage(
   metric: Metric,
   labels: Labels,
   locale: Locale,
+  titleFor: (title: string) => string = (title) => title,
 ): void {
-  const title = `${period.label} - ${metric === 'amount' ? labels.salesRanking : labels.quantityRanking}`;
+  const title = titleFor(`${period.label} - ${metric === 'amount' ? labels.salesRanking : labels.quantityRanking}`);
   const groups = metric === 'amount'
     ? period.amountGroups ?? categoryGroups(period.items, level, metric, labels.uncategorized)
     : period.quantityGroups ?? categoryGroups(period.items, level, metric, labels.uncategorized);
@@ -1261,8 +1329,9 @@ function drawFocusPage(
   storeId: string,
   storeLabel: string,
   labels: Labels,
+  title = labels.focusTitle,
 ): void {
-  drawPageHeader(doc, labels.focusTitle, `${yearAgoNext.from} - ${yearAgoNext.to}`, storeId, storeLabel);
+  drawPageHeader(doc, title, `${yearAgoNext.from} - ${yearAgoNext.to}`, storeId, storeLabel);
   const groups = yearAgoNext.focusGroups
     ?? (yearAgoNext.focusCatalog ? [] : buildFocusGroups(yearAgoNext.items, current.items, 8));
   const titles: Record<string, string> = {
@@ -1278,7 +1347,7 @@ function drawFocusPage(
   for (let start = 0; start < cards.length; start += 3) {
     if (start > 0) {
       doc.addPage();
-      drawPageHeader(doc, labels.focusTitle, `${yearAgoNext.from} - ${yearAgoNext.to}`, storeId, storeLabel);
+      drawPageHeader(doc, title, `${yearAgoNext.from} - ${yearAgoNext.to}`, storeId, storeLabel);
     }
     const slice = cards.slice(start, start + 3);
     const count = usingCatalog ? slice.length : 3;
@@ -1463,14 +1532,16 @@ function card(doc: jsPDF, x: number, y: number, width: number, height: number): 
   doc.roundedRect(x, y, width, height, 2.2, 2.2, 'FD');
 }
 
-function addFooters(doc: jsPDF, storeId: string): void {
+function addFooters(doc: jsPDF, storeId: string, chapters: FooterChapter[] = []): void {
   const pages = doc.getNumberOfPages();
   for (let page = 1; page <= pages; page += 1) {
     doc.setPage(page);
+    const chapter = chapters.find((entry) => page >= entry.start && page <= entry.end);
+    const suffix = chapter?.label ? `  |  ${chapter.label}` : '';
     setDraw(doc, COLORS.line);
     doc.line(10, 199.5, 287, 199.5);
     setText(doc, COLORS.slate, 6, 'normal');
-    doc.text(`RTA Sales Analysis  |  ${storeId}`, 10, 204);
+    doc.text(`RTA Sales Analysis  |  ${storeId}${suffix}`, 10, 204);
     doc.text(`Page ${page} / ${pages}`, 287, 204, { align: 'right' });
   }
 }

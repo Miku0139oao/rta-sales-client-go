@@ -108,7 +108,7 @@ Install:
 - Go 1.25+ (CI installs 1.25.13 so govulncheck matches a patched standard library)
 - [Bun 1.3.14](https://bun.sh) — the frontend is pinned to Bun, not npm
 - Git and PowerShell
-- WebView2, or the desktop window will not start
+- WebView2 (normally installed with Edge on Windows 10/11), or the desktop window will not start
 - NSIS 3.12 only if you want the installer: `choco install nsis --version 3.12.0`
 
 Wails is pinned at `v3.0.0-beta.8`. You do not have to install it yourself; the scripts `go run` that version. To install it globally:
