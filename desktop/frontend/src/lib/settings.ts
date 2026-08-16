@@ -3,6 +3,9 @@ import type { AppSettings } from './types';
 const STORAGE_KEY = 'rta-sales-desktop-settings-v2';
 const LEGACY_STORAGE_KEY = 'rta-sales-desktop-settings-v1';
 
+export const CONCURRENCY_CHOICES = [8, 16, 32, 48, 64, 80, 128, 160] as const;
+export const SIMULATE_STORE_CHOICES = [0, 16] as const;
+
 export const defaultSettings: AppSettings = {
   locale: 'zh-TW',
   theme: 'system',
@@ -18,15 +21,27 @@ function clampInteger(value: unknown, fallback: number, min: number, max: number
   return Number.isFinite(parsed) ? Math.min(max, Math.max(min, Math.round(parsed))) : fallback;
 }
 
+function snapToChoices(value: number, choices: readonly number[]): number {
+  return choices.reduce((best, choice) =>
+    Math.abs(choice - value) < Math.abs(best - value) ? choice : best,
+  );
+}
+
 export function normalizeSettings(value: Partial<AppSettings>): AppSettings {
   return {
     locale: value.locale === 'en' ? 'en' : 'zh-TW',
     theme: value.theme === 'light' || value.theme === 'dark' ? value.theme : 'system',
     maxJobs: clampInteger(value.maxJobs, defaultSettings.maxJobs, 1, 2000),
-    accountConcurrency: clampInteger(value.accountConcurrency, defaultSettings.accountConcurrency, 1, 160),
+    accountConcurrency: snapToChoices(
+      clampInteger(value.accountConcurrency, defaultSettings.accountConcurrency, 1, 160),
+      CONCURRENCY_CHOICES,
+    ),
     useLocalMapping: value.useLocalMapping === true,
     mappingPath: typeof value.mappingPath === 'string' ? value.mappingPath : '',
-    simulateStoreCount: clampInteger(value.simulateStoreCount, defaultSettings.simulateStoreCount, 0, 32),
+    simulateStoreCount: snapToChoices(
+      clampInteger(value.simulateStoreCount, defaultSettings.simulateStoreCount, 0, 32),
+      SIMULATE_STORE_CHOICES,
+    ),
   };
 }
 

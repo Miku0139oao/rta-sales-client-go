@@ -25,8 +25,25 @@ export function modal(node: HTMLDialogElement, initial: ModalOptions) {
     if (outside) requestClose();
   }
 
+  function handleWheel(event: WheelEvent) {
+    const target = event.target as HTMLElement | null;
+    const nested = target?.closest('.pane-scroll, .table-scroll, .facet-options, .store-grid');
+    if (nested instanceof HTMLElement) {
+      const canScroll = nested.scrollHeight > nested.clientHeight + 1;
+      const style = getComputedStyle(nested);
+      const scrollable = style.overflowY === 'auto' || style.overflowY === 'scroll';
+      if (canScroll && scrollable) {
+        if (event.deltaY < 0 && nested.scrollTop > 0) return;
+        if (event.deltaY > 0 && nested.scrollTop + nested.clientHeight < nested.scrollHeight - 1) return;
+      }
+    }
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
   node.addEventListener('cancel', handleCancel);
   node.addEventListener('click', handleBackdropClick);
+  node.addEventListener('wheel', handleWheel, { passive: false });
 
   try {
     if (typeof node.showModal === 'function') node.showModal();
@@ -47,6 +64,7 @@ export function modal(node: HTMLDialogElement, initial: ModalOptions) {
     destroy() {
       node.removeEventListener('cancel', handleCancel);
       node.removeEventListener('click', handleBackdropClick);
+      node.removeEventListener('wheel', handleWheel);
       if (node.open && typeof node.close === 'function') node.close();
       queueMicrotask(() => previouslyFocused?.focus({ preventScroll: true }));
     },

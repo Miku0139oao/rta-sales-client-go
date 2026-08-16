@@ -53,8 +53,12 @@
 
   function relayMainWheel(event: WheelEvent) {
     if (event.deltaY === 0) return;
+    if (document.querySelector('dialog.app-dialog[open]')) {
+      event.preventDefault();
+      return;
+    }
     const target = event.target as HTMLElement | null;
-    const nested = target?.closest('.pane-scroll, .table-scroll, .facet-options, .store-grid, .app-dialog');
+    const nested = target?.closest('.pane-scroll, .table-scroll, .facet-options, .store-grid');
     if (nested instanceof HTMLElement && canScrollVertically(nested, event.deltaY)) return;
     const scroller = event.currentTarget as HTMLElement;
     if (!canScrollVertically(scroller, event.deltaY)) return;

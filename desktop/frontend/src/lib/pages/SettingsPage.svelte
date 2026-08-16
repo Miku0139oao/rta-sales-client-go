@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { defaultSettings, normalizeSettings } from '../settings';
+  import { CONCURRENCY_CHOICES, defaultSettings, normalizeSettings } from '../settings';
   import { backend } from '../backend';
   import { errorMessage } from '../i18n';
   import type { Translator } from '../i18n';
@@ -142,15 +142,10 @@
           </div>
           <div class="field-group">
             <label for="account-concurrency">{t('settings.concurrency')}</label>
-            <select id="account-concurrency" value={draft.accountConcurrency} onchange={(event) => updateNumber('accountConcurrency', event)}>
-              <option value="8">8</option>
-              <option value="16">16</option>
-              <option value="32">32</option>
-              <option value="48">48</option>
-              <option value="64">64</option>
-              <option value="80">80</option>
-              <option value="128">128</option>
-              <option value="160">160</option>
+            <select id="account-concurrency" value={String(draft.accountConcurrency)} onchange={(event) => updateNumber('accountConcurrency', event)}>
+              {#each CONCURRENCY_CHOICES as choice}
+                <option value={String(choice)}>{choice}</option>
+              {/each}
             </select>
           </div>
         </div>
@@ -165,7 +160,7 @@
           <label for="simulate-stores">{t('settings.simulateStores')}</label>
           <select
             id="simulate-stores"
-            value={draft.simulateStoreCount}
+            value={String(draft.simulateStoreCount)}
             onchange={(event) => updateNumber('simulateStoreCount', event)}
           >
             <option value="0">{t('settings.simulateStoresOff')}</option>
