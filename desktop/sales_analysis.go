@@ -18,9 +18,9 @@ import (
 
 const salesAnalysisProgressEventName = "rta:sales-analysis-progress"
 
-// ListSalesAnalysisStores loads the public stores authorized for one enabled
-// desktop profile. The profile's credentials and RTA query-only store keys
-// remain in the backend process.
+// ListSalesAnalysisStores loads authorized stores from one profile, or from
+// every enabled profile when ProfileID is empty. Overlapping stores keep the
+// earlier profile in account priority order.
 func (a *App) ListSalesAnalysisStores(request ProfileIDRequest) ([]SalesAnalysisStore, error) {
 	operationID, err := newUUID()
 	if err != nil {
@@ -32,29 +32,29 @@ func (a *App) ListSalesAnalysisStores(request ProfileIDRequest) ([]SalesAnalysis
 	}
 	defer finish()
 
-	client, err := a.salesAnalysisClient(request.ProfileID, request.SimulateStoreCount)
+	routes, err := a.salesAnalysisRoutes(ctx, request.ProfileID, request.SimulateStoreCount)
 	if err != nil {
 		return nil, err
 	}
-	stores, err := client.Stores(ctx)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]SalesAnalysisStore, 0, len(stores))
-	for _, store := range stores {
-		businessID := strings.TrimSpace(store.BusinessID)
+	result := make([]SalesAnalysisStore, 0, len(routes))
+	for _, route := range routes {
+		businessID := strings.TrimSpace(route.store.BusinessID)
 		if businessID == "" {
 			continue
 		}
-		result = append(result, SalesAnalysisStore{BusinessID: businessID, Label: strings.TrimSpace(store.Label)})
+		result = append(result, SalesAnalysisStore{
+			BusinessID: businessID,
+			Label:      strings.TrimSpace(route.store.Label),
+			ProfileID:  route.profileID,
+			Profile:    route.profile,
+		})
 	}
 	sort.Slice(result, func(left, right int) bool { return result[left].BusinessID < result[right].BusinessID })
 	return result, nil
 }
 
-// RunSalesAnalysis queries multiple authorized stores through one account in
-// parallel. Article View product rows retain all five category levels so the
-// frontend can filter and regroup instantly without another RTA request.
+// RunSalesAnalysis queries selected stores in parallel. Each store uses the
+// account that owns it so multiple profiles can request RTA at the same time.
 func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResult, error) {
 	started := time.Now()
 	periods, err := normalizeSalesAnalysisPeriods(request)
@@ -82,25 +82,28 @@ func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResul
 	}
 	defer finish()
 
-	client, err := a.salesAnalysisClient(request.ProfileID, request.SimulateStoreCount)
+	routes, err := a.salesAnalysisRoutes(ctx, request.ProfileID, request.SimulateStoreCount)
 	if err != nil {
 		return SalesAnalysisResult{}, err
 	}
-	authorized, err := client.Stores(ctx)
-	if err != nil {
-		return SalesAnalysisResult{}, err
+	byID := make(map[string]analysisStoreRoute, len(routes))
+	for _, route := range routes {
+		byID[strings.TrimSpace(route.store.BusinessID)] = route
 	}
-	byID := make(map[string]rtasales.Store, len(authorized))
-	for _, store := range authorized {
-		byID[strings.TrimSpace(store.BusinessID)] = store
+	type selectedStore struct {
+		route analysisStoreRoute
+		query accountClient
 	}
-	selected := make([]rtasales.Store, 0, len(storeIDs))
+	selected := make([]selectedStore, 0, len(storeIDs))
 	for _, storeID := range storeIDs {
-		store, ok := byID[storeID]
+		route, ok := byID[storeID]
 		if !ok {
-			return SalesAnalysisResult{}, fmt.Errorf("store %q is not authorized for the selected profile", storeID)
+			return SalesAnalysisResult{}, fmt.Errorf("store %q is not authorized for the selected profiles", storeID)
 		}
-		selected = append(selected, store)
+		selected = append(selected, selectedStore{
+			route: route,
+			query: maybeSimulateClient(route.client, request.SimulateStoreCount),
+		})
 	}
 	type storeOutcome struct {
 		result *rtasales.SalesResult
@@ -133,15 +136,17 @@ func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResul
 		go func() {
 			defer waitGroup.Done()
 			for task := range jobs {
-				store := selected[task.storeIndex]
+				selectedStore := selected[task.storeIndex]
+				store := selectedStore.route.store
 				period := periods[task.periodIndex]
-				result, queryErr := client.Sales(ctx, rtasales.SalesQuery{
+				result, queryErr := selectedStore.query.Sales(ctx, rtasales.SalesQuery{
 					BusinessStoreID: store.BusinessID,
 					StartDate:       period.from,
 					EndDate:         period.to,
 					Category:        "全部商品",
-					SkipTrend:       !period.includeTrend,
-					Compact:         true,
+					SkipTrend:           !period.includeTrend,
+					SkipTrendLookback:   period.key != "current",
+					Compact:             true,
 				})
 				outcomes[task.periodIndex][task.storeIndex] = storeOutcome{result: result, err: queryErr}
 				current := int(completed.Add(1))
@@ -196,7 +201,7 @@ func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResul
 		}
 		builder := newPackedPeriodBuilder()
 		for storeIndex, outcome := range outcomes[periodIndex] {
-			store := selected[storeIndex]
+			store := selected[storeIndex].route.store
 			if outcome.err != nil {
 				periodResult.Issues = append(periodResult.Issues, SalesAnalysisIssue{
 					PeriodKey: period.key, StoreID: store.BusinessID, StoreLabel: store.Label, Message: outcome.err.Error(),
@@ -359,30 +364,119 @@ func (a *App) beginSalesAnalysisOperation(operationID string) (context.Context, 
 	}, nil
 }
 
-func (a *App) salesAnalysisClient(profileID string, simulateStoreCount int) (accountClient, error) {
-	profileID = strings.TrimSpace(profileID)
-	if !validProfileID(profileID) {
-		return nil, errors.New("invalid profile identifier")
-	}
-	a.profileMu.Lock()
-	records, err := a.profiles.List()
+type analysisStoreRoute struct {
+	store     rtasales.Store
+	client    accountClient
+	profileID string
+	profile   string
+}
+
+func (a *App) salesAnalysisRoutes(ctx context.Context, profileID string, simulateStoreCount int) ([]analysisStoreRoute, error) {
+	profiles, err := a.salesAnalysisProfiles(profileID)
 	if err != nil {
-		a.profileMu.Unlock()
 		return nil, err
 	}
-	index, ok := findProfile(records, profileID)
-	if !ok {
-		a.profileMu.Unlock()
-		return nil, errors.New("profile does not exist")
+	seen := make(map[string]struct{})
+	routes := make([]analysisStoreRoute, 0)
+	for _, profile := range profiles {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		client, err := a.salesAnalysisAccountClient(profile.ID)
+		if err != nil {
+			if strings.TrimSpace(profileID) == "" && errors.Is(err, securestore.ErrNotFound) {
+				continue
+			}
+			return nil, err
+		}
+		stores, err := client.Stores(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, store := range stores {
+			storeID := strings.TrimSpace(store.BusinessID)
+			if storeID == "" {
+				continue
+			}
+			if _, exists := seen[storeID]; exists {
+				continue
+			}
+			seen[storeID] = struct{}{}
+			store.BusinessID = storeID
+			store.Label = strings.TrimSpace(store.Label)
+			routes = append(routes, analysisStoreRoute{
+				store: store, client: client, profileID: profile.ID, profile: profile.DisplayName,
+			})
+		}
 	}
-	profile := records[index]
+	if len(routes) == 0 {
+		return nil, errors.New("no authorized stores are available")
+	}
+	return expandAnalysisStoreRoutes(routes, simulateStoreCount), nil
+}
+
+func expandAnalysisStoreRoutes(routes []analysisStoreRoute, simulateStoreCount int) []analysisStoreRoute {
+	if len(routes) == 0 {
+		return routes
+	}
+	stores := make([]rtasales.Store, 0, len(routes))
+	byID := make(map[string]analysisStoreRoute, len(routes))
+	for _, route := range routes {
+		stores = append(stores, route.store)
+		byID[route.store.BusinessID] = route
+	}
+	expanded := expandSimulatedStores(stores, simulateStoreCount)
+	result := make([]analysisStoreRoute, 0, len(expanded))
+	for _, store := range expanded {
+		sourceID, _, _ := resolveSimulatedStore(store.BusinessID)
+		source, ok := byID[sourceID]
+		if !ok {
+			continue
+		}
+		result = append(result, analysisStoreRoute{
+			store: store, client: source.client, profileID: source.profileID, profile: source.profile,
+		})
+	}
+	return result
+}
+
+func (a *App) salesAnalysisProfiles(profileID string) ([]profileRecord, error) {
+	profileID = strings.TrimSpace(profileID)
+	a.profileMu.Lock()
+	records, err := a.profiles.List()
 	a.profileMu.Unlock()
-	if !profile.Enabled {
-		return nil, errors.New("profile must be enabled before running sales analysis")
+	if err != nil {
+		return nil, err
 	}
+	if profileID != "" {
+		if !validProfileID(profileID) {
+			return nil, errors.New("invalid profile identifier")
+		}
+		index, ok := findProfile(records, profileID)
+		if !ok {
+			return nil, errors.New("profile does not exist")
+		}
+		if !records[index].Enabled {
+			return nil, errors.New("profile must be enabled before running sales analysis")
+		}
+		return []profileRecord{records[index]}, nil
+	}
+	enabled := make([]profileRecord, 0, len(records))
+	for _, record := range records {
+		if record.Enabled {
+			enabled = append(enabled, record)
+		}
+	}
+	if len(enabled) == 0 {
+		return nil, errors.New("at least one enabled profile is required")
+	}
+	return enabled, nil
+}
+
+func (a *App) salesAnalysisAccountClient(profileID string) (accountClient, error) {
 	credential, err := a.credentials.Get(profileID)
 	if errors.Is(err, securestore.ErrNotFound) {
-		return nil, errors.New("profile has no saved credentials")
+		return nil, fmt.Errorf("profile has no saved credentials: %w", err)
 	}
 	if err != nil {
 		return nil, err
@@ -391,11 +485,7 @@ func (a *App) salesAnalysisClient(profileID string, simulateStoreCount int) (acc
 	if err != nil {
 		return nil, err
 	}
-	client, err := a.clients.New(credential, cookies)
-	if err != nil {
-		return nil, err
-	}
-	return maybeSimulateClient(client, simulateStoreCount), nil
+	return a.clients.New(credential, cookies)
 }
 
 func normalizeSalesAnalysisStoreIDs(values []string) []string {

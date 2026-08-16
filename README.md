@@ -197,7 +197,7 @@ Open **Settings**.
 | --- | --- |
 | Theme and language | Switch to Traditional Chinese, or change light / dark. **Applies immediately** — no Save click |
 | Max jobs per run | Default 2,000. A very wide date range times many stores will stop here |
-| Query concurrency | Default 32. If the network is flaky, try 8 or 4 |
+| Query concurrency | Default 160, for one account querying many stores at once. If the network is flaky, try 32 or 8 |
 | Local mapping | Only if Excel store codes are not RTA store ids |
 
 After changing workload or mapping, click **Save**.

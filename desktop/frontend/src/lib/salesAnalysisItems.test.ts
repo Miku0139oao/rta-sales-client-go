@@ -16,6 +16,17 @@ describe('sales analysis item batches', () => {
     })).toBe(false);
   });
 
+  it('keeps rows when the period store list is missing', () => {
+    const items = unpackSalesAnalysisItems({
+      periodKey: 'current',
+      dict: ['', 'A1', 'Mask'],
+      rows: [{ s: 0, ac: 1, an: 2, ns: 10 }],
+    });
+    expect(items).toEqual([expect.objectContaining({
+      storeId: '', storeLabel: '', articleCode: 'A1', articleName: 'Mask', netSalesAmount: 10,
+    })]);
+  });
+
   it('restores store labels from the period store list', () => {
     const items = unpackSalesAnalysisItems({
       periodKey: 'current',

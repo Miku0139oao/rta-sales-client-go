@@ -16,6 +16,7 @@ cookies.json
 # Build and test output
 bin/
 release/
+output/
 coverage.out
 *.test
 *.exe

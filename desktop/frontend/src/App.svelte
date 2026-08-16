@@ -51,6 +51,31 @@
     updateThemePreference(resolvedTheme === 'dark' ? 'light' : 'dark');
   }
 
+  function relayMainWheel(event: WheelEvent) {
+    if (event.deltaY === 0) return;
+    const target = event.target as HTMLElement | null;
+    const nested = target?.closest('.pane-scroll, .table-scroll, .facet-options, .store-grid, .app-dialog');
+    if (nested instanceof HTMLElement && canScrollVertically(nested, event.deltaY)) return;
+    const scroller = event.currentTarget as HTMLElement;
+    if (!canScrollVertically(scroller, event.deltaY)) return;
+    scroller.scrollTop += wheelDeltaY(event);
+    event.preventDefault();
+  }
+
+  function canScrollVertically(element: HTMLElement, deltaY: number): boolean {
+    if (element.scrollHeight <= element.clientHeight + 1) return false;
+    const style = getComputedStyle(element);
+    if (style.overflowY !== 'auto' && style.overflowY !== 'scroll') return false;
+    if (deltaY < 0) return element.scrollTop > 0;
+    return element.scrollTop + element.clientHeight < element.scrollHeight - 1;
+  }
+
+  function wheelDeltaY(event: WheelEvent): number {
+    if (event.deltaMode === 1) return event.deltaY * 16;
+    if (event.deltaMode === 2) return event.deltaY * (event.currentTarget as HTMLElement).clientHeight;
+    return event.deltaY;
+  }
+
   async function navigateTo(page: Page) {
     if (navigationBusy && page !== activePage) return;
     activePage = page;
@@ -107,7 +132,7 @@
       </nav>
     </aside>
 
-    <main id="main-content" bind:this={mainContent} tabindex="-1">
+    <main id="main-content" bind:this={mainContent} tabindex="-1" onwheel={relayMainWheel}>
       {#if activePage === 'excel'}
         <ExcelPage
           {t}

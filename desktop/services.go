@@ -71,9 +71,7 @@ func (rtaClientFactory) New(credential securestore.Credential, cookieStore rtasa
 		Password:       credential.Password,
 		CaptchaSolvers: []rtasales.CaptchaSolver{rtasales.NewEmbeddedOCRSolver(rtasales.EmbeddedOCRConfig{})},
 		CookieStore:    cookieStore,
-		LoginAttempts:  4,
-		// Store jobs already run up to 32-wide. Keep page fan-out off so one
-		// multi-page store does not multiply that load against RTA.
-		PageConcurrency: 1,
+		LoginAttempts:   4,
+		PageConcurrency: 16,
 	})
 }

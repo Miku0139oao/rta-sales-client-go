@@ -4,10 +4,11 @@ export function needsSalesAnalysisItemHydration(result: SalesAnalysisResult): bo
   return (result.periods ?? []).some((period) => (period.itemCount ?? 0) > (period.items?.length ?? 0));
 }
 
-export function unpackSalesAnalysisItems(batch: SalesAnalysisPackedItems, stores: SalesAnalysisStoreSummary[]): SalesAnalysisItem[] {
+export function unpackSalesAnalysisItems(batch: SalesAnalysisPackedItems, stores: SalesAnalysisStoreSummary[] = []): SalesAnalysisItem[] {
   const dict = batch.dict ?? [];
+  const storeList = stores ?? [];
   return (batch.rows ?? []).map((row) => {
-    const store = stores[row.s];
+    const store = storeList[row.s];
     return {
       storeId: store?.businessId ?? '',
       storeLabel: store?.label ?? '',

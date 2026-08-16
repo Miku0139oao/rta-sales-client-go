@@ -47,7 +47,7 @@ type ProgressEvent struct {
 
 // BatchRequest configures an inclusive multi-day workbook analysis. From and
 // To are compared as calendar dates. MaxJobs defaults to 2000, and Concurrency
-// defaults to two query jobs with a hard maximum of four.
+// defaults to 160 query jobs with a hard maximum of 160.
 type BatchRequest struct {
 	InputPath               string
 	SheetName               string

@@ -1,6 +1,13 @@
 import type { jsPDF } from 'jspdf';
 import notoSansTCURL from './assets/NotoSansTC-Regular.ttf?url';
-import { buildFocusGroups, type FocusGroup, type FocusProduct } from './analysisFocus';
+import { buildFocusGroups, FOCUS_GROUP_PREFIXES, type FocusGroup, type FocusProduct } from './analysisFocus';
+import {
+  defaultSalesReportFilter,
+  includeInSalesReport,
+  type SalesReportFilter,
+} from './salesReportItems';
+import { weeklySegmentRows } from './storeSegment';
+import { AppError } from './types';
 import type {
   Locale,
   SalesAnalysisItem,
@@ -8,6 +15,8 @@ import type {
   SalesAnalysisResult,
   SalesAnalysisStore,
   SalesAnalysisTotals,
+  SalesAnalysisPeriodMemo,
+  SalesAnalysisReportMemo,
   SalesAnalysisWeek,
   SalesAnalysisWeekStore,
 } from './types';
@@ -23,6 +32,23 @@ interface StorePeriod {
   to: string;
   totals: SalesAnalysisTotals;
   items: SalesAnalysisItem[];
+  amountGroups?: CategoryGroup[];
+  quantityGroups?: CategoryGroup[];
+  topAmount?: RankedItem[];
+  topQuantity?: RankedItem[];
+  focusGroups?: FocusGroup[];
+}
+
+type AccProduct = RankedItem & { category2Code: string; category3Code: string; category4Code: string };
+
+interface PeriodAccumulator {
+  products: Map<string, AccProduct>;
+  categories: Map<string, { id: string; code: string; name: string; amount: number; quantity: number; products: Map<string, RankedItem> }>;
+  focusGroups?: FocusGroup[];
+}
+
+export interface SalesReportAccumulator {
+  periods: Map<string, PeriodAccumulator>;
 }
 
 interface RankedItem {
@@ -76,9 +102,12 @@ interface Labels {
   quantity: string;
   uncategorized: string;
   allStores: string;
+  localTotal: string;
+  touristTotal: string;
   storeComparison: string;
   store: string;
   weeklyTitle: string;
+  week: string;
   thisWeek: string;
   lastWeek: string;
   variance: string;
@@ -112,16 +141,74 @@ const COLORS = {
   negative: [190, 64, 62] as RGB,
 };
 
-let fontBase64Promise: Promise<string> | undefined;
+let fontBytesPromise: Promise<Uint8Array> | undefined;
+
+export async function prepareSalesAnalysisFont(
+  result: SalesAnalysisResult,
+  categoryLevel: SalesReportCategoryLevel,
+  locale: Locale,
+  filter: SalesReportFilter = defaultSalesReportFilter(),
+): Promise<string> {
+  try {
+    const [fontBytes, subsetter] = await Promise.all([loadFontBytes(), import('./subsetReportFont')]);
+    try {
+      const glyphs = collectReportGlyphs(result, categoryLevel, locale, filter);
+      return bytesToBase64(await subsetter.subsetReportFont(fontBytes, glyphs));
+    } finally {
+      releaseLoadedReportFont();
+      subsetter.releaseSubsetRuntime();
+    }
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new AppError('pdf_font', error instanceof Error ? error.message : String(error));
+  }
+}
+
+export async function prepareSalesAnalysisFontFromText(text: string, locale: Locale = 'zh-TW'): Promise<string> {
+  try {
+    const [fontBytes, subsetter] = await Promise.all([loadFontBytes(), import('./subsetReportFont')]);
+    try {
+      const glyphs = new Set(REQUIRED_GLYPHS);
+      const add = (value: string | undefined) => {
+        if (!value) return;
+        for (const character of value) glyphs.add(character);
+      };
+      add(text);
+      add('RTA SALES');
+      add('RTA Sales Analysis');
+      add('Page');
+      for (const value of Object.values(reportLabels(locale))) add(value);
+      for (const value of Object.values(reportLabels(locale === 'en' ? 'zh-TW' : 'en'))) add(value);
+      return bytesToBase64(await subsetter.subsetReportFont(fontBytes, [...glyphs].join('')));
+    } finally {
+      releaseLoadedReportFont();
+      subsetter.releaseSubsetRuntime();
+    }
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new AppError('pdf_font', error instanceof Error ? error.message : String(error));
+  }
+}
 
 export async function generateSalesAnalysisPDF(
   result: SalesAnalysisResult,
   storeId: string,
   categoryLevel: SalesReportCategoryLevel,
   locale: Locale,
+  filter: SalesReportFilter = defaultSalesReportFilter(),
+  fontBase64?: string,
+  accumulator?: SalesReportAccumulator,
 ): Promise<Uint8Array> {
-  const [fontBase64, { jsPDF: PDFDocument }] = await Promise.all([loadFontBase64(), import('jspdf')]);
-  return renderSalesAnalysisPDF(result, storeId, categoryLevel, locale, fontBase64, PDFDocument);
+  try {
+    const [resolvedFont, { jsPDF: PDFDocument }] = await Promise.all([
+      fontBase64 ? Promise.resolve(fontBase64) : prepareSalesAnalysisFont(result, categoryLevel, locale, filter),
+      import('jspdf'),
+    ]);
+    return renderSalesAnalysisPDF(result, storeId, categoryLevel, locale, resolvedFont, PDFDocument, filter, accumulator);
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new AppError('pdf_failed', error instanceof Error ? error.message : String(error));
+  }
 }
 
 export async function buildSalesAnalysisPDF(
@@ -130,9 +217,15 @@ export async function buildSalesAnalysisPDF(
   categoryLevel: SalesReportCategoryLevel,
   locale: Locale,
   fontBase64: string,
+  filter: SalesReportFilter = defaultSalesReportFilter(),
 ): Promise<Uint8Array> {
-  const { jsPDF: PDFDocument } = await import('jspdf');
-  return renderSalesAnalysisPDF(result, storeId, categoryLevel, locale, fontBase64, PDFDocument);
+  try {
+    const { jsPDF: PDFDocument } = await import('jspdf');
+    return renderSalesAnalysisPDF(result, storeId, categoryLevel, locale, fontBase64, PDFDocument, filter);
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new AppError('pdf_failed', error instanceof Error ? error.message : String(error));
+  }
 }
 
 function renderSalesAnalysisPDF(
@@ -142,12 +235,14 @@ function renderSalesAnalysisPDF(
   locale: Locale,
   fontBase64: string,
   PDFDocument: typeof import('jspdf').jsPDF,
+  filter: SalesReportFilter = defaultSalesReportFilter(),
+  accumulator?: SalesReportAccumulator,
 ): Uint8Array {
   const labels = reportLabels(locale);
   const combined = isAllStoresReport(storeId);
-  const periods = storePeriods(result, storeId);
+  const periods = storePeriods(result, storeId, filter, categoryLevel, accumulator, labels.uncategorized);
   const current = periodByKey(periods, 'current') ?? periods[0];
-  if (!current) throw new Error('The selected store has no current sales period');
+  if (!current) throw new AppError('pdf_failed', 'The selected store has no current sales period');
 
   const stores = listSuccessfulReportStores(result);
   const store = stores.find((candidate) => candidate.businessId === storeId);
@@ -158,7 +253,6 @@ function renderSalesAnalysisPDF(
   });
   doc.addFileToVFS('NotoSansTC-Regular.ttf', fontBase64);
   doc.addFont('NotoSansTC-Regular.ttf', FONT, 'normal');
-  doc.addFont('NotoSansTC-Regular.ttf', FONT, 'bold');
   doc.setFont(FONT, 'normal');
   doc.setProperties({
     title: `RTA Sales Analysis - ${headerId}`,
@@ -168,9 +262,10 @@ function renderSalesAnalysisPDF(
   });
 
   drawSummaryPage(doc, periods, current, headerId, storeLabel, categoryLevel, labels, locale);
-  for (const week of weeksForReport(result.weeks ?? [], storeId, combined)) {
+  const weeks = weeksForReport(result.weeks ?? [], storeId, combined);
+  if (weeks.length) {
     doc.addPage();
-    drawWeeklyPage(doc, week, headerId, storeLabel, labels, locale);
+    drawWeeklyPages(doc, weeks, current, headerId, storeLabel, labels, locale);
   }
   if (combined && stores.length > 1) {
     doc.addPage();
@@ -234,22 +329,125 @@ export function salesAnalysisPDFFilename(storeId: string, from: string, to: stri
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {
+  const view = bytes.buffer.byteLength === bytes.byteLength
+    ? bytes
+    : new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (typeof Buffer !== 'undefined' && typeof Buffer.from === 'function') {
+    return Buffer.from(view).toString('base64');
+  }
   let binary = '';
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  const chunkSize = 0x2000;
+  for (let offset = 0; offset < view.length; offset += chunkSize) {
+    binary += String.fromCharCode(...view.subarray(offset, offset + chunkSize));
   }
   return btoa(binary);
 }
 
-async function loadFontBase64(): Promise<string> {
-  if (!fontBase64Promise) {
-    fontBase64Promise = fetch(notoSansTCURL).then(async (response) => {
-      if (!response.ok) throw new Error(`Unable to load report font (${response.status})`);
-      return bytesToBase64(new Uint8Array(await response.arrayBuffer()));
+function releaseLoadedReportFont(): void {
+  fontBytesPromise = undefined;
+}
+
+async function loadFontBytes(): Promise<Uint8Array> {
+  if (!fontBytesPromise) {
+    fontBytesPromise = fetchReportFontBytes().catch((error) => {
+      fontBytesPromise = undefined;
+      throw error;
     });
   }
-  return fontBase64Promise;
+  return fontBytesPromise;
+}
+
+async function fetchReportFontBytes(): Promise<Uint8Array> {
+  const candidates = [notoSansTCURL];
+  if (typeof document !== 'undefined' && document.baseURI) {
+    try { candidates.push(new URL(notoSansTCURL, document.baseURI).href); } catch { /* ignore */ }
+  }
+  try { candidates.push(new URL(notoSansTCURL, import.meta.url).href); } catch { /* ignore */ }
+  let lastError: unknown;
+  for (const url of [...new Set(candidates)]) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        lastError = new AppError('pdf_font', `Unable to load report font (${response.status})`);
+        continue;
+      }
+      return new Uint8Array(await response.arrayBuffer());
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  try {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    return new Uint8Array(readFileSync(resolve(process.cwd(), 'src/lib/assets/NotoSansTC-Regular.ttf')));
+  } catch (error) {
+    lastError = lastError ?? error;
+  }
+  if (lastError instanceof AppError) throw lastError;
+  throw new AppError('pdf_font', lastError instanceof Error ? lastError.message : 'Unable to load report font');
+}
+
+const REQUIRED_GLYPHS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz $HKD,.%+-–—…|/():;[]\'"`~@#*_<>?';
+
+export function collectReportGlyphs(
+  result: SalesAnalysisResult,
+  categoryLevel: SalesReportCategoryLevel,
+  locale: Locale,
+  filter: SalesReportFilter = defaultSalesReportFilter(),
+): string {
+  const glyphs = new Set(REQUIRED_GLYPHS);
+  const add = (value: string | undefined) => {
+    if (!value) return;
+    for (const character of value) glyphs.add(character);
+  };
+  add('RTA SALES');
+  add('RTA Sales Analysis');
+  add('Page');
+  add(reportLabels(locale).title);
+  for (const value of Object.values(reportLabels(locale))) add(value);
+  add(result.from);
+  add(result.to);
+  for (const store of listSuccessfulReportStores(result)) {
+    add(store.businessId);
+    add(store.label);
+  }
+  for (const period of normalizedPeriods(result)) {
+    add(period.key);
+    add(period.label);
+    add(period.from);
+    add(period.to);
+    for (const store of period.stores ?? []) {
+      add(store.businessId);
+      add(store.label);
+    }
+    for (const item of period.items ?? result.items ?? []) {
+      if (!includeInSalesReport(item, filter, categoryLevel)) continue;
+      add(item.storeId);
+      add(item.storeLabel);
+      add(item.articleCode);
+      add(item.articleName);
+      add(item.brandName);
+      add(item.category1);
+      add(item.category1Code);
+      add(item.category2);
+      add(item.category2Code);
+      add(item.category3);
+      add(item.category3Code);
+      add(item.category4);
+      add(item.category4Code);
+      add(item.category5);
+      add(item.category5Code);
+    }
+  }
+  for (const week of result.weeks ?? []) {
+    add(week.from);
+    add(week.to);
+    for (const store of week.stores ?? []) {
+      add(store.businessId);
+      add(store.label);
+    }
+  }
+  return [...glyphs].join('');
 }
 
 function normalizedPeriods(result: SalesAnalysisResult): SalesAnalysisPeriodResult[] {
@@ -261,22 +459,255 @@ function normalizedPeriods(result: SalesAnalysisResult): SalesAnalysisPeriodResu
   }];
 }
 
-function storePeriods(result: SalesAnalysisResult, storeId: string): StorePeriod[] {
+export function filterSalesAnalysisResult(
+  result: SalesAnalysisResult,
+  filter: SalesReportFilter,
+  level: SalesReportCategoryLevel,
+): SalesAnalysisResult {
+  const keep = (item: SalesAnalysisItem) => includeInSalesReport(item, filter, level);
+  return {
+    ...result,
+    items: result.items?.filter(keep),
+    periods: result.periods?.map((period) => ({
+      ...period,
+      items: period.items?.filter(keep),
+    })),
+  };
+}
+
+export function createSalesReportAccumulator(): SalesReportAccumulator {
+  return { periods: new Map() };
+}
+
+export function salesReportAccumulatorFromMemo(memo: SalesAnalysisReportMemo): SalesReportAccumulator {
+  const accumulator = createSalesReportAccumulator();
+  for (const period of memo.periods ?? []) {
+    accumulator.periods.set(period.key, periodAccumulatorFromMemo(period));
+  }
+  return accumulator;
+}
+
+function periodAccumulatorFromMemo(period: SalesAnalysisPeriodMemo): PeriodAccumulator {
+  const products = new Map<string, AccProduct>();
+  const addProduct = (item: { id: string; code: string; name: string; brand?: string; amount: number; quantity: number; category2Code?: string; category3Code?: string; category4Code?: string }) => {
+    const id = item.id || item.code;
+    if (!id) return;
+    const existing = products.get(id) ?? {
+      id, code: item.code, name: item.name, brand: item.brand ?? '',
+      amount: 0, quantity: 0, category2Code: '', category3Code: '', category4Code: '',
+    };
+    existing.amount = item.amount;
+    existing.quantity = item.quantity;
+    if (item.category2Code) existing.category2Code = item.category2Code;
+    if (item.category3Code) existing.category3Code = item.category3Code;
+    if (item.category4Code) existing.category4Code = item.category4Code;
+    products.set(id, existing);
+  };
+  for (const item of period.topAmount ?? []) addProduct(item);
+  for (const item of period.topQuantity ?? []) addProduct(item);
+  const categories = new Map<string, { id: string; code: string; name: string; amount: number; quantity: number; products: Map<string, RankedItem> }>();
+  for (const group of period.amountGroups ?? []) {
+    const productsInGroup = new Map<string, RankedItem>();
+    for (const item of group.items ?? []) {
+      addProduct(item);
+      productsInGroup.set(item.id || item.code, {
+        id: item.id || item.code, code: item.code, name: item.name, brand: item.brand ?? '',
+        amount: item.amount, quantity: item.quantity,
+      });
+    }
+    categories.set(group.id, {
+      id: group.id, code: group.code ?? '', name: group.name,
+      amount: group.amount, quantity: group.quantity, products: productsInGroup,
+    });
+  }
+  for (const group of period.quantityGroups ?? []) {
+    const existing = categories.get(group.id) ?? {
+      id: group.id, code: group.code ?? '', name: group.name,
+      amount: group.amount, quantity: group.quantity, products: new Map(),
+    };
+    for (const item of group.items ?? []) {
+      existing.products.set(item.id || item.code, {
+        id: item.id || item.code, code: item.code, name: item.name, brand: item.brand ?? '',
+        amount: item.amount, quantity: item.quantity,
+      });
+    }
+    categories.set(group.id, existing);
+  }
+  return {
+    products,
+    categories,
+    focusGroups: period.focusGroups?.map((group) => ({
+      id: group.id,
+      prefix: group.prefix,
+      sales: (group.sales ?? []).map((item) => ({
+        id: item.id, code: item.code, name: item.name, brand: item.brand ?? '',
+        amount: item.amount, quantity: item.quantity,
+        currentAmount: item.currentAmount, currentQuantity: item.currentQuantity,
+      })),
+      quantity: (group.quantity ?? []).map((item) => ({
+        id: item.id, code: item.code, name: item.name, brand: item.brand ?? '',
+        amount: item.amount, quantity: item.quantity,
+        currentAmount: item.currentAmount, currentQuantity: item.currentQuantity,
+      })),
+    })),
+  };
+}
+
+export function addSalesReportPeriodItems(
+  accumulator: SalesReportAccumulator,
+  periodKey: string,
+  items: SalesAnalysisItem[],
+  filter: SalesReportFilter,
+  level: SalesReportCategoryLevel,
+): void {
+  let period = accumulator.periods.get(periodKey);
+  if (!period) {
+    period = { products: new Map(), categories: new Map() };
+    accumulator.periods.set(periodKey, period);
+  }
+  for (const item of items) {
+    if (!includeInSalesReport(item, filter, level)) continue;
+    const id = item.articleCode.trim() || item.articleName.trim();
+    if (!id) continue;
+    const product = period.products.get(id) ?? {
+      id, code: item.articleCode.trim(), name: item.articleName.trim(), brand: item.brandName?.trim() ?? '',
+      amount: 0, quantity: 0, category2Code: '', category3Code: '', category4Code: '',
+    };
+    product.amount += item.netSalesAmount;
+    product.quantity += item.netQuantity;
+    if (!product.name && item.articleName.trim()) product.name = item.articleName.trim();
+    if (!product.brand && item.brandName?.trim()) product.brand = item.brandName.trim();
+    if (!product.category2Code && item.category2Code?.trim()) product.category2Code = item.category2Code.trim();
+    if (!product.category3Code && item.category3Code?.trim()) product.category3Code = item.category3Code.trim();
+    if (!product.category4Code && item.category4Code?.trim()) product.category4Code = item.category4Code.trim();
+    period.products.set(id, product);
+
+    const code = categoryCode(item, level);
+    const name = categoryName(item, level);
+    const categoryId = code || name;
+    if (!categoryId) continue;
+    const category = period.categories.get(categoryId) ?? {
+      id: categoryId, code, name, amount: 0, quantity: 0, products: new Map(),
+    };
+    category.amount += item.netSalesAmount;
+    category.quantity += item.netQuantity;
+    if (!category.name && name) category.name = name;
+    const ranked = category.products.get(id) ?? {
+      id, code: product.code, name: product.name, brand: product.brand, amount: 0, quantity: 0,
+    };
+    ranked.amount += item.netSalesAmount;
+    ranked.quantity += item.netQuantity;
+    if (!ranked.name && product.name) ranked.name = product.name;
+    category.products.set(id, ranked);
+    period.categories.set(categoryId, category);
+  }
+}
+
+function storePeriods(
+  result: SalesAnalysisResult,
+  storeId: string,
+  filter: SalesReportFilter,
+  level: SalesReportCategoryLevel,
+  accumulator?: SalesReportAccumulator,
+  uncategorized = 'Uncategorized',
+): StorePeriod[] {
   return normalizedPeriods(result).flatMap((period) => {
+    const memo = accumulator ? storePeriodMemo(accumulator, period.key, uncategorized, period.key === 'yearAgoNext') : undefined;
+    const keep = (item: SalesAnalysisItem) => includeInSalesReport(item, filter, level);
     if (isAllStoresReport(storeId)) {
       return [{
         key: period.key, label: period.label, from: period.from, to: period.to,
-        totals: period.totals, items: period.items ?? [],
+        totals: period.totals,
+        items: memo ? [] : (period.items ?? []).filter(keep),
+        ...memo,
       }];
     }
-    const items = (period.items ?? []).filter((item) => item.storeId === storeId);
-    const summary = period.stores.find((store) => store.businessId === storeId);
-    if (!summary && items.length === 0 && period.key !== 'current') return [];
+    const items = (period.items ?? []).filter((item) => item.storeId === storeId && keep(item));
+    const summary = period.stores?.find((store) => store.businessId === storeId);
+    if (!summary && items.length === 0 && !memo && period.key !== 'current') return [];
     return [{
       key: period.key, label: period.label, from: period.from, to: period.to,
       totals: summary?.totals ?? aggregateTotals(items), items,
+      ...memo,
     }];
   });
+}
+
+function storePeriodMemo(
+  accumulator: SalesReportAccumulator,
+  periodKey: string,
+  uncategorized: string,
+  includeFocus = false,
+): Pick<StorePeriod, 'amountGroups' | 'quantityGroups' | 'topAmount' | 'topQuantity' | 'focusGroups'> | undefined {
+  const period = accumulator.periods.get(periodKey);
+  if (!period) return undefined;
+  return {
+    amountGroups: groupsFromAccumulator(period, 'amount', uncategorized),
+    quantityGroups: groupsFromAccumulator(period, 'quantity', uncategorized),
+    topAmount: sortRankedItems([...period.products.values()], 'amount').slice(0, 15),
+    topQuantity: sortRankedItems([...period.products.values()], 'quantity').slice(0, 15),
+    focusGroups: period.focusGroups
+      ?? (includeFocus ? focusGroupsFromAccumulator(period, accumulator.periods.get('current')) : undefined),
+  };
+}
+
+function groupsFromAccumulator(period: PeriodAccumulator, metric: Metric, uncategorized: string): CategoryGroup[] {
+  return [...period.categories.values()].map((group) => ({
+    id: group.id,
+    code: group.code,
+    name: group.name || uncategorized,
+    amount: group.amount,
+    quantity: group.quantity,
+    items: sortRankedItems([...group.products.values()], metric).slice(0, 24),
+  })).filter((group) => group.items.length > 0).sort((left, right) =>
+    (metric === 'amount' ? right.amount - left.amount : right.quantity - left.quantity)
+      || left.id.localeCompare(right.id, undefined, { numeric: true }),
+  );
+}
+
+function sortRankedItems(items: RankedItem[], metric: Metric): RankedItem[] {
+  return [...items].sort((left, right) =>
+    (metric === 'amount' ? right.amount - left.amount : right.quantity - left.quantity)
+      || left.id.localeCompare(right.id, undefined, { numeric: true }),
+  );
+}
+
+function focusGroupsFromAccumulator(
+  yearAgoNext: PeriodAccumulator | undefined,
+  current: PeriodAccumulator | undefined,
+): FocusGroup[] | undefined {
+  if (!yearAgoNext) return undefined;
+  const currentByCode = current?.products ?? new Map();
+  return FOCUS_GROUP_PREFIXES.map((group) => {
+    const ranked = [...yearAgoNext.products.values()]
+      .filter((product) => productMatchesFocus(product, group.prefix))
+      .map((product) => {
+        const live = currentByCode.get(product.id) ?? currentByCode.get(product.code);
+        return {
+          id: product.id,
+          code: product.code,
+          name: product.name,
+          brand: product.brand,
+          amount: product.amount,
+          quantity: product.quantity,
+          currentAmount: live?.amount ?? 0,
+          currentQuantity: live?.quantity ?? 0,
+        };
+      });
+    return {
+      id: group.id,
+      prefix: group.prefix,
+      sales: [...ranked].sort((left, right) => right.amount - left.amount || left.id.localeCompare(right.id)).slice(0, 8),
+      quantity: [...ranked].sort((left, right) => right.quantity - left.quantity || left.id.localeCompare(right.id)).slice(0, 8),
+    };
+  }).filter((group) => group.sales.length > 0 || group.quantity.length > 0);
+}
+
+function productMatchesFocus(product: AccProduct, prefix: string): boolean {
+  const department = product.category2Code.trim();
+  if (department) return department === prefix || department.startsWith(prefix);
+  const fallback = product.category3Code.trim() || product.category4Code.trim();
+  return fallback === prefix || fallback.startsWith(prefix);
 }
 
 function aggregateTotals(items: SalesAnalysisItem[]): SalesAnalysisTotals {
@@ -329,72 +760,153 @@ function drawSummaryPage(
 function weeksForReport(weeks: SalesAnalysisWeek[], storeId: string, combined: boolean): SalesAnalysisWeek[] {
   if (combined) return weeks;
   return weeks.flatMap((week) => {
-    const store = week.stores.find((row) => row.businessId === storeId);
+    const store = week.stores?.find((row) => row.businessId === storeId);
     if (!store) return [];
     return [{ ...week, stores: [store], totals: store }];
   });
 }
 
-function drawWeeklyPage(
+const WEEKLY_ROW = 7.2;
+
+function drawWeeklyPages(
   doc: jsPDF,
-  week: SalesAnalysisWeek,
+  weeks: SalesAnalysisWeek[],
+  current: StorePeriod,
   storeId: string,
   storeLabel: string,
   labels: Labels,
-  _locale: Locale,
+  locale: Locale,
 ): void {
-  drawPageHeader(doc, labels.weeklyTitle, `${week.from} - ${week.to}`, storeId, storeLabel);
-  const x = CONTENT_X;
-  const y = CONTENT_Y;
-  const width = CONTENT_WIDTH;
-  const height = CONTENT_HEIGHT;
-  card(doc, x, y, width, height);
-  const innerX = x + 4;
-  const tableY = y + 12;
-  const innerWidth = width - 8;
+  const span = weeks.length
+    ? `${weeks[0]!.from} - ${weeks[weeks.length - 1]!.to}`
+    : `${current.from} - ${current.to}`;
+  drawPageHeader(doc, labels.weeklyTitle, span, storeId, storeLabel);
+  const singleStore = weeks.every((week) => (week.stores?.length ?? 0) <= 1);
+  if (singleStore) {
+    drawWeeklyPeriodTable(doc, weeks, labels, locale);
+    return;
+  }
+  let y = CONTENT_Y;
+  for (const week of weeks) {
+    const height = weeklyStoreBlockHeight(week, labels);
+    if (y + height > CONTENT_Y + CONTENT_HEIGHT && y > CONTENT_Y) {
+      doc.addPage();
+      drawPageHeader(doc, labels.weeklyTitle, span, storeId, storeLabel);
+      y = CONTENT_Y;
+    }
+    y = drawWeeklyStoreBlock(doc, week, y, labels);
+  }
+}
+
+function drawWeeklyPeriodTable(doc: jsPDF, weeks: SalesAnalysisWeek[], labels: Labels, locale: Locale): void {
+  const columns = [28, 44, 34, 34, 32, 26, 26, 26, CONTENT_WIDTH - 8 - 250];
+  const innerX = CONTENT_X + 4;
+  const innerWidth = CONTENT_WIDTH - 8;
+  const headerY = CONTENT_Y + 10;
+  const cardHeight = Math.min(CONTENT_HEIGHT, 16 + weeks.length * WEEKLY_ROW + 8);
+  card(doc, CONTENT_X, CONTENT_Y, CONTENT_WIDTH, cardHeight);
+  drawTableHeader(doc, innerX, headerY, columns, [
+    labels.week, labels.period, labels.thisWeek, labels.lastWeek, labels.variance, labels.variancePercent,
+    labels.weekday, labels.weekend, labels.customers,
+  ]);
+  weeks.forEach((week, index) => {
+    const values = week.stores[0] ?? week.totals;
+    drawWeeklyMetricRow(doc, innerX, headerY + 8 + index * WEEKLY_ROW, innerWidth, columns, {
+      label: weekLabel(index, locale),
+      detail: `${week.from} - ${week.to}`,
+      values,
+    }, index, 2);
+  });
+}
+
+function weeklyStoreBlockHeight(week: SalesAnalysisWeek, labels: Labels): number {
+  return 12 + 8 + weeklyStoreRows(week, labels).length * WEEKLY_ROW + 6;
+}
+
+function weeklyStoreRows(week: SalesAnalysisWeek, labels: Labels): Array<{ label: string; values: SalesAnalysisWeekStore; emphasis?: boolean }> {
+  return weeklySegmentRows(week.stores ?? [], {
+    store: storeLabelText,
+    localTotal: labels.localTotal,
+    touristTotal: labels.touristTotal,
+    allStores: labels.allStores,
+  }).map((row) => ({
+    label: row.label,
+    values: row.values,
+    emphasis: row.kind !== 'store',
+  }));
+}
+
+function storeLabelText(store: SalesAnalysisWeekStore | undefined): string {
+  if (!store) return '';
+  if (store.label && store.businessId && store.label !== store.businessId) return `${store.businessId}  ${store.label}`;
+  return store.businessId || store.label || '';
+}
+
+function drawWeeklyStoreBlock(doc: jsPDF, week: SalesAnalysisWeek, y: number, labels: Labels): number {
+  const rows = weeklyStoreRows(week, labels);
+  const height = weeklyStoreBlockHeight(week, labels);
+  const innerX = CONTENT_X + 4;
+  const innerWidth = CONTENT_WIDTH - 8;
   const columns = [52, 32, 32, 30, 26, 26, 26, innerWidth - 224];
-  drawTableHeader(doc, innerX, tableY, columns, [
+  card(doc, CONTENT_X, y, CONTENT_WIDTH, height);
+  setText(doc, COLORS.ink, 8, 'bold');
+  doc.text(`${week.from} - ${week.to}`, innerX, y + 8);
+  const headerY = y + 14;
+  drawTableHeader(doc, innerX, headerY, columns, [
     labels.store, labels.thisWeek, labels.lastWeek, labels.variance, labels.variancePercent,
     labels.weekday, labels.weekend, labels.customers,
   ]);
-  const rows: Array<{ label: string; detail: string; values: SalesAnalysisWeekStore }> = [
-    { label: labels.allStores, detail: '', values: week.totals },
-    ...week.stores.map((store) => ({
-      label: store.businessId || store.label || labels.store,
-      detail: store.label && store.label !== store.businessId ? store.label : '',
-      values: store,
-    })),
-  ];
-  const rowHeight = Math.min(7.4, (height - 22) / Math.max(rows.length, 1));
   rows.forEach((row, index) => {
-    const rowY = tableY + 8 + index * rowHeight;
-    if (index % 2 === 0) {
-      setFill(doc, COLORS.surface);
-      doc.roundedRect(innerX, rowY - 4.2, innerWidth, rowHeight - 0.6, 1.2, 1.2, 'F');
-    }
-    setText(doc, COLORS.ink, 7.2, 'bold');
-    doc.text(fitText(doc, row.label, columns[0] - 3), innerX + 2, rowY);
-    if (row.detail) {
-      setText(doc, COLORS.slate, 5.2, 'normal');
-      doc.text(fitText(doc, row.detail, columns[0] - 3), innerX + 2, rowY + 2.4);
-    }
-    const salesChange = delta(row.values.salesTw, row.values.salesLw);
-    const cells: Array<{ text: string; color: RGB; bold?: boolean }> = [
-      { text: formatMoney(row.values.salesTw), color: COLORS.ink, bold: true },
-      { text: formatMoney(row.values.salesLw), color: COLORS.slate },
-      { text: formatMoney(row.values.salesTw - row.values.salesLw), color: changeColor(salesChange), bold: true },
-      percentCell(salesChange),
-      percentCell(delta(row.values.weekdaySalesTw, row.values.weekdaySalesLw)),
-      percentCell(delta(row.values.weekendSalesTw, row.values.weekendSalesLw)),
-      percentCell(delta(row.values.customersTw, row.values.customersLw)),
-    ];
-    let cellX = innerX + columns[0];
-    cells.forEach((cell, cellIndex) => {
-      setText(doc, cell.color, 6.8, cell.bold ? 'bold' : 'normal');
-      doc.text(cell.text, cellX + columns[cellIndex + 1] - 2, rowY, { align: 'right' });
-      cellX += columns[cellIndex + 1];
-    });
+    drawWeeklyMetricRow(doc, innerX, headerY + 8 + index * WEEKLY_ROW, innerWidth, columns, {
+      label: row.label || labels.allStores,
+      values: row.values,
+      emphasis: row.emphasis,
+    }, index);
   });
+  return y + height + 4;
+}
+
+function drawWeeklyMetricRow(
+  doc: jsPDF,
+  x: number,
+  rowY: number,
+  innerWidth: number,
+  columns: number[],
+  row: { label: string; detail?: string; values: SalesAnalysisWeekStore; emphasis?: boolean },
+  index: number,
+  valueStart = 1,
+): void {
+  if (row.emphasis || index % 2 === 0) {
+    setFill(doc, row.emphasis ? COLORS.tealSoft : COLORS.surface);
+    doc.roundedRect(x, rowY - 4.2, innerWidth, WEEKLY_ROW - 0.6, 1.2, 1.2, 'F');
+  }
+  setText(doc, COLORS.ink, 7.2, 'bold');
+  doc.text(fitText(doc, row.label, columns[0] - 3), x + 2, rowY);
+  if (row.detail && valueStart > 1) {
+    setText(doc, COLORS.slate, 6.4, 'normal');
+    doc.text(fitText(doc, row.detail, columns[1] - 3), x + columns[0] + 2, rowY);
+  }
+  const salesChange = delta(row.values.salesTw, row.values.salesLw);
+  const cells: Array<{ text: string; color: RGB; bold?: boolean }> = [
+    { text: formatMoney(row.values.salesTw), color: COLORS.ink, bold: true },
+    { text: formatMoney(row.values.salesLw), color: COLORS.slate },
+    { text: formatMoney(row.values.salesTw - row.values.salesLw), color: changeColor(salesChange), bold: true },
+    percentCell(salesChange),
+    percentCell(delta(row.values.weekdaySalesTw, row.values.weekdaySalesLw)),
+    percentCell(delta(row.values.weekendSalesTw, row.values.weekendSalesLw)),
+    percentCell(delta(row.values.customersTw, row.values.customersLw)),
+  ];
+  let cellX = x + columns.slice(0, valueStart).reduce((sum, value) => sum + value, 0);
+  cells.forEach((cell, cellIndex) => {
+    const width = columns[valueStart + cellIndex];
+    setText(doc, cell.color, 6.8, cell.bold ? 'bold' : 'normal');
+    doc.text(cell.text, cellX + width - 2, rowY, { align: 'right' });
+    cellX += width;
+  });
+}
+
+function weekLabel(index: number, locale: Locale): string {
+  return locale === 'en' ? `Week ${index + 1}` : `第${index + 1}週`;
 }
 
 function changeColor(change: number | undefined): RGB {
@@ -418,9 +930,9 @@ function drawStoreComparisonPage(
   const previous = periods.find((period) => period.key === 'previous');
   const yearAgo = periods.find((period) => period.key === 'yearAgo');
   const rows = listSuccessfulReportStores(result).map((store) => {
-    const currentTotals = current.stores.find((item) => item.businessId === store.businessId)?.totals;
-    const previousTotals = previous?.stores.find((item) => item.businessId === store.businessId)?.totals;
-    const yearAgoTotals = yearAgo?.stores.find((item) => item.businessId === store.businessId)?.totals;
+    const currentTotals = current.stores?.find((item) => item.businessId === store.businessId)?.totals;
+    const previousTotals = previous?.stores?.find((item) => item.businessId === store.businessId)?.totals;
+    const yearAgoTotals = yearAgo?.stores?.find((item) => item.businessId === store.businessId)?.totals;
     return {
       id: store.businessId,
       label: store.label,
@@ -484,8 +996,8 @@ function drawOverallRankingsPage(
   locale: Locale,
 ): void {
   drawPageHeader(doc, `${labels.topSales} / ${labels.topQuantity}`, `${current.from} - ${current.to}`, storeId, storeLabel);
-  drawRankingPanel(doc, 10, 31, 136.5, 159, labels.topSales, rankItems(current.items, 'amount').slice(0, 15), 'amount', level, labels, locale);
-  drawRankingPanel(doc, 150.5, 31, 136.5, 159, labels.topQuantity, rankItems(current.items, 'quantity').slice(0, 15), 'quantity', level, labels, locale);
+  drawRankingPanel(doc, 10, 31, 136.5, 159, labels.topSales, current.topAmount ?? rankItems(current.items, 'amount').slice(0, 15), 'amount', level, labels, locale);
+  drawRankingPanel(doc, 150.5, 31, 136.5, 159, labels.topQuantity, current.topQuantity ?? rankItems(current.items, 'quantity').slice(0, 15), 'quantity', level, labels, locale);
 }
 
 function drawCategoryRankingPage(
@@ -499,7 +1011,9 @@ function drawCategoryRankingPage(
   locale: Locale,
 ): void {
   const title = `${period.label} - ${metric === 'amount' ? labels.salesRanking : labels.quantityRanking}`;
-  const groups = categoryGroups(period.items, level, metric, labels.uncategorized);
+  const groups = metric === 'amount'
+    ? period.amountGroups ?? categoryGroups(period.items, level, metric, labels.uncategorized)
+    : period.quantityGroups ?? categoryGroups(period.items, level, metric, labels.uncategorized);
   if (groups.length === 0) {
     drawPageHeader(doc, title, `${period.from} - ${period.to}`, storeId, storeLabel);
     return;
@@ -632,9 +1146,13 @@ function drawComparisonPanel(doc: jsPDF, x: number, y: number, width: number, he
 function drawCategoryPerformancePanel(doc: jsPDF, x: number, y: number, width: number, height: number, current: StorePeriod, previous: StorePeriod | undefined, yearAgo: StorePeriod | undefined, level: SalesReportCategoryLevel, labels: Labels, locale: Locale): void {
   card(doc, x, y, width, height);
   panelTitle(doc, x, y, width, labels.categoryPerformance);
-  const currentGroups = categoryGroups(current.items, level, 'amount', labels.uncategorized).slice(0, 6);
-  const previousMap = categoryGroupMap(previous?.items ?? [], level, labels.uncategorized);
-  const yearAgoMap = categoryGroupMap(yearAgo?.items ?? [], level, labels.uncategorized);
+  const currentGroups = (current.amountGroups ?? categoryGroups(current.items, level, 'amount', labels.uncategorized)).slice(0, 6);
+  const previousMap = previous?.amountGroups
+    ? new Map(previous.amountGroups.map((group) => [group.id, group]))
+    : categoryGroupMap(previous?.items ?? [], level, labels.uncategorized);
+  const yearAgoMap = yearAgo?.amountGroups
+    ? new Map(yearAgo.amountGroups.map((group) => [group.id, group]))
+    : categoryGroupMap(yearAgo?.items ?? [], level, labels.uncategorized);
   const innerX = x + 4;
   const tableY = y + 18;
   const innerWidth = width - 8;
@@ -682,7 +1200,7 @@ function drawFocusPage(
   labels: Labels,
 ): void {
   drawPageHeader(doc, labels.focusTitle, `${yearAgoNext.from} - ${yearAgoNext.to}`, storeId, storeLabel);
-  const groups = buildFocusGroups(yearAgoNext.items, current.items, 8);
+  const groups = yearAgoNext.focusGroups ?? buildFocusGroups(yearAgoNext.items, current.items, 8);
   const titles: Record<string, string> = {
     health: labels.focusHealth,
     skin: labels.focusSkin,
@@ -912,8 +1430,8 @@ function categoryGroups(items: SalesAnalysisItem[], level: SalesReportCategoryLe
   }
   return [...grouped.entries()].map(([id, group]) => ({
     id, code: group.code, name: group.name, amount: group.amount, quantity: group.quantity,
-    items: rankItems(group.source, metric),
-  })).sort((left, right) =>
+    items: rankItems(group.source, metric).slice(0, 24),
+  })).filter((group) => group.items.length > 0).sort((left, right) =>
     (metric === 'amount' ? right.amount - left.amount : right.quantity - left.quantity)
       || left.id.localeCompare(right.id, undefined, { numeric: true }),
   );
@@ -930,7 +1448,8 @@ function categoryCode(item: SalesAnalysisItem, level: SalesReportCategoryLevel):
 }
 
 function categoryName(item: SalesAnalysisItem, level: SalesReportCategoryLevel): string {
-  return item[level].trim();
+  const value = item[level];
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 function categoryLabel(group: Pick<CategoryGroup, 'code' | 'name'>, _locale: Locale): string {
@@ -955,8 +1474,9 @@ function reportLabels(locale: Locale): Labels {
       categoryPerformance: 'Category performance', category: 'Category',
       topSales: 'Top 15 by sales', topQuantity: 'Top 15 by quantity', salesRanking: 'Category sales ranking',
       quantityRanking: 'Category quantity ranking', product: 'Product', amount: 'Sales', quantity: 'Qty', uncategorized: 'Uncategorized',
-      allStores: 'All stores', storeComparison: 'Store comparison', store: 'Store',
-      weeklyTitle: 'Weekly sales change', thisWeek: 'This week', lastWeek: 'Last week',
+      allStores: 'All stores', localTotal: 'Local total', touristTotal: 'Tourist total',
+      storeComparison: 'Store comparison', store: 'Store',
+      weeklyTitle: 'Weekly sales change', week: 'Week', thisWeek: 'This week', lastWeek: 'Last week',
       variance: 'Var', variancePercent: 'Var %', weekday: 'Weekday', weekend: 'Weekend', customers: 'Txns',
     };
   }
@@ -970,15 +1490,16 @@ function reportLabels(locale: Locale): Labels {
     categoryPerformance: '分類表現', category: '分類',
     topSales: '銷售額 Top 15', topQuantity: '銷量 Top 15', salesRanking: '分類商品銷售排行',
     quantityRanking: '分類商品銷量排行', product: '商品', amount: '銷售額', quantity: '銷量', uncategorized: '未分類',
-    allStores: '全部門店', storeComparison: '門店比較', store: '門店',
-    weeklyTitle: '每週銷售變化', thisWeek: '本週', lastWeek: '上週',
+    allStores: '全部門店', localTotal: '本地合計', touristTotal: '旅客合計',
+    storeComparison: '門店比較', store: '門店',
+    weeklyTitle: '每週銷售變化', week: '週次', thisWeek: '本週', lastWeek: '上週',
     variance: '差異', variancePercent: '差異 %', weekday: '平日', weekend: '週末', customers: '交易',
   };
 }
 
-function setText(doc: jsPDF, color: RGB, size: number, style: 'normal' | 'bold'): void {
+function setText(doc: jsPDF, color: RGB, size: number, _style: 'normal' | 'bold'): void {
   doc.setTextColor(...color);
-  doc.setFont(FONT, style);
+  doc.setFont(FONT, 'normal');
   doc.setFontSize(size);
 }
 

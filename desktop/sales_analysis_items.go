@@ -27,7 +27,65 @@ func (a *App) GetSalesAnalysisItems(request SalesAnalysisItemsRequest) (SalesAna
 	if !ok {
 		return SalesAnalysisPackedItems{}, fmt.Errorf("period %q was not found", periodKey)
 	}
-	return packed, nil
+	storeID := strings.TrimSpace(request.StoreID)
+	if storeID == "" {
+		return packed, nil
+	}
+	return filterPackedItemsByStore(packed, periodStores(a.salesResult, periodKey), storeID), nil
+}
+
+// GetSalesAnalysisReportGlyphs returns the unique characters needed to subset
+// the report font without sending article rows to the webview.
+func (a *App) GetSalesAnalysisReportGlyphs(request OperationRequest) (string, error) {
+	operationID := strings.TrimSpace(request.OperationID)
+	a.salesResultMu.Lock()
+	defer a.salesResultMu.Unlock()
+	if a.salesResult == nil || (operationID != "" && a.salesResult.OperationID != operationID) {
+		return "", errors.New("sales analysis result is no longer available")
+	}
+	seen := make(map[rune]struct{}, 512)
+	add := func(value string) {
+		for _, character := range value {
+			if character != 0 {
+				seen[character] = struct{}{}
+			}
+		}
+	}
+	add(a.salesResult.From)
+	add(a.salesResult.To)
+	for _, store := range a.salesResult.Stores {
+		add(store.BusinessID)
+		add(store.Label)
+	}
+	for _, period := range a.salesResult.Periods {
+		add(period.Key)
+		add(period.Label)
+		add(period.From)
+		add(period.To)
+		for _, store := range period.Stores {
+			add(store.BusinessID)
+			add(store.Label)
+		}
+	}
+	for _, week := range a.salesResult.Weeks {
+		add(week.From)
+		add(week.To)
+		for _, store := range week.Stores {
+			add(store.BusinessID)
+			add(store.Label)
+		}
+	}
+	for _, packed := range a.salesPacked {
+		for _, value := range packed.Dict {
+			add(value)
+		}
+	}
+	var builder strings.Builder
+	builder.Grow(len(seen))
+	for character := range seen {
+		builder.WriteRune(character)
+	}
+	return builder.String(), nil
 }
 
 func (a *App) rememberSalesAnalysis(result SalesAnalysisResult, packed map[string]SalesAnalysisPackedItems) SalesAnalysisResult {
@@ -154,6 +212,67 @@ func slimSalesAnalysis(full SalesAnalysisResult) SalesAnalysisResult {
 		slim.Periods[index] = period
 	}
 	return slim
+}
+
+func periodStores(result *SalesAnalysisResult, periodKey string) []SalesAnalysisStoreSummary {
+	if result == nil {
+		return nil
+	}
+	for _, period := range result.Periods {
+		if period.Key == periodKey && len(period.Stores) > 0 {
+			return period.Stores
+		}
+	}
+	return result.Stores
+}
+
+func filterPackedItemsByStore(packed SalesAnalysisPackedItems, stores []SalesAnalysisStoreSummary, storeID string) SalesAnalysisPackedItems {
+	index := -1
+	for storeIndex, store := range stores {
+		if store.BusinessID == storeID {
+			index = storeIndex
+			break
+		}
+	}
+	if index < 0 {
+		return SalesAnalysisPackedItems{PeriodKey: packed.PeriodKey, Dict: []string{""}}
+	}
+	remapAt := map[int]int{0: 0}
+	dict := []string{""}
+	remap := func(old int) int {
+		if old <= 0 || old >= len(packed.Dict) {
+			return 0
+		}
+		if next, ok := remapAt[old]; ok {
+			return next
+		}
+		next := len(dict)
+		dict = append(dict, packed.Dict[old])
+		remapAt[old] = next
+		return next
+	}
+	rows := make([]SalesAnalysisPackedRow, 0)
+	for _, row := range packed.Rows {
+		if row.S != index {
+			continue
+		}
+		row.S = 0
+		row.Ac = remap(row.Ac)
+		row.An = remap(row.An)
+		row.Br = remap(row.Br)
+		row.C1 = remap(row.C1)
+		row.K1 = remap(row.K1)
+		row.C2 = remap(row.C2)
+		row.K2 = remap(row.K2)
+		row.C3 = remap(row.C3)
+		row.K3 = remap(row.K3)
+		row.C4 = remap(row.C4)
+		row.K4 = remap(row.K4)
+		row.C5 = remap(row.C5)
+		row.K5 = remap(row.K5)
+		rows = append(rows, row)
+	}
+	return SalesAnalysisPackedItems{PeriodKey: packed.PeriodKey, Dict: dict, Rows: rows}
 }
 
 func packSalesAnalysisItems(period SalesAnalysisPeriodResult) SalesAnalysisPackedItems {

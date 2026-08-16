@@ -18,13 +18,13 @@ import (
 )
 
 const (
-	defaultPageConcurrency     = 4
+	defaultPageConcurrency     = 16
 	defaultLoginAttempts       = 4
 	maximumLoginAttempts       = 10
 	maxResponseBytes           = 64 << 20
-	defaultMaxIdleConns        = 128
-	defaultMaxIdleConnsPerHost = 64
-	defaultMaxConnsPerHost     = 64
+	defaultMaxIdleConns        = 1024
+	defaultMaxIdleConnsPerHost = 1024
+	defaultMaxConnsPerHost     = 1024
 	userAgent                  = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36 Edg/118.0.1264.123"
 )
 
@@ -115,7 +115,7 @@ func NewClient(config Config) (*Client, error) {
 	if config.HTTPClient != nil {
 		httpClient = *config.HTTPClient
 	} else {
-		httpClient = http.Client{Timeout: 30 * time.Second, Transport: defaultHTTPTransport()}
+		httpClient = http.Client{Timeout: 60 * time.Second, Transport: defaultHTTPTransport()}
 	}
 	httpClient.Jar = jar
 
@@ -179,9 +179,9 @@ func clientCookieJar(config Config) (http.CookieJar, func() error, error) {
 
 func defaultHTTPTransport() *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	// 32 store jobs can each run Article View and Trend View at once against
-	// the same RTA hosts. Keep enough idle sockets so workers do not rebuild
-	// TLS sessions on every query.
+	// 160 store jobs can each run Article View pages and Trend View at once
+	// against the same RTA hosts. Keep enough idle sockets so workers do not
+	// rebuild TLS sessions on every query.
 	transport.MaxIdleConns = defaultMaxIdleConns
 	transport.MaxIdleConnsPerHost = defaultMaxIdleConnsPerHost
 	transport.MaxConnsPerHost = defaultMaxConnsPerHost

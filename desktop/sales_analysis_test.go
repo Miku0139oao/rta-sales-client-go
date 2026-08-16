@@ -14,6 +14,7 @@ import (
 type salesAnalysisFakeClient struct {
 	stores  []rtasales.Store
 	results map[string]*rtasales.SalesResult
+	failOn  func(call int, query rtasales.SalesQuery) error
 
 	mu        sync.Mutex
 	queries   []rtasales.SalesQuery
@@ -21,6 +22,7 @@ type salesAnalysisFakeClient struct {
 	maxActive int
 	started   chan struct{}
 	release   chan struct{}
+	calls     int
 }
 
 func (c *salesAnalysisFakeClient) Stores(context.Context) ([]rtasales.Store, error) {
@@ -50,7 +52,15 @@ func (c *salesAnalysisFakeClient) Sales(ctx context.Context, query rtasales.Sale
 	}
 	c.mu.Lock()
 	c.active--
+	c.calls++
+	call := c.calls
+	failOn := c.failOn
 	c.mu.Unlock()
+	if failOn != nil {
+		if err := failOn(call, query); err != nil {
+			return nil, err
+		}
+	}
 	result := c.results[query.BusinessStoreID]
 	if result == nil {
 		return nil, errors.New("missing fake sales result")
@@ -274,7 +284,7 @@ func TestSalesAnalysisQueriesReportPeriodsInParallelAndIncludesTrend(t *testing.
 	}
 }
 
-func TestSalesAnalysisSupportsDefaultAndMaximum32ParallelTasksPerProfile(t *testing.T) {
+func TestSalesAnalysisSupportsDefaultAndMaximum160ParallelTasksPerProfile(t *testing.T) {
 	periods := []SalesAnalysisPeriodRequest{
 		{Key: "current", Label: "Current", From: "2026-08-15", To: "2026-08-15"},
 		{Key: "previous", Label: "Previous", From: "2026-07-15", To: "2026-07-15"},
@@ -287,8 +297,8 @@ func TestSalesAnalysisSupportsDefaultAndMaximum32ParallelTasksPerProfile(t *test
 		storeCount  int
 		wantActive  int
 	}{
-		{name: "default 32", concurrency: 0, storeCount: 8, wantActive: 32},
-		{name: "maximum 32", concurrency: 32, storeCount: 8, wantActive: 32},
+		{name: "default 160", concurrency: 0, storeCount: 40, wantActive: 160},
+		{name: "maximum 160", concurrency: 160, storeCount: 40, wantActive: 160},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			stores := make([]rtasales.Store, 0, test.storeCount)
@@ -407,5 +417,85 @@ func TestCancelSalesAnalysisReleasesOperationLock(t *testing.T) {
 	}
 	if _, err := app.Enable(EnableProfileRequest{ProfileID: profile.ID, Enabled: false}); err != nil {
 		t.Fatalf("operation lock was not released: %v", err)
+	}
+}
+
+func TestSalesAnalysisQueriesTwoProfilesAtTheSameTime(t *testing.T) {
+	transactions := 8.0
+	clientA := &salesAnalysisFakeClient{
+		stores: []rtasales.Store{{BusinessID: "107", Label: "107 - Central"}},
+		results: map[string]*rtasales.SalesResult{
+			"107": {TotalTransactionCount: &transactions, Items: []rtasales.SaleItem{{Matnr: "A1", TPGrossSaleAmount: 20}}},
+		},
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	clientB := &salesAnalysisFakeClient{
+		stores: []rtasales.Store{
+			{BusinessID: "107", Label: "107 - Other"},
+			{BusinessID: "108", Label: "108 - Harbour"},
+		},
+		results: map[string]*rtasales.SalesResult{
+			"108": {TotalTransactionCount: &transactions, Items: []rtasales.SaleItem{{Matnr: "B1", TPGrossSaleAmount: 30}}},
+		},
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	app, _, _ := newTestApp(t, new(fakeEngine), fakeClients{byAccount: map[string]accountClient{
+		"account-a": clientA,
+		"account-b": clientB,
+	}})
+	profileA, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{
+		DisplayName: "North", Account: "account-a", Password: "password", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{
+		DisplayName: "South", Account: "account-b", Password: "password", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	stores, err := app.ListSalesAnalysisStores(ProfileIDRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stores) != 2 || stores[0].BusinessID != "107" || stores[0].ProfileID != profileA.ID || stores[1].BusinessID != "108" {
+		t.Fatalf("union stores=%#v", stores)
+	}
+
+	type response struct {
+		result SalesAnalysisResult
+		err    error
+	}
+	done := make(chan response, 1)
+	go func() {
+		result, runErr := app.RunSalesAnalysis(SalesAnalysisRequest{
+			StoreIDs: []string{"107", "108"}, From: "2026-08-15", To: "2026-08-15", Concurrency: 2,
+		})
+		done <- response{result: result, err: runErr}
+	}()
+	for _, started := range []*salesAnalysisFakeClient{clientA, clientB} {
+		select {
+		case <-started.started:
+		case <-time.After(time.Second):
+			t.Fatal("both accounts did not start querying at the same time")
+		}
+	}
+	close(clientA.release)
+	close(clientB.release)
+	answer := <-done
+	if answer.err != nil {
+		t.Fatal(answer.err)
+	}
+	if answer.result.SuccessfulStores != 2 {
+		t.Fatalf("successful=%d, want 2", answer.result.SuccessfulStores)
+	}
+	if len(clientA.queries) != 1 || clientA.queries[0].BusinessStoreID != "107" {
+		t.Fatalf("account A queries=%#v", clientA.queries)
+	}
+	if len(clientB.queries) != 1 || clientB.queries[0].BusinessStoreID != "108" {
+		t.Fatalf("account B queries=%#v", clientB.queries)
 	}
 }

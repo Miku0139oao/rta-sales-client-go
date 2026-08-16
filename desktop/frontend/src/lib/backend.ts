@@ -18,6 +18,8 @@ import type {
   SalesAnalysisPeriodResult,
   SalesAnalysisItemsRequest,
   SalesAnalysisPackedItems,
+  SalesAnalysisReportMemo,
+  SalesAnalysisReportMemoRequest,
   SalesAnalysisRequest,
   SalesAnalysisResult,
   SalesAnalysisStore,
@@ -431,6 +433,12 @@ export const backend: BackendApi = {
     invoke(['GetSalesAnalysisItems'], [request], async (): Promise<SalesAnalysisPackedItems> => ({
       periodKey: request.periodKey, dict: [''], rows: [],
     })),
+
+  getSalesAnalysisReportGlyphs: (operationId: string) =>
+    invoke(['GetSalesAnalysisReportGlyphs'], [{ operationId }], async () => ''),
+
+  getSalesAnalysisReportMemo: (request: SalesAnalysisReportMemoRequest) =>
+    invoke(['GetSalesAnalysisReportMemo'], [request], async (): Promise<SalesAnalysisReportMemo> => ({ periods: [] })),
 
   clearSalesAnalysis: (operationId: string) =>
     invoke(['ClearSalesAnalysis'], [{ operationId }], async () => undefined),

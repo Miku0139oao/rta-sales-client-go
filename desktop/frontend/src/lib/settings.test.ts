@@ -7,9 +7,9 @@ describe('settings normalization', () => {
   });
 
   it('clamps workload and concurrency limits', () => {
-    expect(normalizeSettings({ maxJobs: 9000, accountConcurrency: 99, simulateStoreCount: 99 })).toMatchObject({
+    expect(normalizeSettings({ maxJobs: 9000, accountConcurrency: 200, simulateStoreCount: 99 })).toMatchObject({
       maxJobs: 2000,
-      accountConcurrency: 32,
+      accountConcurrency: 160,
       simulateStoreCount: 32,
     });
     expect(normalizeSettings({ maxJobs: 0, accountConcurrency: 0, simulateStoreCount: -4 })).toMatchObject({
@@ -26,8 +26,21 @@ describe('settings normalization', () => {
     });
   });
 
+  it('migrates the old 32-wide default to 160 without dropping locale or mapping', () => {
+    localStorage.setItem(
+      'rta-sales-desktop-settings-v1',
+      JSON.stringify({ locale: 'en', accountConcurrency: 32, useLocalMapping: true, mappingPath: 'D:\\map.json' }),
+    );
+    expect(loadSettings()).toMatchObject({
+      locale: 'en',
+      accountConcurrency: 160,
+      useLocalMapping: true,
+      mappingPath: 'D:\\map.json',
+    });
+  });
+
   it('upgrades saved settings without a theme to the system preference', () => {
-    localStorage.setItem('rta-sales-desktop-settings-v1', JSON.stringify({ locale: 'en', maxJobs: 40 }));
+    localStorage.setItem('rta-sales-desktop-settings-v2', JSON.stringify({ locale: 'en', maxJobs: 40 }));
     expect(loadSettings()).toMatchObject({ locale: 'en', theme: 'system', maxJobs: 40 });
     expect(normalizeSettings({ theme: 'dark' })).toMatchObject({ theme: 'dark' });
     expect(normalizeSettings({ theme: 'sepia' as never })).toMatchObject({ theme: 'system' });

@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"strings"
 	"testing"
 
 	rtasales "github.com/Miku0139oao/rta-sales-client-go"
@@ -64,6 +65,48 @@ func TestClearSalesAnalysisDropsPackedRowsAfterResultIsDiscarded(t *testing.T) {
 	}
 	if _, err := app.GetSalesAnalysisItems(SalesAnalysisItemsRequest{OperationID: result.OperationID, PeriodKey: "current"}); err == nil {
 		t.Fatal("expected packed rows to be released after clear")
+	}
+}
+
+func TestGetSalesAnalysisItemsCanReturnOneStore(t *testing.T) {
+	period := SalesAnalysisPeriodResult{
+		Key: "current",
+		Stores: []SalesAnalysisStoreSummary{
+			{BusinessID: "107", Label: "107 - Central"},
+			{BusinessID: "108", Label: "108 - Harbour"},
+		},
+		Items: []SalesAnalysisItem{
+			{StoreID: "107", StoreLabel: "107 - Central", ArticleCode: "A1", ArticleName: "Mask", NetSalesAmount: 10},
+			{StoreID: "108", StoreLabel: "108 - Harbour", ArticleCode: "B1", ArticleName: "Wipes", NetSalesAmount: 8},
+		},
+	}
+	app := &App{}
+	app.rememberSalesAnalysis(SalesAnalysisResult{
+		OperationID: "op-store",
+		Stores:      period.Stores,
+		Periods:     []SalesAnalysisPeriodResult{period},
+	}, map[string]SalesAnalysisPackedItems{"current": packSalesAnalysisItems(period)})
+	packed, err := app.GetSalesAnalysisItems(SalesAnalysisItemsRequest{
+		OperationID: "op-store", PeriodKey: "current", StoreID: "108",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(packed.Rows) != 1 {
+		t.Fatalf("rows=%d, want 1", len(packed.Rows))
+	}
+	items := unpackSalesAnalysisItems(packed, []SalesAnalysisStoreSummary{{BusinessID: "108", Label: "108 - Harbour"}})
+	if items[0].ArticleCode != "B1" || items[0].StoreID != "108" {
+		t.Fatalf("unpacked=%#v", items[0])
+	}
+	glyphs, err := app.GetSalesAnalysisReportGlyphs(OperationRequest{OperationID: "op-store"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"M", "k", "W", "1", "0", "7", "8"} {
+		if !strings.Contains(glyphs, want) {
+			t.Fatalf("glyphs %q missing %q", glyphs, want)
+		}
 	}
 }
 

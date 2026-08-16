@@ -824,7 +824,7 @@ func TestScanWorkbookContextHonorsPreCancellation(t *testing.T) {
 }
 
 func TestAnalyzeEnforcesMaxJobsAndConcurrencyBounds(t *testing.T) {
-	if DefaultMaxJobs != 2000 || DefaultConcurrency != 32 || MaximumConcurrency != 32 {
+	if DefaultMaxJobs != 2000 || DefaultConcurrency != 160 || MaximumConcurrency != 160 {
 		t.Fatalf("unexpected defaults: jobs=%d concurrency=%d max=%d", DefaultMaxJobs, DefaultConcurrency, MaximumConcurrency)
 	}
 	input := filepath.Join(t.TempDir(), "limits.xlsx")

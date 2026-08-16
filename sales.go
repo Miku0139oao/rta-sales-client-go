@@ -47,6 +47,9 @@ type SalesQuery struct {
 	// SkipTrend avoids the additional whole-store Trend View request when the
 	// caller only needs Article View rows and category metrics.
 	SkipTrend bool
+	// SkipTrendLookback uses the queried dates only for Trend View, instead of
+	// also fetching the previous ISO week used by weekly comparison pages.
+	SkipTrendLookback bool
 	// Compact skips the unused raw-row map and per-category item copies so
 	// multi-store desktop analysis does not keep three copies of every SKU.
 	Compact bool
@@ -248,7 +251,13 @@ func (c *Client) fetchSalesWindows(ctx context.Context, query SalesQuery, store 
 	if !query.SkipTrend {
 		trendDone = make(chan trendFetch, 1)
 		go func() {
-			trend, err := c.fetchTrendSeries(ctx, query, store)
+			var trend trendTotals
+			var err error
+			if query.SkipTrendLookback {
+				trend, err = c.fetchTrendTotals(ctx, query, store)
+			} else {
+				trend, err = c.fetchTrendSeries(ctx, query, store)
+			}
 			trendDone <- trendFetch{trend: trend, err: err}
 		}()
 	}

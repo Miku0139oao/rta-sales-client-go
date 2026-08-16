@@ -4,9 +4,19 @@
   import { errorMessage } from '../i18n';
   import { buildFocusGroups, type FocusGroup } from '../analysisFocus';
   import { periodKeysForView, unpackSalesAnalysisItems } from '../salesAnalysisItems';
+  import { modal } from '../modal';
+  import {
+    defaultSalesReportFilter,
+    includeInSalesReport,
+    reportCategoryId,
+    type SalesReportFilter,
+  } from '../salesReportItems';
+  import { weeklySegmentRows } from '../storeSegment';
   import {
     bytesToBase64,
     generateSalesAnalysisPDF,
+    prepareSalesAnalysisFontFromText,
+    salesReportAccumulatorFromMemo,
     ALL_STORES_REPORT_ID,
     listSuccessfulReportStores,
     salesAnalysisPDFFilename,
@@ -19,11 +29,13 @@
     SalesAnalysisPeriodRequest,
     SalesAnalysisPeriodResult,
     SalesAnalysisProgress,
+    SalesAnalysisReportMemo,
     SalesAnalysisResult,
     SalesAnalysisStore,
     SalesAnalysisTotals,
     SalesAnalysisWeek,
   } from '../types';
+  import { AppError } from '../types';
 
   export let t: Translator;
   export let settings: AppSettings;
@@ -67,6 +79,9 @@
   let loadingItems = false;
   let cancelling = false;
   let exportingPDF = false;
+  let exportDialog = false;
+  let exportFilter: SalesReportFilter = defaultSalesReportFilter();
+  let exportCombinedOnly = true;
   let pdfExportCurrent = 0;
   let pdfExportTotal = 0;
   let error = '';
@@ -125,7 +140,7 @@
   $: reportPeriods = normalizePeriods(result);
   $: currentPeriod = periodByKey(reportPeriods, 'current') ?? reportPeriods[0];
   $: neededPeriodKeys = periodKeysForView(activeView, [salesRankingKey, quantityRankingKey]);
-  $: if (result) void ensurePeriodItems(neededPeriodKeys);
+  $: if (result && !exportingPDF) void ensurePeriodItems(neededPeriodKeys);
   $: filteredItems = (currentPeriod?.items ?? []).filter((item) => matchesFilters(item, selections, search));
   $: currentTotals = totalsForPeriod(currentPeriod, selections, search);
   $: previousTotals = totalsForPeriod(periodByKey(reportPeriods, 'previous'), selections, search);
@@ -145,8 +160,8 @@
   $: focusPeriod = periodByKey(reportPeriods, 'yearAgoNext');
   $: focusGroups = focusPeriod
     ? buildFocusGroups(
-      (focusPeriod?.items ?? []).filter((item) => matchesFilters(item, selections, search)),
-      (currentPeriod?.items ?? []).filter((item) => matchesFilters(item, selections, search)),
+      (focusPeriod?.items ?? []).filter((item) => includeInSalesReport(item) && matchesFilters(item, selections, search)),
+      (currentPeriod?.items ?? []).filter((item) => includeInSalesReport(item) && matchesFilters(item, selections, search)),
     )
     : [];
   $: pageCount = Math.max(1, Math.ceil(filteredItems.length / pageSize));
@@ -266,19 +281,21 @@
     }
   }
 
-  async function ensurePeriodItems(keys: string[]) {
+  async function ensurePeriodItems(keys: string[], options: { retain?: boolean } = {}): Promise<SalesAnalysisPeriodResult[]> {
     const summary = result;
-    if (!summary?.periods?.length) return;
+    if (!summary?.periods?.length) return summary?.periods ?? [];
     const operationId = summary.operationId;
     const keep = new Set(keys.filter((key) => summary.periods!.some((period) => period.key === key)));
     let periods = summary.periods;
     let changed = false;
-    const trimmed = periods.map((period) => {
-      if (keep.has(period.key) || !period.items?.length) return period;
-      changed = true;
-      return { ...period, items: undefined };
-    });
-    if (changed) periods = trimmed;
+    if (!options.retain) {
+      const trimmed = periods.map((period) => {
+        if (keep.has(period.key) || !period.items?.length) return period;
+        changed = true;
+        return { ...period, items: undefined };
+      });
+      if (changed) periods = trimmed;
+    }
     for (const key of keep) {
       const period = periods.find((candidate) => candidate.key === key);
       if (!period || (period.items?.length ?? 0) > 0) continue;
@@ -286,18 +303,20 @@
       loadingItems = true;
       try {
         const packed = await backend.getSalesAnalysisItems({ operationId, periodKey: key });
-        if (result?.operationId !== operationId) return;
-        const items = unpackSalesAnalysisItems(packed, period.stores);
+        if (result?.operationId !== operationId) return periods;
+        const items = unpackSalesAnalysisItems(packed, period.stores ?? []);
         if (items.length === 0 && (period.itemCount ?? 0) > 0) continue;
         periods = periods.map((candidate) => candidate.key === key ? { ...candidate, items } : candidate);
         changed = true;
       } catch (caught) {
-        if (result?.operationId !== operationId) return;
+        if (result?.operationId !== operationId) return periods;
+        if (options.retain) throw caught;
         error = errorMessage(settings.locale, caught);
       }
     }
     if (changed && result?.operationId === operationId) result = { ...result, periods };
     if (result?.operationId === operationId) loadingItems = false;
+    return periods;
   }
 
   async function cancelAnalysis() {
@@ -311,8 +330,42 @@
     }
   }
 
+  function openExportDialog() {
+    if (!result || exportingPDF || loadingItems) return;
+    exportDialog = true;
+  }
+
+  function closeExportDialog() {
+    if (!exportingPDF) exportDialog = false;
+  }
+
+  function setExportMode(mode: SalesReportFilter['mode']) {
+    const categories = mode === 'whitelist' && exportFilter.categories.length === 0
+      ? exportCategoryOptions().map((option) => option.id)
+      : exportFilter.categories;
+    exportFilter = { ...exportFilter, mode, categories };
+  }
+
+  function exportCategoryOptions(): Array<{ id: string; name: string; code: string }> {
+    const grouped = new Map<string, { id: string; name: string; code: string }>();
+    for (const item of currentPeriod?.items ?? []) {
+      const id = reportCategoryId(item, groupLevel);
+      if (!id) continue;
+      grouped.set(id, { id, name: categoryValue(item, groupLevel), code: categoryCode(item, groupLevel) });
+    }
+    return [...grouped.values()].sort((left, right) => left.name.localeCompare(right.name, settings.locale));
+  }
+
+  function toggleExportCategory(id: string) {
+    const next = new Set(exportFilter.categories);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    exportFilter = { ...exportFilter, categories: [...next] };
+  }
+
   async function exportPDF() {
     if (!result || exportingPDF || loadingItems) return;
+    if (exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0) return;
     exportingPDF = true;
     pdfExportCurrent = 0;
     pdfExportTotal = 0;
@@ -322,41 +375,97 @@
       const directory = await backend.chooseSalesAnalysisPDFDirectory();
       if (!directory) return;
       const reportStores = listSuccessfulReportStores(result);
-      if (reportStores.length === 0) throw new Error('No successful store is available for PDF export');
-      await ensurePeriodItems((result.periods ?? []).map((period) => period.key));
-      const report = result;
-      if (!report || !periodsHaveItems(report)) {
-        throw new Error(t('analysis.loadingItems'));
-      }
-      const reportIds = reportStores.length > 1
-        ? [ALL_STORES_REPORT_ID, ...reportStores.map((store) => store.businessId)]
-        : reportStores.map((store) => store.businessId);
-      pdfExportTotal = reportIds.length;
+      if (reportStores.length === 0) throw new AppError('pdf_no_stores', 'No successful store is available for PDF export');
+      const periodKeys = (result.periods ?? []).map((period) => period.key);
+      if (periodKeys.length === 0) throw new AppError('pdf_loading', 'Sales analysis items are still loading');
+      const writeStoreFiles = reportStores.length === 1 || !exportCombinedOnly;
+      const writeCombined = reportStores.length > 1;
+      pdfExportTotal = (writeStoreFiles ? reportStores.length : 0) + (writeCombined ? 1 : 0);
+      const reportFrom = result.from;
+      const reportTo = result.to;
+      const operationId = result.operationId;
+      const slim: SalesAnalysisResult = {
+        ...result,
+        items: undefined,
+        periods: (result.periods ?? []).map((period) => ({ ...period, items: undefined })),
+      };
+      result = slim;
+      const fontGlyphs = await backend.getSalesAnalysisReportGlyphs(operationId);
+      const fontBase64 = await prepareSalesAnalysisFontFromText(fontGlyphs, settings.locale);
       const written: string[] = [];
-      for (const [index, storeId] of reportIds.entries()) {
-        pdfExportCurrent = index + 1;
+      const writePDF = async (storeId: string, memo: SalesAnalysisReportMemo) => {
+        pdfExportCurrent += 1;
         await yieldToUI();
-        const data = await generateSalesAnalysisPDF(report, storeId, groupLevel, settings.locale);
-        written.push(await backend.writeSalesAnalysisPDF({
-          directory,
-          filename: salesAnalysisPDFFilename(storeId, report.from, report.to),
-          dataBase64: bytesToBase64(data),
-        }));
+        let data: Uint8Array;
+        try {
+          data = await generateSalesAnalysisPDF(
+            slim, storeId, groupLevel, settings.locale, exportFilter, fontBase64,
+            salesReportAccumulatorFromMemo(memo),
+          );
+        } catch (caught) {
+          if (caught instanceof AppError) throw caught;
+          throw new AppError('pdf_failed', caught instanceof Error ? caught.message : String(caught));
+        }
+        const dataBase64 = bytesToBase64(data);
+        data = new Uint8Array();
+        try {
+          written.push(await backend.writeSalesAnalysisPDF({
+            directory,
+            filename: salesAnalysisPDFFilename(storeId, reportFrom, reportTo),
+            dataBase64,
+          }));
+        } catch (caught) {
+          if (caught instanceof AppError && caught.code !== 'backend_error') throw caught;
+          throw new AppError('pdf_write', caught instanceof Error ? caught.message : String(caught));
+        }
+      };
+      const loadMemo = (storeId?: string) => backend.getSalesAnalysisReportMemo({
+        operationId,
+        storeId,
+        categoryLevel: groupLevel,
+        excludeZeroGifts: exportFilter.excludeZeroGifts,
+        excludeStamps: exportFilter.excludeStamps,
+        mode: exportFilter.mode,
+        categories: exportFilter.categories,
+      });
+      let loaded = false;
+      if (writeStoreFiles) {
+        for (const store of reportStores) {
+          await yieldToUI();
+          const memo = await loadMemo(store.businessId);
+          if (reportMemoHasRows(memo)) loaded = true;
+          await writePDF(store.businessId, memo);
+        }
       }
+      if (writeCombined) {
+        const memo = await loadMemo();
+        if (reportMemoHasRows(memo)) loaded = true;
+        await writePDF(ALL_STORES_REPORT_ID, memo);
+      }
+      if (!loaded) throw new AppError('pdf_loading', 'Sales analysis items are still loading');
       exportDirectory = directory;
-      exportNotice = reportStores.length > 1
+      exportNotice = writeCombined && writeStoreFiles
         ? t('analysis.exportedPDFWithCombined', { stores: reportStores.length })
         : t('analysis.exportedPDF', { count: written.length });
-      await ensurePeriodItems(periodKeysForView(activeView, [salesRankingKey, quantityRankingKey]));
     } catch (caught) {
       error = errorMessage(settings.locale, caught);
     } finally {
       exportingPDF = false;
+      exportDialog = false;
+      if (result) void ensurePeriodItems(periodKeysForView(activeView, [salesRankingKey, quantityRankingKey]));
     }
   }
 
+  function reportMemoHasRows(memo: SalesAnalysisReportMemo): boolean {
+    return (memo.periods ?? []).some((period) =>
+      (period.topAmount?.length ?? 0) > 0
+      || (period.amountGroups?.length ?? 0) > 0
+      || (period.quantityGroups?.length ?? 0) > 0,
+    );
+  }
+
   function yieldToUI(): Promise<void> {
-    return new Promise((resolve) => window.setTimeout(resolve, 0));
+    return new Promise((resolve) => window.setTimeout(resolve, 16));
   }
 
   function buildPeriodRequests(): SalesAnalysisPeriodRequest[] {
@@ -428,10 +537,6 @@
       complete: value.complete, successfulStores: value.successfulStores, totals: value.totals,
       stores: value.stores, items: value.items ?? [], issues: value.issues,
     }];
-  }
-
-  function periodsHaveItems(value: SalesAnalysisResult): boolean {
-    return (value.periods ?? []).every((period) => (period.itemCount ?? 0) === 0 || (period.items?.length ?? 0) > 0);
   }
 
   function periodByKey(periods: SalesAnalysisPeriodResult[], key: string): SalesAnalysisPeriodResult | undefined {
@@ -547,7 +652,7 @@
     for (const period of periods) {
       if (!['current', 'previous', 'previous2', 'yearAgo'].includes(period.key)) continue;
       for (const item of period.items ?? []) {
-        if (!matchesFilters(item, current, searchTerm)) continue;
+        if (!includeInSalesReport(item) || !matchesFilters(item, current, searchTerm)) continue;
         const name = categoryValue(item, key);
         const code = categoryCode(item, key);
         const id = code || name;
@@ -562,6 +667,7 @@
   function buildTopItems(items: SalesAnalysisItem[], sortBy: 'amount' | 'quantity'): TopItem[] {
     const grouped = new Map<string, TopItem>();
     for (const item of items) {
+      if (!includeInSalesReport(item)) continue;
       const id = item.articleCode || item.articleName;
       const current: TopItem = grouped.get(id) ?? {
         id, code: item.articleCode, name: item.articleName || t('common.notAvailable'), brand: item.brandName ?? '', amount: 0, quantity: 0,
@@ -586,7 +692,7 @@
     if (!period) return [];
     const grouped = new Map<string, { code: string; name: string; items: SalesAnalysisItem[]; amount: number; quantity: number }>();
     for (const item of period.items ?? []) {
-      if (!matchesFilters(item, current, searchTerm)) continue;
+      if (!includeInSalesReport(item) || !matchesFilters(item, current, searchTerm)) continue;
       const code = categoryCode(item, key);
       const name = categoryValue(item, key);
       const id = code || name;
@@ -625,7 +731,7 @@
     const grouped = new Map<string, StoreComparisonRow>();
     for (const period of periods) {
       if (!['current', 'previous', 'yearAgo'].includes(period.key)) continue;
-      for (const store of period.stores) {
+      for (const store of period.stores ?? []) {
         const row: StoreComparisonRow = grouped.get(store.businessId) ?? { id: store.businessId, label: store.label };
         row[period.key as 'current' | 'previous' | 'yearAgo'] = store.totals;
         grouped.set(store.businessId, row);
@@ -755,7 +861,7 @@
     <h1 id="analysis-title">{t('analysis.title')}</h1>
     {#if result}
       <div class="analysis-heading-actions">
-        <md-filled-button type="button" onclick={() => void exportPDF()} disabled={exportingPDF || loadingItems}>
+        <md-filled-button type="button" onclick={openExportDialog} disabled={exportingPDF || loadingItems}>
           <span class="material-symbols-rounded" slot="icon" aria-hidden="true">picture_as_pdf</span>{exportingPDF ? t('analysis.exportingPDFProgress', { current: pdfExportCurrent, total: pdfExportTotal }) : t('analysis.exportPDF')}
         </md-filled-button>
         <md-outlined-button type="button" onclick={() => { dismissExportNotice(); resetFilters(); void discardResult(); }} disabled={exportingPDF}>
@@ -911,7 +1017,7 @@
       </div>
       </div>
 
-      <div class="analysis-workspace pane-scroll">
+      <div class="analysis-workspace">
       {#if activeView === 'overview'}
         <dl class="analysis-kpis">
           <div><dt>{t('analysis.netSales')}</dt><dd>{formatMoney(currentTotals.netSalesAmount)}</dd><span class={deltaClass(delta(currentTotals.netSalesAmount, yearAgoTotals.netSalesAmount))}>{formatPercent(delta(currentTotals.netSalesAmount, yearAgoTotals.netSalesAmount))} {t('analysis.vsYearAgo')}</span></div>
@@ -975,16 +1081,22 @@
                   </tr>
                 </thead>
                 <tbody>
-                  <tr>
-                    <th><strong>{t('analysis.allStores')}</strong><span>{t('analysis.stores')}</span></th>
-                    {#each weeklyMetricCells(weeklyWeek.totals) as cell}
-                      <td class={cell.className}>{cell.text}</td>
-                    {/each}
-                  </tr>
-                  {#each weeklyWeek.stores as row}
-                    <tr>
-                      <th><strong>{row.businessId}</strong><span>{row.label}</span></th>
-                      {#each weeklyMetricCells(row) as cell}
+                  {#each weeklySegmentRows(weeklyWeek.stores ?? [], {
+                    store: (store) => store.businessId || store.label || t('analysis.store'),
+                    localTotal: t('analysis.localTotal'),
+                    touristTotal: t('analysis.touristTotal'),
+                    allStores: t('analysis.allStores'),
+                  }) as row}
+                    <tr class:weekly-total={row.kind !== 'store'}>
+                      <th>
+                        {#if row.kind === 'store'}
+                          <strong>{row.values.businessId || row.label}</strong>
+                          {#if row.values.label && row.values.label !== row.values.businessId}<span>{row.values.label}</span>{/if}
+                        {:else}
+                          <strong>{row.label}</strong>
+                        {/if}
+                      </th>
+                      {#each weeklyMetricCells(row.values) as cell}
                         <td class={cell.className}>{cell.text}</td>
                       {/each}
                     </tr>
@@ -1044,7 +1156,7 @@
       {:else if activeView === 'categories'}
         <section class="comparison-card surface-card" aria-labelledby="category-title">
           <div class="comparison-heading"><h2 id="category-title">{t('analysis.rolling')}</h2><div class="group-tabs" role="radiogroup" aria-label={t('analysis.groupBy')}>{#each facets as facet}<button type="button" class:active={groupLevel === facet.key} role="radio" aria-checked={groupLevel === facet.key} onclick={() => { groupLevel = facet.key; }}>{t(facet.label)}</button>{/each}</div></div>
-          <div class="table-scroll category-table"><table>
+          <div class="category-table"><table>
             <thead><tr><th>{t('analysis.category')}</th><th class="numeric">{t('analysis.currentPeriod')}</th><th class="numeric">{t('analysis.previousPeriod')}</th><th class="numeric">{t('analysis.previous2Period')}</th><th class="numeric">{t('analysis.yearAgoPeriod')}</th><th class="numeric">{t('analysis.vsPrevious')}</th><th class="numeric">{t('analysis.vsYearAgo')}</th></tr></thead>
             <tbody>{#each categoryRows as row}<tr><th><strong>{row.name}</strong>{#if row.code}<span>{row.code}</span>{/if}</th><td class="numeric emphasis">{formatMoney(row.current)}</td><td class="numeric">{formatMoney(row.previous)}</td><td class="numeric">{formatMoney(row.previous2)}</td><td class="numeric">{formatMoney(row.yearAgo)}</td><td class={`numeric ${deltaClass(delta(row.current, row.previous))}`}>{formatPercent(delta(row.current, row.previous))}</td><td class={`numeric ${deltaClass(delta(row.current, row.yearAgo))}`}>{formatPercent(delta(row.current, row.yearAgo))}</td></tr>{:else}<tr><td colspan="7" class="empty-table">{t('analysis.noResults')}</td></tr>{/each}</tbody>
           </table></div>
@@ -1110,16 +1222,75 @@
   {/if}
 </section>
 
+{#if exportDialog}
+  <dialog use:modal={{ busy: exportingPDF, onClose: closeExportDialog }} class="app-dialog export-dialog" aria-modal="true" aria-labelledby="export-dialog-title">
+    <div class="dialog-header">
+      <div>
+        <h2 id="export-dialog-title">{t('analysis.exportDialogTitle')}</h2>
+        <p class="export-dialog-hint">{t('analysis.exportDialogHint')}</p>
+      </div>
+      <md-icon-button aria-label={t('common.close')} onclick={closeExportDialog} disabled={exportingPDF}><span class="material-symbols-rounded">close</span></md-icon-button>
+    </div>
+    <form onsubmit={(event) => { event.preventDefault(); void exportPDF(); }}>
+      <div class="export-mode" role="radiogroup" aria-label={t('analysis.exportDialogTitle')}>
+        <button type="button" class:active={exportFilter.mode === 'blacklist'} role="radio" aria-checked={exportFilter.mode === 'blacklist'} disabled={exportingPDF} onclick={() => setExportMode('blacklist')}>{t('analysis.exportModeAll')}</button>
+        <button type="button" class:active={exportFilter.mode === 'whitelist'} role="radio" aria-checked={exportFilter.mode === 'whitelist'} disabled={exportingPDF} onclick={() => setExportMode('whitelist')}>{t('analysis.exportModeOnly')}</button>
+      </div>
+      {#if result && listSuccessfulReportStores(result).length > 1}
+        {@const storeCount = listSuccessfulReportStores(result).length}
+        <div class="export-files">
+          <strong>{t('analysis.exportFiles')}</strong>
+          <p class="export-files-hint">{t('analysis.exportFilesHint', { stores: storeCount })}</p>
+          <div class="export-file-cards" role="radiogroup" aria-label={t('analysis.exportFiles')}>
+            <button type="button" class="export-file-card" class:active={exportCombinedOnly} role="radio" aria-checked={exportCombinedOnly} disabled={exportingPDF} onclick={() => { exportCombinedOnly = true; }}>
+              <strong>{t('analysis.exportFilesCombined')}</strong>
+              <span>{t('analysis.exportFilesCombinedHint')}</span>
+            </button>
+            <button type="button" class="export-file-card" class:active={!exportCombinedOnly} role="radio" aria-checked={!exportCombinedOnly} disabled={exportingPDF} onclick={() => { exportCombinedOnly = false; }}>
+              <strong>{t('analysis.exportFilesAll')}</strong>
+              <span>{t('analysis.exportFilesAllHint', { files: storeCount + 1, stores: storeCount })}</span>
+            </button>
+          </div>
+        </div>
+      {/if}
+      <label class="export-check"><input type="checkbox" checked={exportFilter.excludeZeroGifts} disabled={exportingPDF} onchange={() => { exportFilter = { ...exportFilter, excludeZeroGifts: !exportFilter.excludeZeroGifts }; }} /><span>{t('analysis.exportSkipGifts')}</span></label>
+      <label class="export-check"><input type="checkbox" checked={exportFilter.excludeStamps} disabled={exportingPDF} onchange={() => { exportFilter = { ...exportFilter, excludeStamps: !exportFilter.excludeStamps }; }} /><span>{t('analysis.exportSkipStamps')}</span></label>
+      <div class="export-categories">
+        <div class="export-categories-heading">
+          <strong>{exportFilter.mode === 'whitelist' ? t('analysis.exportKeepCategories') : t('analysis.exportSkipCategories')}</strong>
+          <div>
+            <button type="button" disabled={exportingPDF} onclick={() => { exportFilter = { ...exportFilter, categories: exportCategoryOptions().map((option) => option.id) }; }}>{t('analysis.selectAll')}</button>
+            <button type="button" disabled={exportingPDF} onclick={() => { exportFilter = { ...exportFilter, categories: [] }; }}>{t('analysis.clear')}</button>
+          </div>
+        </div>
+        <div class="export-category-list pane-scroll">
+          {#each exportCategoryOptions() as option (option.id)}
+            <label><input type="checkbox" checked={exportFilter.categories.includes(option.id)} disabled={exportingPDF} onchange={() => toggleExportCategory(option.id)} /><span>{option.code ? `${option.code}  ${option.name}` : option.name}</span></label>
+          {:else}
+            <div class="export-category-empty">{t('analysis.noResults')}</div>
+          {/each}
+        </div>
+      </div>
+      {#if exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0}
+        <p class="export-dialog-warning">{t('analysis.exportNeedCategory')}</p>
+      {/if}
+      <div class="dialog-actions">
+        <md-text-button type="button" onclick={closeExportDialog} disabled={exportingPDF}>{t('common.cancel')}</md-text-button>
+        <md-filled-button type="submit" onclick={() => void exportPDF()} disabled={exportingPDF || (exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0)}>{exportingPDF ? t('analysis.exportingPDFProgress', { current: pdfExportCurrent, total: pdfExportTotal }) : t('analysis.exportConfirm')}</md-filled-button>
+      </div>
+    </form>
+  </dialog>
+{/if}
+
 <style>
   .analysis-page { max-width: 1480px; }
-  .analysis-page.has-results { display: flex; flex: 1; min-height: 0; flex-direction: column; width: 100%; max-width: 1480px; }
-  .analysis-page.has-results .page-heading { flex: 0 0 auto; }
+  .analysis-page.has-results { width: 100%; max-width: 1480px; }
   .export-notice { display: flex; align-items: center; gap: 12px; }
   .export-notice-copy { display: grid; min-width: 0; flex: 1; gap: 2px; }
   .export-notice-copy code { overflow: hidden; color: var(--md-sys-color-on-surface-variant); font-family: "Cascadia Code", ui-monospace, monospace; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-  .analysis-results { display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 12px; }
-  .analysis-toolbar { display: grid; flex: 0 0 auto; gap: 10px; }
-  .analysis-workspace { display: grid; flex: 1; min-height: 0; align-content: start; gap: 16px; overflow: auto; padding-right: 2px; }
+  .analysis-results { display: grid; gap: 12px; }
+  .analysis-toolbar { display: grid; gap: 10px; }
+  .analysis-workspace { display: grid; align-content: start; gap: 16px; overflow: visible; }
   .period-summary { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-variant-numeric: tabular-nums; }
   .period-summary .current { color: var(--md-sys-color-primary); font-weight: 650; }
   .store-search { margin-top: 12px; }
@@ -1187,7 +1358,8 @@
   .section-heading, .comparison-heading, .analysis-table-heading { padding: 19px 21px 14px; }
   .section-heading h2, .comparison-heading h2, .analysis-table-heading h2 { margin: 0; }
   .performance-card .table-scroll { max-height: none; }
-  .comparison-card .table-scroll { max-height: none; }
+  .comparison-card .table-scroll,
+    .category-table { max-height: none; overflow: visible; }
   .performance-card th:first-child, .comparison-card th:first-child { text-align: left; }
   .emphasis { color: var(--app-summary-value); font-weight: 740; }
   .top-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -1231,6 +1403,8 @@
   .group-tabs button:last-child { border-right: 0; }
   .group-tabs button.active { color: var(--md-sys-color-on-secondary-container); background: var(--md-sys-color-secondary-container); }
   .category-table th:first-child, .store-table th:first-child { min-width: 220px; }
+  .weekly-total { background: var(--md-sys-color-surface-container-low); }
+  .weekly-total th, .weekly-total td { font-weight: 740; }
   .category-table th span, .store-table th span, .category-cell span, .article-cell span { display: block; margin-top: 3px; color: var(--md-sys-color-on-surface-variant); font-size: 11px; font-weight: 500; }
   .analysis-table-card { padding: 0; overflow: hidden; }
   .analysis-table-heading > strong { color: var(--md-sys-color-on-surface-variant); font-size: 13px; }
@@ -1240,7 +1414,7 @@
   .empty-table { height: 150px; text-align: center !important; color: var(--md-sys-color-on-surface-variant); }
   .pagination { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 14px 18px; border-top: 1px solid var(--app-table-border); }
   .pagination strong { min-width: 70px; text-align: center; font-variant-numeric: tabular-nums; }
-  .ranking-section { overflow: hidden; padding: 0; }
+  .ranking-section { overflow: visible; max-height: none; padding: 0; }
   .ranking-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px 20px; border-bottom: 1px solid var(--app-table-border); }
   .ranking-heading > div:first-child { display: grid; gap: 3px; }
   .ranking-heading h2 { margin: 0; }
@@ -1255,7 +1429,7 @@
   .ranking-group > header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ranking-group > header span { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
   .ranking-group > header b { color: var(--app-summary-value); font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .ranking-group ol { display: grid; margin: 0; padding: 0 12px 9px; list-style: none; }
+  .ranking-group ol { display: grid; margin: 0; padding: 0 12px 9px; overflow: visible; list-style: none; }
   .ranking-group li { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 48px; border-top: 1px solid var(--app-table-border); }
   .ranking-group li:first-child { border-top: 0; }
   .ranking-group .rank { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 7px; color: var(--md-sys-color-primary); background: var(--md-sys-color-secondary-container); font-size: 11px; font-weight: 750; }
@@ -1264,6 +1438,31 @@
   .ranking-product span, .ranking-values span { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
   .ranking-values { min-width: max-content; justify-items: end; text-align: right; font-variant-numeric: tabular-nums; }
   .ranking-empty { min-height: 120px; display: grid; place-items: center; color: var(--md-sys-color-on-surface-variant); }
+  :global(.export-dialog) { width: min(calc(100% - 32px), 520px); }
+  .export-dialog-hint { margin: 6px 0 0; color: var(--md-sys-color-on-surface-variant); font-size: 13px; line-height: 1.45; }
+  .export-mode { display: grid; gap: 8px; }
+  .export-mode button { min-height: 44px; padding: 8px 12px; cursor: pointer; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; color: var(--md-sys-color-on-surface-variant); background: var(--md-sys-color-surface-container-lowest); font-weight: 650; text-align: left; }
+  .export-mode button.active { border-color: var(--app-active-border); color: var(--md-sys-color-on-secondary-container); background: var(--md-sys-color-secondary-container); }
+  .export-files { display: grid; gap: 8px; }
+  .export-files > strong { font-size: 14px; }
+  .export-files-hint { margin: 0; color: var(--md-sys-color-on-surface-variant); font-size: 12px; line-height: 1.45; }
+  .export-file-cards { display: grid; gap: 8px; }
+  .export-file-card { display: grid; gap: 4px; min-height: 64px; padding: 12px 14px; cursor: pointer; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 14px; color: var(--md-sys-color-on-surface); background: var(--md-sys-color-surface-container-lowest); text-align: left; }
+  .export-file-card span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; line-height: 1.4; font-weight: 500; }
+  .export-file-card.active { border-color: var(--app-active-border); color: var(--md-sys-color-on-secondary-container); background: var(--md-sys-color-secondary-container); }
+  .export-file-card.active span { color: var(--md-sys-color-on-secondary-container); }
+  .export-check { display: flex; align-items: flex-start; gap: 10px; font-size: 14px; line-height: 1.4; }
+  .export-check input { width: 18px; height: 18px; margin-top: 1px; accent-color: var(--md-sys-color-primary); }
+  .export-categories { overflow: hidden; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 14px; }
+  .export-categories-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; background: var(--md-sys-color-surface-container-low); }
+  .export-categories-heading > div { display: flex; gap: 8px; }
+  .export-categories-heading button { cursor: pointer; border: 0; color: var(--md-sys-color-primary); background: transparent; font-weight: 680; }
+  .export-category-list { display: grid; max-height: 200px; gap: 2px; overflow: auto; padding: 6px; }
+  .export-category-list label { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 9px; }
+  .export-category-list label:hover { background: var(--md-sys-color-surface-container-low); }
+  .export-category-list input { width: 18px; height: 18px; accent-color: var(--md-sys-color-primary); }
+  .export-category-empty { padding: 18px 8px; color: var(--md-sys-color-on-surface-variant); text-align: center; }
+  .export-dialog-warning { margin: 0; color: var(--md-sys-color-error); font-size: 13px; }
 
   @media (max-width: 1100px) {
     .analysis-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }

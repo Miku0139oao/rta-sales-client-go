@@ -552,7 +552,7 @@ func TestDeleteProfileRestoresSecretsWhenMetadataUpdateFails(t *testing.T) {
 	}
 }
 
-func TestProfilePriorityWinsOverlapAndReorderChangesOwner(t *testing.T) {
+func TestExcelUsesFirstEnabledProfileAndReorderChangesOwner(t *testing.T) {
 	engine := new(fakeEngine)
 	engine.analyze = func(ctx context.Context, provider xlsxfill.SalesProvider, request engineAnalyzeRequest) (*enginePlan, error) {
 		result, err := provider.Sales(ctx, rtasales.SalesQuery{BusinessStoreID: "shared-store"})
@@ -583,8 +583,8 @@ func TestProfilePriorityWinsOverlapAndReorderChangesOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.OverlapCount != 1 || len(result.Preview) != 1 || result.Preview[0].ProposedL != "1" {
-		t.Fatalf("first profile did not win overlap: %#v", result)
+	if result.OverlapCount != 0 || len(result.Preview) != 1 || result.Preview[0].ProposedL != "1" {
+		t.Fatalf("first enabled profile should own every query: %#v", result)
 	}
 	if result.Preview[0].ProfileDisplayName != "First" {
 		t.Fatalf("unexpected first owner: %#v", result.Preview[0])
@@ -601,7 +601,7 @@ func TestProfilePriorityWinsOverlapAndReorderChangesOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.Preview[0].ProposedL != "2" || result.Preview[0].ProfileDisplayName != "Second" {
-		t.Fatalf("reordered profile did not win: %#v", result.Preview[0])
+		t.Fatalf("reordered first profile was not used: %#v", result.Preview[0])
 	}
 	events.mu.Lock()
 	defer events.mu.Unlock()
@@ -614,6 +614,51 @@ func TestProfilePriorityWinsOverlapAndReorderChangesOwner(t *testing.T) {
 			t.Fatalf("progress event exposed credentials: %s", encoded)
 		}
 	}
+}
+
+func TestAnalyzeDoesNotQueryASecondEnabledProfile(t *testing.T) {
+	second := &countingAccountClient{fakeAccountClient: fakeAccountClient{
+		stores: []rtasales.Store{{BusinessID: "208", Label: "208"}}, value: 99,
+	}}
+	app, _, _ := newTestApp(t, new(fakeEngine), fakeClients{byAccount: map[string]accountClient{
+		"account-one": &fakeAccountClient{stores: []rtasales.Store{{BusinessID: "107"}, {BusinessID: "108"}}, value: 10},
+		"account-two": second,
+	}})
+	if _, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{DisplayName: "Primary", Account: "account-one", Password: "password", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{DisplayName: "Spare", Account: "account-two", Password: "password", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	router, allowed, _, overlap, _, err := app.buildRouter(context.Background(), "one-account", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overlap != 0 || len(allowed) != 2 || allowed[0] != "107" || allowed[1] != "108" {
+		t.Fatalf("allowed=%v overlap=%d", allowed, overlap)
+	}
+	if _, ok := router.ProviderForStore("208"); ok {
+		t.Fatal("second profile store should not be on the router")
+	}
+	if second.storesCalls > 0 || second.salesCalls > 0 {
+		t.Fatalf("second profile was contacted: stores=%d sales=%d", second.storesCalls, second.salesCalls)
+	}
+}
+
+type countingAccountClient struct {
+	fakeAccountClient
+	storesCalls int
+	salesCalls  int
+}
+
+func (c *countingAccountClient) Stores(ctx context.Context) ([]rtasales.Store, error) {
+	c.storesCalls++
+	return c.fakeAccountClient.Stores(ctx)
+}
+
+func (c *countingAccountClient) Sales(ctx context.Context, query rtasales.SalesQuery) (*rtasales.SalesResult, error) {
+	c.salesCalls++
+	return c.fakeAccountClient.Sales(ctx, query)
 }
 
 func TestDuplicateAccountProfilesDoNotExposeAccountInRoutes(t *testing.T) {
@@ -629,16 +674,19 @@ func TestDuplicateAccountProfilesDoNotExposeAccountInRoutes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	router, _, _, _, _, err := app.buildRouter(context.Background(), "test-operation")
+	router, allowed, _, overlap, _, err := app.buildRouter(context.Background(), "test-operation", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, firstOK := router.ProviderForStore("store-one")
-	second, secondOK := router.ProviderForStore("store-two")
-	if !firstOK || !secondOK {
-		t.Fatalf("duplicate account profiles lost a route: %#v %#v", first, second)
+	if overlap != 0 || len(allowed) != 1 || allowed[0] != "store-one" {
+		t.Fatalf("one account should only use the first profile stores: allowed=%v overlap=%d", allowed, overlap)
 	}
-	if strings.Contains(first.Lane, "same-account") || strings.Contains(second.Lane, "same-account") {
+	first, firstOK := router.ProviderForStore("store-one")
+	_, secondOK := router.ProviderForStore("store-two")
+	if !firstOK || secondOK {
+		t.Fatalf("second profile should not be queried: firstOK=%v secondOK=%v", firstOK, secondOK)
+	}
+	if strings.Contains(first.Lane, "same-account") || strings.Contains(first.Profile, "same-account") {
 		t.Fatal("route metadata exposed the account identifier")
 	}
 }

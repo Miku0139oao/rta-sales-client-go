@@ -1,15 +1,33 @@
-import { readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { defaultSalesReportFilter } from './salesReportItems';
 import {
   ALL_STORES_REPORT_ID,
+  addSalesReportPeriodItems,
   buildSalesAnalysisPDF,
   categoryCardRowMetrics,
   categoryRankingCardSlots,
+  createSalesReportAccumulator,
+  generateSalesAnalysisPDF,
   listSuccessfulReportStores,
+  prepareSalesAnalysisFont,
   salesAnalysisPDFFilename,
+  salesReportAccumulatorFromMemo,
 } from './sales-report-pdf';
-import type { SalesAnalysisItem, SalesAnalysisResult, SalesAnalysisTotals } from './types';
+import type { SalesAnalysisItem, SalesAnalysisResult, SalesAnalysisTotals, SalesAnalysisWeek } from './types';
+
+function weekRow(from: string, to: string, salesTw: number, salesLw: number) {
+  const values = {
+    salesTw, salesLw, customersTw: 20, customersLw: 10,
+    weekdaySalesTw: salesTw * 0.6, weekdaySalesLw: salesLw * 0.7,
+    weekendSalesTw: salesTw * 0.4, weekendSalesLw: salesLw * 0.3,
+    weekdayCustomersTw: 12, weekdayCustomersLw: 6, weekendCustomersTw: 8, weekendCustomersLw: 4,
+  };
+  return {
+    from, to, totals: values,
+    stores: [{ businessId: '107', label: '107 - Tai Wai', ...values }],
+  };
+}
 
 function itemsFor(storeId: string): SalesAnalysisItem[] {
   return Array.from({ length: 90 }, (_, index) => ({
@@ -85,14 +103,21 @@ function resultFixture(): SalesAnalysisResult {
   };
 }
 
+async function reportFont(result = resultFixture()) {
+  return prepareSalesAnalysisFont(result, 'category2', 'zh-TW');
+}
+
 describe('sales analysis PDF', () => {
   it('builds a nine-page landscape store report with an embedded Chinese font', async () => {
-    const fontBase64 = readFileSync(resolve(process.cwd(), 'src/lib/assets/NotoSansTC-Regular.ttf')).toString('base64');
+    const fontBase64 = await reportFont();
+    expect(fontBase64.length).toBeLessThan(400_000);
     const pdf = await buildSalesAnalysisPDF(resultFixture(), '107', 'category2', 'zh-TW', fontBase64);
     expect(new TextDecoder().decode(pdf.slice(0, 8))).toBe('%PDF-1.3');
-    expect(pdf.byteLength).toBeGreaterThan(100_000);
+    expect(pdf.byteLength).toBeGreaterThan(5_000);
+    expect(pdf.byteLength).toBeLessThan(400_000);
     const source = new TextDecoder('latin1').decode(pdf);
     expect(source.match(/\/Type \/Page\b/g)).toHaveLength(9);
+    expect(source.match(/\/FontFile2\b/g)).toHaveLength(1);
     if (process.env.SALES_REPORT_QA_OUTPUT) writeFileSync(process.env.SALES_REPORT_QA_OUTPUT, pdf);
   });
 
@@ -103,7 +128,6 @@ describe('sales analysis PDF', () => {
   });
 
   it('builds a combined all-stores report with a store comparison page', async () => {
-    const fontBase64 = readFileSync(resolve(process.cwd(), 'src/lib/assets/NotoSansTC-Regular.ttf')).toString('base64');
     const result = resultFixture();
     const items108 = itemsFor('108').map((item) => ({ ...item, netSalesAmount: item.netSalesAmount * 0.7, netQuantity: item.netQuantity * 0.7 }));
     for (const period of result.periods ?? []) {
@@ -122,13 +146,12 @@ describe('sales analysis PDF', () => {
     }
     result.items = result.periods?.[0]?.items ?? result.items;
     result.totals = totalsFor(result.items ?? []);
-    const pdf = await buildSalesAnalysisPDF(result, ALL_STORES_REPORT_ID, 'category2', 'zh-TW', fontBase64);
+    const pdf = await buildSalesAnalysisPDF(result, ALL_STORES_REPORT_ID, 'category2', 'zh-TW', await reportFont(result));
     expect(new TextDecoder().decode(pdf.slice(0, 8))).toBe('%PDF-1.3');
     expect(new TextDecoder('latin1').decode(pdf).match(/\/Type \/Page\b/g)).toHaveLength(10);
   });
 
   it('keeps a three-category store on nine pages without placeholder cards', async () => {
-    const fontBase64 = readFileSync(resolve(process.cwd(), 'src/lib/assets/NotoSansTC-Regular.ttf')).toString('base64');
     const result = resultFixture();
     for (const period of result.periods ?? []) {
       period.items = (period.items ?? []).filter((_, index) => index % 6 < 3);
@@ -137,31 +160,19 @@ describe('sales analysis PDF', () => {
     }
     result.items = result.periods?.[0]?.items ?? result.items;
     result.totals = totalsFor(result.items ?? []);
-    const pdf = await buildSalesAnalysisPDF(result, '107', 'category2', 'zh-TW', fontBase64);
+    const pdf = await buildSalesAnalysisPDF(result, '107', 'category2', 'zh-TW', await reportFont(result));
     expect(new TextDecoder('latin1').decode(pdf).match(/\/Type \/Page\b/g)).toHaveLength(9);
     if (process.env.SALES_REPORT_3CAT_OUTPUT) writeFileSync(process.env.SALES_REPORT_3CAT_OUTPUT, pdf);
   });
 
-  it('adds one weekly page per week without changing a report that has no weeks', async () => {
-    const fontBase64 = readFileSync(resolve(process.cwd(), 'src/lib/assets/NotoSansTC-Regular.ttf')).toString('base64');
+  it('keeps every week on one compact page for a single-store report', async () => {
     const result = resultFixture();
     result.weeks = [
-      {
-        from: '2026-08-03', to: '2026-08-09',
-        totals: {
-          salesTw: 200, salesLw: 100, customersTw: 20, customersLw: 10,
-          weekdaySalesTw: 120, weekdaySalesLw: 70, weekendSalesTw: 80, weekendSalesLw: 30,
-          weekdayCustomersTw: 12, weekdayCustomersLw: 6, weekendCustomersTw: 8, weekendCustomersLw: 4,
-        },
-        stores: [{
-          businessId: '107', label: '107 - Tai Wai',
-          salesTw: 200, salesLw: 100, customersTw: 20, customersLw: 10,
-          weekdaySalesTw: 120, weekdaySalesLw: 70, weekendSalesTw: 80, weekendSalesLw: 30,
-          weekdayCustomersTw: 12, weekdayCustomersLw: 6, weekendCustomersTw: 8, weekendCustomersLw: 4,
-        }],
-      },
+      weekRow('2026-07-27', '2026-08-02', 711906, 854364),
+      weekRow('2026-08-03', '2026-08-09', 1452746, 711906),
+      weekRow('2026-08-10', '2026-08-16', 606950, 1452746),
     ];
-    const pdf = await buildSalesAnalysisPDF(result, '107', 'category2', 'zh-TW', fontBase64);
+    const pdf = await buildSalesAnalysisPDF(result, '107', 'category2', 'zh-TW', await reportFont(result));
     expect(new TextDecoder('latin1').decode(pdf).match(/\/Type \/Page\b/g)).toHaveLength(10);
     if (process.env.SALES_REPORT_WEEKLY_OUTPUT) writeFileSync(process.env.SALES_REPORT_WEEKLY_OUTPUT, pdf);
   });
@@ -197,7 +208,6 @@ describe('sales analysis PDF', () => {
         netSalesAmount: unitAmount,
       }));
     });
-    const fontBase64 = readFileSync(resolve(process.cwd(), 'src/lib/assets/NotoSansTC-Regular.ttf')).toString('base64');
     const result = resultFixture();
     for (const period of result.periods ?? []) {
       period.items = items;
@@ -206,9 +216,51 @@ describe('sales analysis PDF', () => {
     }
     result.items = items;
     result.totals = totalsFor(items);
-    const pdf = await buildSalesAnalysisPDF(result, '107', 'category2', 'zh-TW', fontBase64);
+    const pdf = await buildSalesAnalysisPDF(result, '107', 'category2', 'zh-TW', await reportFont(result));
     expect(new TextDecoder('latin1').decode(pdf).match(/\/Type \/Page\b/g)?.length).toBeGreaterThan(9);
     if (process.env.SALES_REPORT_MIXED_OUTPUT) writeFileSync(process.env.SALES_REPORT_MIXED_OUTPUT, pdf);
+  });
+
+  it('builds a combined report from per-store totals without keeping every article', async () => {
+    const result = resultFixture();
+    const fontBase64 = await reportFont(result);
+    const accumulator = createSalesReportAccumulator();
+    for (const period of result.periods ?? []) {
+      addSalesReportPeriodItems(accumulator, period.key, period.items ?? [], defaultSalesReportFilter(), 'category2');
+    }
+    const slim = {
+      ...result,
+      items: undefined,
+      periods: (result.periods ?? []).map((period) => ({ ...period, items: undefined })),
+    };
+    const pdf = await generateSalesAnalysisPDF(slim, ALL_STORES_REPORT_ID, 'category2', 'zh-TW', defaultSalesReportFilter(), fontBase64, accumulator);
+    expect(new TextDecoder().decode(pdf.slice(0, 8))).toBe('%PDF-1.3');
+    expect(new TextDecoder('latin1').decode(pdf).match(/\/Type \/Page\b/g)).toHaveLength(10);
+    const fromMemo = salesReportAccumulatorFromMemo({
+      periods: [{
+        key: 'current',
+        topAmount: [{ id: 'x', code: 'x', name: '測試', amount: 10, quantity: 1 }],
+        amountGroups: [{ id: 'A02', code: 'A02', name: 'BEAUTY CARE', amount: 10, quantity: 1, items: [{ id: 'x', code: 'x', name: '測試', amount: 10, quantity: 1 }] }],
+      }],
+    });
+    expect(fromMemo.periods.get('current')?.products.get('x')?.amount).toBe(10);
+  });
+
+  it('builds a per-store report when period store summaries are missing', async () => {
+    const result = resultFixture();
+    result.weeks = [{
+      from: '2026-08-03', to: '2026-08-09',
+      totals: {
+        salesTw: 200, salesLw: 100, customersTw: 20, customersLw: 10,
+        weekdaySalesTw: 120, weekdaySalesLw: 70, weekendSalesTw: 80, weekendSalesLw: 30,
+        weekdayCustomersTw: 12, weekdayCustomersLw: 6, weekendCustomersTw: 8, weekendCustomersLw: 4,
+      },
+    } as SalesAnalysisWeek];
+    for (const period of result.periods ?? []) {
+      delete (period as { stores?: unknown }).stores;
+    }
+    const pdf = await buildSalesAnalysisPDF(result, '107', 'category2', 'zh-TW', await reportFont(result));
+    expect(new TextDecoder().decode(pdf.slice(0, 8))).toBe('%PDF-1.3');
   });
 
   it('fills the ranking page with only the categories that exist', () => {

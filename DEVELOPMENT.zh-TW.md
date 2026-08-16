@@ -37,7 +37,7 @@ go run ./cmd/rta-xlsx-fill `
   -write
 ```
 
-常用的還有：`-sheet`（預設 `Dairly`）、`-overwrite`、`-allow-partial`、`-max-jobs`（預設 2000）、`-concurrency`（預設 32）、`-mapping`、`-timeout 20m`。`-row` 只拿來查某一列，不能跟 `-write` 一起。
+常用的還有：`-sheet`（預設 `Dairly`）、`-overwrite`、`-allow-partial`、`-max-jobs`（預設 2000）、`-concurrency`（預設 160）、`-mapping`、`-timeout 20m`。`-row` 只拿來查某一列，不能跟 `-write` 一起。
 
 螢幕上會印 JSON。`matched_rows` 是符合日期的列，`selected_rows` 是這本帳號有權的，`skipped_store_rows` 是別人的店。一個授權門店都對不上就會失敗，不會默默存一份沒改過的檔。報告裡沒有帳密和銷售數字。
 
@@ -88,14 +88,14 @@ plan, err := xlsxfill.Analyze(ctx, client, xlsxfill.BatchRequest{
 	To:                      to,
 	AllowedBusinessStoreIDs: allowedStoreIDs,
 	MaxJobs:                 2000,
-	Concurrency:             32,
+	Concurrency:             160,
 })
 report, err := xlsxfill.Apply(ctx, plan, xlsxfill.ApplyRequest{
 	OutputPath: `C:\reports\august.filled.xlsx`,
 })
 ```
 
-`Config` 裡比較常動的是 `PageConcurrency`（預設 4）跟 `LoginAttempts`（預設 4，最多 10）。`CookieStore` 跟 `CookieFile` 只能選一個。不同帳號請用不同 Client、不同 cookie 路徑。
+`Config` 裡比較常動的是 `PageConcurrency`（預設 16）跟 `LoginAttempts`（預設 4，最多 10）。`CookieStore` 跟 `CookieFile` 只能選一個。不同帳號請用不同 Client、不同 cookie 路徑。
 
 驗證碼預設用內建 OCR，一般 CPU 就好，不用裝 Tesseract。看不懂的圖它不會硬送，會換一張或交給你串的下一個 solver（例如 `NewTwoCaptchaSolver`）。錯誤用 `errors.As` 看 `AuthError`、`CaptchaError`、`UpstreamError` 那些。任何一分頁失敗，整次查詢就失敗。
 

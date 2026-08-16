@@ -143,13 +143,14 @@
           <div class="field-group">
             <label for="account-concurrency">{t('settings.concurrency')}</label>
             <select id="account-concurrency" value={draft.accountConcurrency} onchange={(event) => updateNumber('accountConcurrency', event)}>
-              <option value="1">1</option>
-              <option value="2">2</option>
-              <option value="3">3</option>
-              <option value="4">4</option>
               <option value="8">8</option>
               <option value="16">16</option>
               <option value="32">32</option>
+              <option value="48">48</option>
+              <option value="64">64</option>
+              <option value="80">80</option>
+              <option value="128">128</option>
+              <option value="160">160</option>
             </select>
           </div>
         </div>

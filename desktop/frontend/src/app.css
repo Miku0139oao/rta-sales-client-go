@@ -212,31 +212,10 @@
 }
 
 .pane-scroll,
-main,
-.table-scroll {
-  scrollbar-width: thin;
-  scrollbar-color: rgb(148 163 184 / 0.45) transparent;
-}
-
-.pane-scroll::-webkit-scrollbar,
-main::-webkit-scrollbar,
-.table-scroll::-webkit-scrollbar {
-  display: block;
-  width: 6px;
-  height: 6px;
-}
-
-.pane-scroll::-webkit-scrollbar-thumb,
-main::-webkit-scrollbar-thumb,
-.table-scroll::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: rgb(148 163 184 / 0.45);
-}
-
-.pane-scroll::-webkit-scrollbar-track,
-main::-webkit-scrollbar-track,
-.table-scroll::-webkit-scrollbar-track {
-  background: transparent;
+.table-scroll,
+.store-grid,
+.facet-options {
+  scrollbar-width: none;
 }
 
 html {
@@ -501,13 +480,8 @@ main {
   min-height: 0;
   height: 100%;
   overflow: auto;
-  padding: 22px clamp(18px, 3vw, 40px) 48px;
-}
-
-main:has(.analysis-page.has-results) {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  overscroll-behavior: contain;
+  padding: 22px clamp(18px, 3vw, 40px) 32px;
 }
 
 main:focus {
@@ -519,8 +493,13 @@ main:focus {
   margin-inline: auto;
 }
 
-.page.analysis-page.has-results {
-  height: 100%;
+.page.analysis-page.has-results,
+.page.analysis-page.has-results .analysis-results,
+.page.analysis-page.has-results .analysis-workspace {
+  height: auto;
+  max-height: none;
+  min-height: 0;
+  overflow: visible;
 }
 
 .page-heading {

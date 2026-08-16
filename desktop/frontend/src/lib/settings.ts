@@ -1,12 +1,13 @@
 import type { AppSettings } from './types';
 
-const STORAGE_KEY = 'rta-sales-desktop-settings-v1';
+const STORAGE_KEY = 'rta-sales-desktop-settings-v2';
+const LEGACY_STORAGE_KEY = 'rta-sales-desktop-settings-v1';
 
 export const defaultSettings: AppSettings = {
   locale: 'zh-TW',
   theme: 'system',
   maxJobs: 2000,
-  accountConcurrency: 32,
+  accountConcurrency: 160,
   useLocalMapping: false,
   mappingPath: '',
   simulateStoreCount: 0,
@@ -22,7 +23,7 @@ export function normalizeSettings(value: Partial<AppSettings>): AppSettings {
     locale: value.locale === 'en' ? 'en' : 'zh-TW',
     theme: value.theme === 'light' || value.theme === 'dark' ? value.theme : 'system',
     maxJobs: clampInteger(value.maxJobs, defaultSettings.maxJobs, 1, 2000),
-    accountConcurrency: clampInteger(value.accountConcurrency, defaultSettings.accountConcurrency, 1, 32),
+    accountConcurrency: clampInteger(value.accountConcurrency, defaultSettings.accountConcurrency, 1, 160),
     useLocalMapping: value.useLocalMapping === true,
     mappingPath: typeof value.mappingPath === 'string' ? value.mappingPath : '',
     simulateStoreCount: clampInteger(value.simulateStoreCount, defaultSettings.simulateStoreCount, 0, 32),
@@ -33,7 +34,17 @@ export function loadSettings(): AppSettings {
   if (typeof localStorage === 'undefined') return { ...defaultSettings };
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? normalizeSettings(JSON.parse(saved) as Partial<AppSettings>) : { ...defaultSettings };
+    if (saved) return normalizeSettings(JSON.parse(saved) as Partial<AppSettings>);
+    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (legacy) {
+      const migrated = normalizeSettings({
+        ...(JSON.parse(legacy) as Partial<AppSettings>),
+        accountConcurrency: defaultSettings.accountConcurrency,
+      });
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
+      return migrated;
+    }
+    return { ...defaultSettings };
   } catch {
     return { ...defaultSettings };
   }

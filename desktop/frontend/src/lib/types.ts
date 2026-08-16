@@ -154,10 +154,12 @@ export interface SaveWorkbookRequest {
 export interface SalesAnalysisStore {
   businessId: string;
   label: string;
+  profileId?: string;
+  profile?: string;
 }
 
 export interface SalesAnalysisRequest {
-  profileId: string;
+  profileId?: string;
   storeIds: string[];
   from?: string;
   to?: string;
@@ -241,6 +243,7 @@ export interface SalesAnalysisPeriodResult {
 export interface SalesAnalysisItemsRequest {
   operationId: string;
   periodKey: string;
+  storeId?: string;
 }
 
 export interface SalesAnalysisPackedRow {
@@ -272,6 +275,68 @@ export interface SalesAnalysisPackedItems {
   periodKey: string;
   dict: string[];
   rows: SalesAnalysisPackedRow[];
+}
+
+export interface SalesAnalysisReportMemoRequest {
+  operationId: string;
+  storeId?: string;
+  categoryLevel: string;
+  excludeZeroGifts: boolean;
+  excludeStamps: boolean;
+  mode: 'blacklist' | 'whitelist' | string;
+  categories?: string[];
+}
+
+export interface SalesAnalysisRankedItem {
+  id: string;
+  code: string;
+  name: string;
+  brand?: string;
+  amount: number;
+  quantity: number;
+  category2Code?: string;
+  category3Code?: string;
+  category4Code?: string;
+}
+
+export interface SalesAnalysisCategoryGroup {
+  id: string;
+  code?: string;
+  name: string;
+  amount: number;
+  quantity: number;
+  items?: SalesAnalysisRankedItem[];
+}
+
+export interface SalesAnalysisFocusProduct {
+  id: string;
+  code: string;
+  name: string;
+  brand?: string;
+  amount: number;
+  quantity: number;
+  currentAmount: number;
+  currentQuantity: number;
+}
+
+export interface SalesAnalysisFocusGroup {
+  id: string;
+  prefix: string;
+  sales?: SalesAnalysisFocusProduct[];
+  quantity?: SalesAnalysisFocusProduct[];
+}
+
+export interface SalesAnalysisPeriodMemo {
+  key: string;
+  topAmount?: SalesAnalysisRankedItem[];
+  topQuantity?: SalesAnalysisRankedItem[];
+  amountGroups?: SalesAnalysisCategoryGroup[];
+  quantityGroups?: SalesAnalysisCategoryGroup[];
+  focusGroups?: SalesAnalysisFocusGroup[];
+}
+
+export interface SalesAnalysisReportMemo {
+  periods: SalesAnalysisPeriodMemo[];
 }
 
 export interface SalesAnalysisResult {
@@ -355,6 +420,8 @@ export interface BackendApi {
   listSalesAnalysisStores(profileId: string, simulateStoreCount?: number): Promise<SalesAnalysisStore[]>;
   runSalesAnalysis(request: SalesAnalysisRequest): Promise<SalesAnalysisResult>;
   getSalesAnalysisItems(request: SalesAnalysisItemsRequest): Promise<SalesAnalysisPackedItems>;
+  getSalesAnalysisReportGlyphs(operationId: string): Promise<string>;
+  getSalesAnalysisReportMemo(request: SalesAnalysisReportMemoRequest): Promise<SalesAnalysisReportMemo>;
   clearSalesAnalysis(operationId: string): Promise<void>;
   cancelSalesAnalysis(operationId: string): Promise<void>;
   chooseSalesAnalysisPDFDirectory(): Promise<string>;

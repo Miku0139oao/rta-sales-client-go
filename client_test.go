@@ -489,10 +489,10 @@ func TestNewClientDoesNotRequireBusinessStoreBinding(t *testing.T) {
 	}
 }
 
-func TestDefaultHTTPTransportKeepsEnoughSocketsFor32StoreJobs(t *testing.T) {
+func TestDefaultHTTPTransportKeepsEnoughSocketsFor160StoreJobs(t *testing.T) {
 	transport := defaultHTTPTransport()
-	if transport.MaxIdleConns != 128 || transport.MaxIdleConnsPerHost != 64 || transport.MaxConnsPerHost != 64 {
-		t.Fatalf("idle=%d perHost=%d max=%d, want 128/64/64", transport.MaxIdleConns, transport.MaxIdleConnsPerHost, transport.MaxConnsPerHost)
+	if transport.MaxIdleConns != 1024 || transport.MaxIdleConnsPerHost != 1024 || transport.MaxConnsPerHost != 1024 {
+		t.Fatalf("idle=%d perHost=%d max=%d, want 1024/1024/1024", transport.MaxIdleConns, transport.MaxIdleConnsPerHost, transport.MaxConnsPerHost)
 	}
 }
 

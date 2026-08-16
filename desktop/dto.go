@@ -88,6 +88,7 @@ type WorkbookScan struct {
 }
 
 type AnalyzeRequest struct {
+	ProfileID          string `json:"profileId,omitempty"`
 	InputPath          string `json:"inputPath"`
 	MappingPath        string `json:"mappingPath"`
 	Sheet              string `json:"sheet"`
@@ -203,6 +204,8 @@ type RuntimeStatus struct {
 type SalesAnalysisStore struct {
 	BusinessID string `json:"businessId"`
 	Label      string `json:"label"`
+	ProfileID  string `json:"profileId,omitempty"`
+	Profile    string `json:"profile,omitempty"`
 }
 
 type SalesAnalysisRequest struct {
@@ -290,12 +293,75 @@ type SalesAnalysisPeriodResult struct {
 type SalesAnalysisItemsRequest struct {
 	OperationID string `json:"operationId"`
 	PeriodKey   string `json:"periodKey"`
+	StoreID     string `json:"storeId,omitempty"`
 }
 
 type SalesAnalysisPackedItems struct {
 	PeriodKey string                   `json:"periodKey"`
 	Dict      []string                 `json:"dict"`
 	Rows      []SalesAnalysisPackedRow `json:"rows"`
+}
+
+type SalesAnalysisReportMemoRequest struct {
+	OperationID      string   `json:"operationId"`
+	StoreID          string   `json:"storeId,omitempty"`
+	CategoryLevel    string   `json:"categoryLevel"`
+	ExcludeZeroGifts bool     `json:"excludeZeroGifts"`
+	ExcludeStamps    bool     `json:"excludeStamps"`
+	Mode             string   `json:"mode"`
+	Categories       []string `json:"categories,omitempty"`
+}
+
+type SalesAnalysisReportMemo struct {
+	Periods []SalesAnalysisPeriodMemo `json:"periods"`
+}
+
+type SalesAnalysisPeriodMemo struct {
+	Key            string                       `json:"key"`
+	TopAmount      []SalesAnalysisRankedItem    `json:"topAmount,omitempty"`
+	TopQuantity    []SalesAnalysisRankedItem    `json:"topQuantity,omitempty"`
+	AmountGroups   []SalesAnalysisCategoryGroup `json:"amountGroups,omitempty"`
+	QuantityGroups []SalesAnalysisCategoryGroup `json:"quantityGroups,omitempty"`
+	FocusGroups    []SalesAnalysisFocusGroup    `json:"focusGroups,omitempty"`
+}
+
+type SalesAnalysisRankedItem struct {
+	ID            string  `json:"id"`
+	Code          string  `json:"code"`
+	Name          string  `json:"name"`
+	Brand         string  `json:"brand,omitempty"`
+	Amount        float64 `json:"amount"`
+	Quantity      float64 `json:"quantity"`
+	Category2Code string  `json:"category2Code,omitempty"`
+	Category3Code string  `json:"category3Code,omitempty"`
+	Category4Code string  `json:"category4Code,omitempty"`
+}
+
+type SalesAnalysisCategoryGroup struct {
+	ID       string                    `json:"id"`
+	Code     string                    `json:"code,omitempty"`
+	Name     string                    `json:"name"`
+	Amount   float64                   `json:"amount"`
+	Quantity float64                   `json:"quantity"`
+	Items    []SalesAnalysisRankedItem `json:"items,omitempty"`
+}
+
+type SalesAnalysisFocusGroup struct {
+	ID       string                     `json:"id"`
+	Prefix   string                     `json:"prefix"`
+	Sales    []SalesAnalysisFocusProduct `json:"sales,omitempty"`
+	Quantity []SalesAnalysisFocusProduct `json:"quantity,omitempty"`
+}
+
+type SalesAnalysisFocusProduct struct {
+	ID              string  `json:"id"`
+	Code            string  `json:"code"`
+	Name            string  `json:"name"`
+	Brand           string  `json:"brand,omitempty"`
+	Amount          float64 `json:"amount"`
+	Quantity        float64 `json:"quantity"`
+	CurrentAmount   float64 `json:"currentAmount"`
+	CurrentQuantity float64 `json:"currentQuantity"`
 }
 
 type SalesAnalysisPackedRow struct {

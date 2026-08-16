@@ -587,7 +587,7 @@ func (a *App) Analyze(request AnalyzeRequest) (AnalysisResult, error) {
 		return AnalysisResult{}, workErr
 	}
 	a.emit(operationID, "scan", 0, 1, "Preparing workbook plan / 正在準備活頁簿計畫")
-	router, allowedStores, ownership, overlapCount, warnings, err := a.buildRouter(ctx, operationID)
+	router, allowedStores, ownership, overlapCount, warnings, err := a.buildRouter(ctx, operationID, request.ProfileID)
 	if err != nil {
 		return fail(err)
 	}
@@ -753,64 +753,35 @@ func (a *App) beginExistingWork(operationID string) (*operationState, context.Co
 	return state, ctx, finish, nil
 }
 
-func (a *App) buildRouter(ctx context.Context, operationID string) (*xlsxfill.ProviderRouter, []string, map[string]string, int, []string, error) {
-	a.profileMu.Lock()
-	records, err := a.profiles.List()
-	a.profileMu.Unlock()
+func (a *App) buildRouter(ctx context.Context, operationID, profileID string) (*xlsxfill.ProviderRouter, []string, map[string]string, int, []string, error) {
+	profile, err := a.excelAnalysisProfile(profileID)
 	if err != nil {
 		return nil, nil, nil, 0, nil, err
 	}
-	enabled := make([]profileRecord, 0, len(records))
-	for _, record := range records {
-		if record.Enabled {
-			enabled = append(enabled, record)
-		}
-	}
-	if len(enabled) == 0 {
-		return nil, nil, nil, 0, nil, errors.New("at least one enabled profile is required")
-	}
-	routes := make(map[string]xlsxfill.ProviderRoute)
-	ownership := make(map[string]string)
-	overlapped := make(map[string]struct{})
-	for index, profile := range enabled {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, nil, 0, nil, err
-		}
-		a.emit(operationID, "login", index, len(enabled), "Signing in to account / 正在登入帳號")
-		credential, err := a.credentials.Get(profile.ID)
+	a.emit(operationID, "login", 0, 1, "Signing in to account / 正在登入帳號")
+	client, err := a.salesAnalysisAccountClient(profile.ID)
+	if err != nil {
 		if errors.Is(err, securestore.ErrNotFound) {
 			return nil, nil, nil, 0, nil, fmt.Errorf("enabled profile %q has no saved credentials", profile.DisplayName)
 		}
-		if err != nil {
-			return nil, nil, nil, 0, nil, err
+		return nil, nil, nil, 0, nil, err
+	}
+	stores, err := client.Stores(ctx)
+	if err != nil {
+		return nil, nil, nil, 0, nil, err
+	}
+	a.emit(operationID, "login", 1, 1, "Account ready / 帳號已就緒")
+	routes := make(map[string]xlsxfill.ProviderRoute, len(stores))
+	ownership := make(map[string]string, len(stores))
+	for _, store := range stores {
+		storeID := strings.TrimSpace(store.BusinessID)
+		if storeID == "" {
+			continue
 		}
-		cookieStore, err := a.cookies.CookieStore(profile.ID)
-		if err != nil {
-			return nil, nil, nil, 0, nil, err
+		routes[storeID] = xlsxfill.ProviderRoute{
+			Provider: client, Profile: profile.DisplayName,
 		}
-		client, err := a.clients.New(credential, cookieStore)
-		if err != nil {
-			return nil, nil, nil, 0, nil, err
-		}
-		stores, err := client.Stores(ctx)
-		if err != nil {
-			return nil, nil, nil, 0, nil, err
-		}
-		a.emit(operationID, "login", index+1, len(enabled), "Account ready / 帳號已就緒")
-		for _, store := range stores {
-			storeID := strings.TrimSpace(store.BusinessID)
-			if storeID == "" {
-				continue
-			}
-			if _, exists := routes[storeID]; exists {
-				overlapped[storeID] = struct{}{}
-				continue
-			}
-			routes[storeID] = xlsxfill.ProviderRoute{
-				Provider: client, Profile: profile.DisplayName,
-			}
-			ownership[storeID] = profile.DisplayName
-		}
+		ownership[storeID] = profile.DisplayName
 	}
 	a.emit(operationID, "stores", 1, 1, "Authorized stores ready / 授權門店已就緒")
 	router, err := xlsxfill.NewProfiledProviderRouter(routes)
@@ -822,11 +793,18 @@ func (a *App) buildRouter(ctx context.Context, operationID string) (*xlsxfill.Pr
 		allowed = append(allowed, storeID)
 	}
 	sort.Strings(allowed)
-	warnings := []string{}
-	if len(overlapped) > 0 {
-		warnings = append(warnings, fmt.Sprintf("%d authorized store overlap(s) use profile priority / %d 個授權門店重疊，已依帳號優先順序選用", len(overlapped), len(overlapped)))
+	return router, allowed, ownership, 0, nil, nil
+}
+
+func (a *App) excelAnalysisProfile(profileID string) (profileRecord, error) {
+	profiles, err := a.salesAnalysisProfiles(profileID)
+	if err != nil {
+		return profileRecord{}, err
 	}
-	return router, allowed, ownership, len(overlapped), warnings, nil
+	if len(profiles) == 0 {
+		return profileRecord{}, errors.New("at least one enabled profile is required")
+	}
+	return profiles[0], nil
 }
 
 func (a *App) beginProfileMutation() (func(), error) {

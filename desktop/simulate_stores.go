@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 
 	rtasales "github.com/Miku0139oao/rta-sales-client-go"
 )
@@ -15,21 +14,12 @@ const (
 	maximumSimulateStores = 32
 )
 
-// simulatingClient exposes extra store identities for local multi-store tests
-// while still querying the account's real authorized stores.
-type inflightSales struct {
-	done   chan struct{}
-	result *rtasales.SalesResult
-	err    error
-}
-
+// simulatingClient exposes extra store identities for local multi-store tests.
+// Each clone queries RTA with the authorized store ID so the request volume
+// matches a real multi-store account.
 type simulatingClient struct {
 	inner accountClient
 	count int
-
-	mu      sync.Mutex
-	cache   map[string]*rtasales.SalesResult
-	pending map[string]*inflightSales
 }
 
 func maybeSimulateClient(client accountClient, count int) accountClient {
@@ -37,12 +27,7 @@ func maybeSimulateClient(client accountClient, count int) accountClient {
 	if client == nil || count == 0 {
 		return client
 	}
-	return &simulatingClient{
-		inner:   client,
-		count:   count,
-		cache:   make(map[string]*rtasales.SalesResult),
-		pending: make(map[string]*inflightSales),
-	}
+	return &simulatingClient{inner: client, count: count}
 }
 
 func normalizeSimulateStoreCount(value int) int {
@@ -66,53 +51,16 @@ func (c *simulatingClient) Stores(ctx context.Context) ([]rtasales.Store, error)
 func (c *simulatingClient) Sales(ctx context.Context, query rtasales.SalesQuery) (*rtasales.SalesResult, error) {
 	sourceID, scale, simulated := resolveSimulatedStore(query.BusinessStoreID)
 	query.BusinessStoreID = sourceID
-	result, err := c.lookupOrFetch(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	if simulated {
-		scaleSalesResult(result, scale)
-	}
-	return result, nil
-}
-
-func (c *simulatingClient) lookupOrFetch(ctx context.Context, query rtasales.SalesQuery) (*rtasales.SalesResult, error) {
-	key := simulatedSalesCacheKey(query)
-	c.mu.Lock()
-	if cached, ok := c.cache[key]; ok {
-		c.mu.Unlock()
-		return cloneSalesResult(cached), nil
-	}
-	if wait, ok := c.pending[key]; ok {
-		c.mu.Unlock()
-		select {
-		case <-wait.done:
-			if wait.err != nil {
-				return nil, wait.err
-			}
-			return cloneSalesResult(wait.result), nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	wait := &inflightSales{done: make(chan struct{})}
-	c.pending[key] = wait
-	c.mu.Unlock()
-
 	result, err := c.inner.Sales(ctx, query)
-	c.mu.Lock()
-	wait.result = result
-	wait.err = err
-	if err == nil {
-		c.cache[key] = result
-	}
-	delete(c.pending, key)
-	close(wait.done)
-	c.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	return cloneSalesResult(result), nil
+	if !simulated {
+		return result, nil
+	}
+	clone := cloneSalesResult(result)
+	scaleSalesResult(clone, scale)
+	return clone, nil
 }
 
 func expandSimulatedStores(stores []rtasales.Store, count int) []rtasales.Store {
@@ -148,15 +96,6 @@ func resolveSimulatedStore(businessID string) (sourceID string, scale float64, s
 
 func simulatedStoreScale(serial int) float64 {
 	return 0.55 + float64(serial-1)*0.05
-}
-
-func simulatedSalesCacheKey(query rtasales.SalesQuery) string {
-	return strings.Join([]string{
-		query.BusinessStoreID,
-		query.StartDate.Format("2006-01-02"),
-		query.EndDate.Format("2006-01-02"),
-		strconv.FormatBool(query.SkipTrend),
-	}, "|")
 }
 
 func cloneSalesResult(source *rtasales.SalesResult) *rtasales.SalesResult {

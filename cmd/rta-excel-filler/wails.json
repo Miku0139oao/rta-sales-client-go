@@ -11,7 +11,7 @@
   "info": {
     "companyName": "Miku0139oao",
     "productName": "RTA 銷售分析",
-    "productVersion": "0.2.0",
+    "productVersion": "0.3.0",
     "copyright": "Copyright (c) 2026 Miku0139oao",
     "comments": "Windows desktop sales analyzer built with Wails v3.0.0-beta.8"
   }

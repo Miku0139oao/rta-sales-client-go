@@ -86,8 +86,8 @@ jobs:
           if ($info.ProductName -ne 'RTA 銷售分析') {
             throw "installer ProductName is '$($info.ProductName)', expected 'RTA 銷售分析'"
           }
-          if ($info.ProductVersion -notlike '0.2.*') {
-            throw "installer ProductVersion is '$($info.ProductVersion)', expected 0.2.x"
+          if ($info.ProductVersion -notlike '0.3.*') {
+            throw "installer ProductVersion is '$($info.ProductVersion)', expected 0.3.x"
           }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

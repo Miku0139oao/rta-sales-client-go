@@ -11,6 +11,7 @@ export default defineConfig({
     port: Number(process.env.WAILS_VITE_PORT) || 9245,
     strictPort: true,
   },
+  assetsInclude: ['**/*.wasm'],
   build: {
     target: 'es2022',
     outDir: 'dist',

@@ -23,10 +23,10 @@ const (
 	// full workbook month to be processed without per-run tuning.
 	DefaultMaxJobs = 2000
 	// DefaultConcurrency is the number of date/store query jobs run at once.
-	DefaultConcurrency = 32
+	DefaultConcurrency = 160
 	// MaximumConcurrency is the user-selectable ceiling for independent
 	// date/store jobs. A single authenticated client is safe for concurrent use.
-	MaximumConcurrency = 32
+	MaximumConcurrency = 160
 )
 
 // SalesProvider is implemented by *rtasales.Client and ProviderRouter. It is

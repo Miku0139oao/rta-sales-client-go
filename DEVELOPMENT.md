@@ -37,7 +37,7 @@ go run ./cmd/rta-xlsx-fill `
   -write
 ```
 
-Other flags worth knowing: `-sheet` (default `Dairly`), `-overwrite`, `-allow-partial`, `-max-jobs` (2000), `-concurrency` (32), `-mapping`, `-timeout 20m`. `-row` is diagnostic and cannot be used with `-write`.
+Other flags worth knowing: `-sheet` (default `Dairly`), `-overwrite`, `-allow-partial`, `-max-jobs` (2000), `-concurrency` (160), `-mapping`, `-timeout 20m`. `-row` is diagnostic and cannot be used with `-write`.
 
 Stdout is a JSON report. `matched_rows` are rows for the date, `selected_rows` are ones this account may query, `skipped_store_rows` belong to other accounts. If nothing matches an authorized store, the command fails instead of writing an unchanged book. The report has row numbers and issue codes, not passwords or amounts.
 
@@ -88,14 +88,14 @@ plan, err := xlsxfill.Analyze(ctx, client, xlsxfill.BatchRequest{
 	To:                      to,
 	AllowedBusinessStoreIDs: allowedStoreIDs,
 	MaxJobs:                 2000,
-	Concurrency:             32,
+	Concurrency:             160,
 })
 report, err := xlsxfill.Apply(ctx, plan, xlsxfill.ApplyRequest{
 	OutputPath: `C:\reports\august.filled.xlsx`,
 })
 ```
 
-`PageConcurrency` defaults to 4, `LoginAttempts` to 4 (max 10). `CookieStore` and `CookieFile` cannot both be set. Use a separate client and cookie path per account.
+`PageConcurrency` defaults to 16, `LoginAttempts` to 4 (max 10). `CookieStore` and `CookieFile` cannot both be set. Use a separate client and cookie path per account.
 
 The embedded OCR is CPU-only. Uncertain glyphs are not submitted; the client asks for a new captcha or the next solver (`NewTwoCaptchaSolver` if you want a remote fallback). Typed errors work with `errors.As`. A failed page fails the whole sales call.
 
