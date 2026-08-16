@@ -86,7 +86,7 @@ describe('desktop application shell', () => {
     await fireEvent.click(screen.getByRole('button', { name: '切換為深色主題' }));
 
     expect(document.documentElement.dataset.theme).toBe('dark');
-    expect(JSON.parse(localStorage.getItem('rta-sales-desktop-settings-v1') ?? '{}')).toMatchObject({ theme: 'dark' });
+    expect(JSON.parse(localStorage.getItem('rta-sales-desktop-settings-v2') ?? '{}')).toMatchObject({ theme: 'dark' });
     expect(screen.getByRole('button', { name: '切換為亮色主題' })).toBeInTheDocument();
   });
 
@@ -105,7 +105,7 @@ describe('desktop application shell', () => {
       await waitFor(() => expect(document.documentElement.dataset.theme).toBe('dark'));
 
       await fireEvent.click(screen.getByRole('button', { name: '切換為亮色主題' }));
-      expect(JSON.parse(localStorage.getItem('rta-sales-desktop-settings-v1') ?? '{}')).toMatchObject({ theme: 'light' });
+      expect(JSON.parse(localStorage.getItem('rta-sales-desktop-settings-v2') ?? '{}')).toMatchObject({ theme: 'light' });
       change?.({ matches: true } as MediaQueryListEvent);
       expect(document.documentElement.dataset.theme).toBe('light');
     } finally {
@@ -121,7 +121,7 @@ describe('desktop application shell', () => {
     await fireEvent.input(maxJobs, { target: { value: '17' } });
     await fireEvent.click(screen.getByRole('radio', { name: '深色' }));
 
-    const saved = JSON.parse(localStorage.getItem('rta-sales-desktop-settings-v1') ?? '{}');
+    const saved = JSON.parse(localStorage.getItem('rta-sales-desktop-settings-v2') ?? '{}');
     expect(saved).toMatchObject({ theme: 'dark', maxJobs: 2000 });
     expect(maxJobs.value).toBe('17');
     expect(document.documentElement.dataset.theme).toBe('dark');

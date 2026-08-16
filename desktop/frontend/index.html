@@ -8,7 +8,7 @@
     <script>
       (() => {
         try {
-          const saved = JSON.parse(localStorage.getItem('rta-sales-desktop-settings-v1') || '{}');
+          const saved = JSON.parse(localStorage.getItem('rta-sales-desktop-settings-v2') || localStorage.getItem('rta-sales-desktop-settings-v1') || '{}');
           const preference = saved.theme === 'light' || saved.theme === 'dark' ? saved.theme : 'system';
           const theme = preference === 'system'
             ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
