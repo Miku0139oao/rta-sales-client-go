@@ -100,6 +100,8 @@
   --app-shadow-high: 0 18px 52px rgb(15 23 42 / 0.2);
   --app-radius: 24px;
   --app-radius-small: 14px;
+  --app-dialog-gutter: clamp(0.7rem, 2.4vw, 1.5rem);
+  --app-dialog-gutter-block: clamp(0.7rem, 3.2vh, 1.5rem);
 }
 
 :root[data-theme="dark"] {
@@ -1870,12 +1872,13 @@ th.proposed-column {
 .app-dialog {
   position: fixed;
   inset: 0;
-  width: min(calc(100% - 32px), 540px);
+  width: min(calc(100% - 2 * var(--app-dialog-gutter)), 540px);
   max-width: none;
-  max-height: calc(100dvh - 48px);
+  max-height: min(calc(100% - 2 * var(--app-dialog-gutter-block)), calc(100vh - 2 * var(--app-dialog-gutter-block)));
+  max-height: min(calc(100% - 2 * var(--app-dialog-gutter-block)), calc(100dvh - 2 * var(--app-dialog-gutter-block)));
   margin: auto;
   overflow: auto;
-  padding: 26px;
+  padding: clamp(1rem, 1.6vw + 0.55rem, 1.625rem);
   border: 0;
   border-radius: 28px;
   color: var(--md-sys-color-on-surface);

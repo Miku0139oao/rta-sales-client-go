@@ -26,16 +26,19 @@ export function modal(node: HTMLDialogElement, initial: ModalOptions) {
   }
 
   function handleWheel(event: WheelEvent) {
-    const target = event.target as HTMLElement | null;
-    const nested = target?.closest('.pane-scroll, .table-scroll, .facet-options, .store-grid, .export-dialog-scroll');
-    if (nested instanceof HTMLElement) {
-      const canScroll = nested.scrollHeight > nested.clientHeight + 1;
-      const style = getComputedStyle(nested);
-      const scrollable = style.overflowY === 'auto' || style.overflowY === 'scroll';
-      if (canScroll && scrollable) {
-        if (event.deltaY < 0 && nested.scrollTop > 0) return;
-        if (event.deltaY > 0 && nested.scrollTop + nested.clientHeight < nested.scrollHeight - 1) return;
+    let current = event.target as HTMLElement | null;
+    while (current && node.contains(current)) {
+      if (current.matches('.pane-scroll, .table-scroll, .facet-options, .store-grid, .export-dialog-scroll')) {
+        const canScroll = current.scrollHeight > current.clientHeight + 1;
+        const style = getComputedStyle(current);
+        const scrollable = style.overflowY === 'auto' || style.overflowY === 'scroll';
+        if (canScroll && scrollable) {
+          if (event.deltaY < 0 && current.scrollTop > 0) return;
+          if (event.deltaY > 0 && current.scrollTop + current.clientHeight < current.scrollHeight - 1) return;
+        }
       }
+      if (current === node) break;
+      current = current.parentElement;
     }
     event.preventDefault();
     event.stopPropagation();

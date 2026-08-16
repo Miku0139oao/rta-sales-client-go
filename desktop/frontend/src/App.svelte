@@ -59,8 +59,7 @@
     const target = event.target as HTMLElement | null;
     const dialog = document.querySelector('dialog.app-dialog[open]');
     if (dialog) {
-      const nested = target?.closest('.pane-scroll, .table-scroll, .facet-options, .store-grid, .export-category-list');
-      if (nested instanceof HTMLElement && canScrollVertically(nested, event.deltaY)) return;
+      if (scrollableAncestorCanConsume(target, dialog, event.deltaY)) return;
       event.preventDefault();
       return;
     }
@@ -70,6 +69,16 @@
     if (!canScrollVertically(scroller, event.deltaY)) return;
     scroller.scrollTop += wheelDeltaY(event);
     event.preventDefault();
+  }
+
+  function scrollableAncestorCanConsume(target: HTMLElement | null, boundary: Element, deltaY: number): boolean {
+    let current = target;
+    while (current && boundary.contains(current)) {
+      if (current.matches('.pane-scroll, .table-scroll, .facet-options, .store-grid, .export-dialog-scroll') && canScrollVertically(current, deltaY)) return true;
+      if (current === boundary) break;
+      current = current.parentElement;
+    }
+    return false;
   }
 
   function canScrollVertically(element: HTMLElement, deltaY: number): boolean {

@@ -352,13 +352,14 @@ describe('sales analysis page', () => {
     expect(screen.queryByText('發生未預期的錯誤，請再試一次。')).not.toBeInTheDocument();
   });
 
-  it('opens a sectioned export dialog with optional group chapters and can cancel', async () => {
+  it('keeps the export dialog scrollable with stable actions and optional sections', async () => {
     const writeSalesAnalysisPDF = vi.fn(async () => 'D:\\RTA Reports\\report.pdf');
     configureBackend({ methods: {
       ListProfiles: vi.fn(async () => [{
         id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
       }]),
       ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      ListManCodeGroups: vi.fn(async () => []),
       RunSalesAnalysis: vi.fn(async () => analysisResult),
       GetSalesAnalysisItems: vi.fn(async () => ({ periodKey: 'current', dict: [''], rows: [] })),
       ClearSalesAnalysis: vi.fn(async () => undefined),
@@ -371,6 +372,30 @@ describe('sales analysis page', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
     await fireEvent.click(screen.getByText('匯出 PDF'));
     await waitFor(() => expect(screen.getByRole('heading', { name: '匯出篩選' })).toBeInTheDocument());
+    const dialog = screen.getByRole('dialog', { name: '匯出篩選' });
+    const body = dialog.querySelector<HTMLFormElement>('.export-dialog-body');
+    const scroll = body?.querySelector('.export-dialog-scroll');
+    const grid = scroll?.querySelector('.export-dialog-grid');
+    const actions = body?.querySelector('.export-dialog-actions');
+
+    expect(dialog).toHaveClass('app-dialog', 'export-dialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveAttribute('aria-labelledby', 'export-dialog-title');
+    expect(body).toBeInTheDocument();
+    expect(scroll).toHaveClass('export-dialog-scroll', 'pane-scroll');
+    expect(scroll).toHaveAttribute('tabindex', '-1');
+    expect(scroll).toHaveAttribute('data-autofocus');
+    expect(scroll?.parentElement).toBe(body);
+    expect(actions).toHaveClass('dialog-actions', 'export-dialog-actions');
+    expect(actions?.parentElement).toBe(body);
+    expect(body?.firstElementChild).toBe(scroll);
+    expect(body?.lastElementChild).toBe(actions);
+    expect(scroll?.contains(actions ?? null)).toBe(false);
+    expect(grid).toBeInTheDocument();
+    expect(grid?.querySelectorAll('.export-section-categories')).toHaveLength(1);
+    expect(grid?.querySelector('.export-section-categories')).toHaveClass('export-section', 'export-section-categories');
+    expect(dialog.querySelector('#export-groups-title')).not.toBeInTheDocument();
+    expect(dialog.querySelector('.export-choice-list-categories')).toHaveClass('export-choice-list', 'pane-scroll');
     expect(screen.getByRole('heading', { name: '分類條件' })).toBeInTheDocument();
     expect(screen.getByText('忽略沒有金額的贈品（保留現金券）')).toBeInTheDocument();
     expect(screen.getByText('忽略印花')).toBeInTheDocument();
