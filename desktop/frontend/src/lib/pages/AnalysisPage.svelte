@@ -2,8 +2,18 @@
   import { onMount } from 'svelte';
   import { backend } from '../backend';
   import { errorMessage } from '../i18n';
+  import { isWebRuntime } from '../runtime';
+  import { loadWebAnalysisSnapshot } from '../webStorage';
   import { buildFocusGroups, type FocusGroup } from '../analysisFocus';
-  import { periodKeysForView, unpackSalesAnalysisItems } from '../salesAnalysisItems';
+  import {
+    categoryCodeOf,
+    categoryLabelOf,
+    categoryNameOf,
+    itemMatchesCategorySelection,
+    periodKeysForView,
+    periodNeedsItemHydration,
+    unpackSalesAnalysisItems,
+  } from '../salesAnalysisItems';
   import { modal } from '../modal';
   import {
     defaultSalesReportFilter,
@@ -23,6 +33,7 @@
     salesAnalysisPDFFilename,
     type SalesReportChapter,
   } from '../sales-report-pdf';
+  import { buildSalesAnalysisAIMarkdown, salesAnalysisAIFilename } from '../sales-report-ai';
   import type { Translator } from '../i18n';
   import type {
     AppSettings,
@@ -87,6 +98,9 @@
   let exportIncludeCombined = true;
   let exportStoreIds = new Set<string>();
   let exportGroupIds = new Set<string>();
+  let exportGroupDetail = false;
+  let exportPDFEnabled = true;
+  let exportAIEnabled = false;
   let exportTargetTotal = 0;
   let exportFilesCount = 0;
   let pdfExportCurrent = 0;
@@ -140,6 +154,7 @@
   let pageCount = 1;
   let pageRows: SalesAnalysisItem[] = [];
   let loadedSimulateCount: number | undefined;
+  let hydrateGeneration = 0;
 
   $: if (!loadingProfiles && profileId && loadedSimulateCount !== settings.simulateStoreCount) {
     loadedSimulateCount = settings.simulateStoreCount;
@@ -164,6 +179,7 @@
     if (!matchesFilters(item, selections, search)) return false;
     return !groupScopeActive || selectedGroupCodes.has(item.articleCode.trim());
   });
+  $: facetOptionMap = listFacetOptionMap(currentPeriod, selections, selectedGroupCodes, groupScopeActive, settings.locale);
   $: currentTotals = totalsForPeriod(currentPeriod, selections, search, selectedGroupCodes, groupScopeActive);
   $: previousTotals = totalsForPeriod(periodByKey(reportPeriods, 'previous'), selections, search, selectedGroupCodes, groupScopeActive);
   $: previous2Totals = totalsForPeriod(periodByKey(reportPeriods, 'previous2'), selections, search, selectedGroupCodes, groupScopeActive);
@@ -193,7 +209,7 @@
   }
   $: progressPercent = progress?.total ? Math.round((progress.current / progress.total) * 100) : 0;
   $: exportTargetTotal = (result, exportIncludeCombined, exportStoreIds, exportTargetCount());
-  $: exportFilesCount = exportTargetTotal;
+  $: exportFilesCount = (exportTargetTotal, exportPDFEnabled, exportAIEnabled, exportGroupDetail, exportGroupIds, manCodeGroups, exportOutputCount());
 
   onMount(() => {
     const unsubscribe = backend.onSalesAnalysisProgress((next) => {
@@ -201,7 +217,7 @@
       operationId = next.operationId;
     });
     const unsubscribeUpdate = backend.onSalesAnalysisUpdate((next) => {
-      if (result?.operationId && next.operationId === result.operationId) result = next;
+      if (result?.operationId && next.operationId === result.operationId) result = keepHydratedItems(result, next);
     });
     const closeFacetMenus = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null;
@@ -228,7 +244,11 @@
       manCodeGroups = listedGroups;
       profileId = profiles[0]?.id ?? '';
       loadedSimulateCount = settings.simulateStoreCount;
-      if (profileId) await loadStores();
+      if (isWebRuntime()) {
+        const saved = loadWebAnalysisSnapshot();
+        if (saved) result = saved;
+      }
+      if (profileId && !result) await loadStores();
     } catch (caught) {
       error = errorMessage(settings.locale, caught);
     } finally {
@@ -282,6 +302,45 @@
     }
   }
 
+  async function loadWebPreview() {
+    if (running) return;
+    if (profileId && selectedStoreIds.size > 0 && !rangeInvalid) {
+      await runAnalysis();
+      return;
+    }
+    const stores = previewStoreIds();
+    running = true;
+    cancelling = false;
+    error = '';
+    void discardResult();
+    progress = undefined;
+    operationId = '';
+    resetFilters();
+    try {
+      const summary = await backend.runSalesAnalysis({
+        profileId: profileId || 'web-preview',
+        storeIds: stores,
+        periods: buildPeriodRequests(),
+        concurrency: settings.accountConcurrency,
+        simulateStoreCount: Math.max(settings.simulateStoreCount, stores.length, 2),
+      });
+      result = summary;
+      operationId = summary.operationId;
+      activeView = 'overview';
+    } catch (caught) {
+      error = errorMessage(settings.locale, caught);
+    } finally {
+      running = false;
+      cancelling = false;
+    }
+  }
+
+  function previewStoreIds(): string[] {
+    if (selectedStoreIds.size > 0) return [...selectedStoreIds];
+    if (stores.length > 0) return stores.map((store) => store.businessId);
+    return ['107', '108'];
+  }
+
   async function runAnalysis() {
     if (!profileId || selectedStoreIds.size === 0 || rangeInvalid) return;
     const periods = buildPeriodRequests();
@@ -318,38 +377,41 @@
   async function ensurePeriodItems(keys: string[], options: { retain?: boolean } = {}): Promise<SalesAnalysisPeriodResult[]> {
     const summary = result;
     if (!summary?.periods?.length) return summary?.periods ?? [];
+    const generation = ++hydrateGeneration;
     const operationId = summary.operationId;
     const keep = new Set(keys.filter((key) => summary.periods!.some((period) => period.key === key)));
     let periods = summary.periods;
     let changed = false;
+    const stillCurrent = () => generation === hydrateGeneration && result?.operationId === operationId;
     if (!options.retain) {
       const trimmed = periods.map((period) => {
-        if (keep.has(period.key) || !period.items?.length) return period;
+        if (keep.has(period.key) || period.key === 'current' || !period.items?.length) return period;
         changed = true;
-        return { ...period, items: undefined };
+        return { ...period, items: undefined, itemCount: period.itemCount || period.items.length };
       });
       if (changed) periods = trimmed;
     }
     for (const key of keep) {
       const period = periods.find((candidate) => candidate.key === key);
-      if (!period || period.items !== undefined) continue;
+      if (!period || !periodNeedsItemHydration(period)) continue;
       if (!operationId) continue;
       loadingItems = true;
       try {
         const packed = await backend.getSalesAnalysisItems({ operationId, periodKey: key });
-        if (result?.operationId !== operationId) return periods;
-        const items = unpackSalesAnalysisItems(packed, period.stores ?? []);
+        if (!stillCurrent()) return periods;
+        const storeList = (period.stores?.length ? period.stores : summary.stores) ?? [];
+        const items = unpackSalesAnalysisItems(packed, storeList);
         if (items.length === 0 && (period.itemCount ?? 0) > 0) continue;
-        periods = periods.map((candidate) => candidate.key === key ? { ...candidate, items } : candidate);
+        periods = periods.map((candidate) => candidate.key === key ? { ...candidate, items, itemCount: period.itemCount || items.length } : candidate);
         changed = true;
       } catch (caught) {
-        if (result?.operationId !== operationId) return periods;
+        if (!stillCurrent()) return periods;
         if (options.retain) throw caught;
         error = errorMessage(settings.locale, caught);
       }
     }
-    if (changed && result?.operationId === operationId) result = { ...result, periods };
-    if (result?.operationId === operationId) loadingItems = false;
+    if (changed && stillCurrent() && result) result = keepHydratedItems(result, { ...result, periods });
+    if (stillCurrent()) loadingItems = false;
     return periods;
   }
 
@@ -371,6 +433,9 @@
     exportIncludeCombined = available.length > 1;
     exportStoreIds = new Set();
     exportGroupIds = new Set(selectedGroup ? [selectedGroup.id] : []);
+    exportGroupDetail = false;
+    exportPDFEnabled = true;
+    exportAIEnabled = false;
     exportDialog = true;
   }
 
@@ -404,6 +469,15 @@
     const stores = listSuccessfulReportStores(result);
     if (stores.length <= 1) return stores.length;
     return (exportIncludeCombined ? 1 : 0) + selectedExportStores().length;
+  }
+
+  function exportOutputCount(): number {
+    if (exportTargetTotal === 0 || (!exportPDFEnabled && !exportAIEnabled)) return 0;
+    const groups = selectedExportGroups().length;
+    const pdfMains = exportPDFEnabled ? exportTargetTotal : 0;
+    const pdfDetails = exportPDFEnabled && exportGroupDetail ? exportTargetTotal * groups : 0;
+    const aiFiles = exportAIEnabled ? exportTargetTotal : 0;
+    return pdfMains + pdfDetails + aiFiles;
   }
 
   function closeExportDialog() {
@@ -454,18 +528,28 @@
       const reportGroups = selectedExportGroups();
       const writeStoreFiles = reportStores.length > 0;
       const writeCombined = availableStores.length > 1 && exportIncludeCombined;
-      pdfExportTotal = (writeStoreFiles ? reportStores.length : 0) + (writeCombined ? 1 : 0);
+      const targetIds = [
+        ...(writeStoreFiles ? reportStores.map((store) => store.businessId) : []),
+        ...(writeCombined ? [ALL_STORES_REPORT_ID] : []),
+      ];
+      pdfExportTotal = exportFilesCount;
       const reportFrom = result.from;
       const reportTo = result.to;
       const operationId = result.operationId;
       const slim: SalesAnalysisResult = {
         ...result,
         items: undefined,
-        periods: (result.periods ?? []).map((period) => ({ ...period, items: undefined })),
+        periods: (result.periods ?? []).map((period) => ({
+          ...period,
+          items: undefined,
+          itemCount: period.itemCount || period.items?.length || 0,
+        })),
       };
       result = slim;
       const fontGlyphs = `${await backend.getSalesAnalysisReportGlyphs(operationId)}${reportGroups.map((group) => group.name).join('')}`;
-      const fontBase64 = await prepareSalesAnalysisFontFromText(fontGlyphs, settings.locale);
+      const fontBase64 = exportPDFEnabled
+        ? await prepareSalesAnalysisFontFromText(fontGlyphs, settings.locale)
+        : '';
       const written: string[] = [];
       const loadMemo = (storeId: string | undefined, group?: ManCodeGroup) => backend.getSalesAnalysisReportMemo({
         operationId,
@@ -478,57 +562,101 @@
         categories: exportFilter.categories,
       });
       let loaded = false;
-      const writePDF = async (storeId: string) => {
-        pdfExportCurrent += 1;
+      const writeFile = async (storeId: string) => {
         await yieldToUI();
         const memoStoreId = isAllStoresReport(storeId) ? undefined : storeId;
         const baseMemo = await loadMemo(memoStoreId);
         if (reportMemoHasRows(baseMemo)) loaded = true;
         const extraChapters: SalesReportChapter[] = [];
+        const groupMemos: Array<{ group: ManCodeGroup; memo: SalesAnalysisReportMemo }> = [];
         for (const group of reportGroups) {
           const memo = await loadMemo(memoStoreId, group);
           if (reportMemoHasRows(memo)) loaded = true;
+          groupMemos.push({ group, memo });
           extraChapters.push({
             scope: { groupId: group.id, groupName: group.name, itemCodes: group.codes },
             accumulator: salesReportAccumulatorFromMemo(memo),
           });
         }
-        let data: Uint8Array;
-        try {
-          data = await generateSalesAnalysisPDF(
-            slim, storeId, groupLevel, settings.locale, exportFilter, fontBase64,
-            salesReportAccumulatorFromMemo(baseMemo),
-            extraChapters,
-          );
-        } catch (caught) {
-          if (caught instanceof AppError) throw caught;
-          throw new AppError('pdf_failed', caught instanceof Error ? caught.message : String(caught));
+        const storeLabel = isAllStoresReport(storeId)
+          ? t('analysis.exportFilesCombined')
+          : (availableStores.find((store) => store.businessId === storeId)?.label || storeId);
+        if (exportPDFEnabled) {
+          pdfExportCurrent += 1;
+          await yieldToUI();
+          let data: Uint8Array;
+          try {
+            data = await generateSalesAnalysisPDF(
+              slim, storeId, groupLevel, settings.locale, exportFilter, fontBase64,
+              salesReportAccumulatorFromMemo(baseMemo),
+              extraChapters,
+            );
+          } catch (caught) {
+            if (caught instanceof AppError) throw caught;
+            throw new AppError('pdf_failed', caught instanceof Error ? caught.message : String(caught));
+          }
+          written.push(await writeExportBytes(
+            directory, salesAnalysisPDFFilename(storeId, reportFrom, reportTo), data, 'pdf_write',
+          ));
+          if (exportGroupDetail) {
+            for (const { group, memo } of groupMemos) {
+              pdfExportCurrent += 1;
+              await yieldToUI();
+              let detail: Uint8Array;
+              try {
+                detail = await generateSalesAnalysisPDF(
+                  slim, storeId, groupLevel, settings.locale, exportFilter, fontBase64,
+                  salesReportAccumulatorFromMemo(memo),
+                  [],
+                  { groupId: group.id, groupName: group.name, itemCodes: group.codes },
+                );
+              } catch (caught) {
+                if (caught instanceof AppError) throw caught;
+                throw new AppError('pdf_failed', caught instanceof Error ? caught.message : String(caught));
+              }
+              written.push(await writeExportBytes(
+                directory,
+                salesAnalysisPDFFilename(storeId, reportFrom, reportTo, group.name),
+                detail,
+                'pdf_write',
+              ));
+            }
+          }
         }
-        const dataBase64 = bytesToBase64(data);
-        data = new Uint8Array();
-        try {
-          written.push(await backend.writeSalesAnalysisPDF({
+        if (exportAIEnabled) {
+          pdfExportCurrent += 1;
+          await yieldToUI();
+          const markdown = buildSalesAnalysisAIMarkdown({
+            locale: settings.locale,
+            storeId,
+            storeLabel,
+            from: reportFrom,
+            to: reportTo,
+            categoryLevel: groupLevel,
+            filter: exportFilter,
+            base: baseMemo,
+            groups: groupMemos.map(({ group, memo }) => ({
+              groupId: group.id,
+              groupName: group.name,
+              itemCodeCount: group.codes.length,
+              memo,
+            })),
+          });
+          written.push(await writeExportBytes(
             directory,
-            filename: salesAnalysisPDFFilename(storeId, reportFrom, reportTo),
-            dataBase64,
-          }));
-        } catch (caught) {
-          if (caught instanceof AppError && caught.code !== 'backend_error') throw caught;
-          throw new AppError('pdf_write', caught instanceof Error ? caught.message : String(caught));
+            salesAnalysisAIFilename(storeId, reportFrom, reportTo),
+            new TextEncoder().encode(markdown),
+            'export_write',
+            'text',
+          ));
         }
       };
-      if (writeStoreFiles) {
-        for (const store of reportStores) {
-          await yieldToUI();
-          await writePDF(store.businessId);
-        }
-      }
-      if (writeCombined) {
-        await writePDF(ALL_STORES_REPORT_ID);
+      for (const storeId of targetIds) {
+        await writeFile(storeId);
       }
       if (!loaded) throw new AppError('pdf_loading', 'Sales analysis items are still loading');
       exportDirectory = directory;
-      exportNotice = writeCombined && writeStoreFiles
+      exportNotice = exportPDFEnabled && writeCombined && writeStoreFiles && !exportGroupDetail && !exportAIEnabled
         ? t('analysis.exportedPDFWithCombined', { stores: reportStores.length })
         : t('analysis.exportedPDF', { count: written.length });
     } catch (caught) {
@@ -537,6 +665,24 @@
       exportingPDF = false;
       exportDialog = false;
       if (result) void ensurePeriodItems(periodKeysForView(activeView, [salesRankingKey, quantityRankingKey]));
+    }
+  }
+
+  async function writeExportBytes(
+    directory: string,
+    filename: string,
+    data: Uint8Array,
+    errorCode: 'pdf_write' | 'export_write',
+    kind: 'pdf' | 'text' = 'pdf',
+  ): Promise<string> {
+    const dataBase64 = bytesToBase64(data);
+    try {
+      return kind === 'text'
+        ? await backend.writeSalesAnalysisTextExport({ directory, filename, dataBase64 })
+        : await backend.writeSalesAnalysisPDF({ directory, filename, dataBase64 });
+    } catch (caught) {
+      if (caught instanceof AppError && caught.code !== 'backend_error') throw caught;
+      throw new AppError(errorCode, caught instanceof Error ? caught.message : String(caught));
     }
   }
 
@@ -638,19 +784,35 @@
   }
 
   function categoryValue(item: SalesAnalysisItem, key: CategoryKey): string {
-    return item[key].trim() || t('analysis.uncategorized');
+    return categoryNameOf(item, key) || t('analysis.uncategorized');
   }
 
   function categoryCode(item: SalesAnalysisItem, key: CategoryKey): string {
-    if (key === 'category1') return item.category1Code?.trim() ?? '';
-    if (key === 'category2') return item.category2Code?.trim() ?? '';
-    if (key === 'category3') return item.category3Code?.trim() ?? '';
-    if (key === 'category4') return item.category4Code?.trim() ?? '';
-    return item.category5Code?.trim() ?? '';
+    return categoryCodeOf(item, key);
+  }
+
+  function categoryLabel(item: SalesAnalysisItem, key: CategoryKey): string {
+    return categoryLabelOf(item, key, t('analysis.uncategorized'));
+  }
+
+  function keepHydratedItems(previous: SalesAnalysisResult, next: SalesAnalysisResult): SalesAnalysisResult {
+    const prevByKey = new Map((previous.periods ?? []).map((period) => [period.key, period]));
+    return {
+      ...next,
+      periods: (next.periods ?? []).map((period) => {
+        const prev = prevByKey.get(period.key);
+        if ((period.items?.length ?? 0) > 0 || !prev?.items?.length) return period;
+        if (period.key !== 'current' && period.itemCount && period.itemCount > 0 && !period.items) {
+          return period;
+        }
+        return { ...period, items: prev.items, itemCount: period.itemCount || prev.items.length };
+      }),
+    };
   }
 
   function matchesSelections(item: SalesAnalysisItem, current: FacetSelections, skipped?: CategoryKey): boolean {
-    return facets.every(({ key }) => key === skipped || current[key].size === 0 || current[key].has(categoryValue(item, key)));
+    return facets.every(({ key }) =>
+      key === skipped || itemMatchesCategorySelection(item, key, current[key], t('analysis.uncategorized')));
   }
 
   function matchesFilters(item: SalesAnalysisItem, current: FacetSelections, searchTerm: string): boolean {
@@ -706,12 +868,35 @@
     return periodKeysForView(view, rankingKeys);
   }
 
-  function facetOptions(key: CategoryKey): string[] {
-    if (!currentPeriod) return [];
-    return [...new Set((currentPeriod?.items ?? [])
-      .filter((item) => matchesGroup(item, selectedGroupCodes, groupScopeActive) && matchesSelections(item, selections, key))
-      .map((item) => categoryValue(item, key)))]
-      .sort((left, right) => left.localeCompare(right, settings.locale));
+  function listFacetOptions(
+    period: SalesAnalysisPeriodResult | undefined,
+    current: FacetSelections,
+    groupCodes: Set<string>,
+    scoped: boolean,
+    locale: string,
+    key: CategoryKey,
+  ): string[] {
+    if (!period) return [];
+    return [...new Set((period.items ?? [])
+      .filter((item) => matchesGroup(item, groupCodes, scoped) && matchesSelections(item, current, key))
+      .map((item) => categoryLabel(item, key)))]
+      .sort((left, right) => left.localeCompare(right, locale, { numeric: true }));
+  }
+
+  function listFacetOptionMap(
+    period: SalesAnalysisPeriodResult | undefined,
+    current: FacetSelections,
+    groupCodes: Set<string>,
+    scoped: boolean,
+    locale: string,
+  ): Record<CategoryKey, string[]> {
+    return {
+      category1: listFacetOptions(period, current, groupCodes, scoped, locale, 'category1'),
+      category2: listFacetOptions(period, current, groupCodes, scoped, locale, 'category2'),
+      category3: listFacetOptions(period, current, groupCodes, scoped, locale, 'category3'),
+      category4: listFacetOptions(period, current, groupCodes, scoped, locale, 'category4'),
+      category5: listFacetOptions(period, current, groupCodes, scoped, locale, 'category5'),
+    };
   }
 
   function toggleFacet(key: CategoryKey, value: string) {
@@ -728,7 +913,7 @@
   }
 
   function selectFacetAll(key: CategoryKey) {
-    selections = { ...selections, [key]: new Set(facetOptions(key)) };
+    selections = { ...selections, [key]: new Set(facetOptionMap[key]) };
     page = 1;
   }
 
@@ -1038,7 +1223,7 @@
         <span>{exportNotice}</span>
         {#if exportDirectory}<code title={exportDirectory}>{exportDirectory}</code>{/if}
       </div>
-      {#if exportDirectory}
+      {#if exportDirectory && !isWebRuntime()}
         <md-outlined-button type="button" onclick={() => void openExportFolder()} disabled={openingFolder}>
           {openingFolder ? t('analysis.openingFolder') : t('analysis.openFolder')}
         </md-outlined-button>
@@ -1054,10 +1239,16 @@
 
   {#if loadingProfiles}
     <div class="analysis-loading surface-card" role="status"><md-circular-progress indeterminate></md-circular-progress><strong>{t('common.loading')}</strong></div>
-  {:else if profiles.length === 0}
+  {:else if profiles.length === 0 && !result}
     <div class="empty-state surface-card">
       <span class="material-symbols-rounded" aria-hidden="true">manage_accounts</span>
       <h2>{t('analysis.noAccounts')}</h2>
+      {#if isWebRuntime()}
+        <p>{t('web.previewHint')}</p>
+        <md-filled-button type="button" onclick={() => void loadWebPreview()} disabled={running}>
+          {running ? t('web.loadingPreview') : t('web.loadPreview')}
+        </md-filled-button>
+      {/if}
       <md-filled-button type="button" onclick={onGoToAccounts}>{t('excel.manageAccounts')}</md-filled-button>
     </div>
   {:else if !result}
@@ -1114,6 +1305,7 @@
         {/if}
       </div>
 
+      {#if isWebRuntime()}<div class="inline-blocker"><span class="material-symbols-rounded" aria-hidden="true">info</span>{t('web.previewHint')}</div>{/if}
       {#if rangeInvalid}<div class="inline-blocker"><span class="material-symbols-rounded" aria-hidden="true">event_busy</span>{t('excel.rangeInvalid')}</div>{/if}
       <div class="analysis-query-actions">
         <span>{t('analysis.selectedStores', { count: selectedStoreIds.size })}</span>
@@ -1164,7 +1356,13 @@
               <summary class:active={selections[facet.key].size > 0} onclick={(event) => { event.preventDefault(); toggleFacetMenu(facet.key); }}><span>{t(facet.label)}</span><strong>{selections[facet.key].size > 0 ? selections[facet.key].size : t('analysis.all')}</strong><span class="material-symbols-rounded" aria-hidden="true">expand_more</span></summary>
               <div class="facet-popover">
                 <div class="facet-actions"><button type="button" onclick={() => selectFacetAll(facet.key)}>{t('analysis.selectAll')}</button><button type="button" onclick={() => clearFacet(facet.key)}>{t('analysis.clear')}</button></div>
-                <div class="facet-options pane-scroll">{#each facetOptions(facet.key) as option}<label><input aria-label={option} type="checkbox" checked={selections[facet.key].has(option)} onchange={() => toggleFacet(facet.key, option)} /><span>{option}</span></label>{/each}</div>
+                <div class="facet-options pane-scroll">
+                  {#each facetOptionMap[facet.key] as option}
+                    <label><input aria-label={option} type="checkbox" checked={selections[facet.key].has(option)} onchange={() => toggleFacet(facet.key, option)} /><span>{option}</span></label>
+                  {:else}
+                    <div class="facet-empty">{loadingItems ? t('analysis.loadingItems') : t('analysis.noResults')}</div>
+                  {/each}
+                </div>
               </div>
             </details>
           {/each}
@@ -1413,6 +1611,19 @@
     <form class="export-dialog-body" onsubmit={(event) => { event.preventDefault(); void exportPDF(); }}>
       <div class="export-dialog-scroll pane-scroll" tabindex="-1" data-autofocus>
         <div class="export-dialog-grid">
+          <section class="export-section" aria-labelledby="export-outputs-title">
+            <div class="export-section-heading">
+              <h3 id="export-outputs-title">{t('analysis.exportOutputs')}</h3>
+            </div>
+            <label class="export-check export-check-card">
+              <input type="checkbox" checked={exportPDFEnabled} disabled={exportingPDF} onchange={() => { exportPDFEnabled = !exportPDFEnabled; }} />
+              <span><b>{t('analysis.exportOutputPDF')}</b><small>{t('analysis.exportOutputPDFHint')}</small></span>
+            </label>
+            <label class="export-check export-check-card">
+              <input type="checkbox" checked={exportAIEnabled} disabled={exportingPDF} onchange={() => { exportAIEnabled = !exportAIEnabled; }} />
+              <span><b>{t('analysis.exportOutputAI')}</b><small>{t('analysis.exportOutputAIHint')}</small></span>
+            </label>
+          </section>
           {#if listSuccessfulReportStores(result).length > 1}
             <section class="export-section" aria-labelledby="export-files-title">
               <div class="export-section-heading">
@@ -1446,6 +1657,10 @@
                   <h3 id="export-groups-title">{t('analysis.exportPromoterGroups')}</h3>
                   <p>{t('analysis.exportPromoterGroupsHint')}</p>
                 </div>
+              </div>
+              <div class="export-mode" role="radiogroup" aria-label={t('analysis.exportPromoterGroups')}>
+                <button type="button" class:active={!exportGroupDetail} role="radio" aria-checked={!exportGroupDetail} disabled={exportingPDF} onclick={() => { exportGroupDetail = false; }}>{t('analysis.exportGroupSummaryOnly')}</button>
+                <button type="button" class:active={exportGroupDetail} role="radio" aria-checked={exportGroupDetail} disabled={exportingPDF || !exportPDFEnabled} onclick={() => { exportGroupDetail = true; }}>{t('analysis.exportGroupDetailFiles')}</button>
               </div>
               <div class="export-choice-panel">
                 <div class="export-choice-heading">
@@ -1496,13 +1711,15 @@
       </div>
       {#if exportTargetTotal === 0}
         <p class="export-dialog-warning">{t('analysis.exportNeedTarget')}</p>
+      {:else if !exportPDFEnabled && !exportAIEnabled}
+        <p class="export-dialog-warning">{t('analysis.exportNeedOutput')}</p>
       {:else if exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0}
         <p class="export-dialog-warning">{t('analysis.exportNeedCategory')}</p>
       {/if}
       <div class="dialog-actions export-dialog-actions">
         <span class="export-file-count">{t('analysis.exportFileCount', { count: exportFilesCount })}</span>
         <md-text-button type="button" onclick={closeExportDialog} disabled={exportingPDF}>{t('common.cancel')}</md-text-button>
-        <md-filled-button type="submit" onclick={() => void exportPDF()} disabled={exportingPDF || exportFilesCount === 0 || (exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0)}>{exportingPDF ? t('analysis.exportingPDFProgress', { current: pdfExportCurrent, total: pdfExportTotal }) : t('analysis.exportConfirm')}</md-filled-button>
+        <md-filled-button type="submit" onclick={() => void exportPDF()} disabled={exportingPDF || exportFilesCount === 0 || (exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0)}>{exportingPDF ? t('analysis.exportingPDFProgress', { current: pdfExportCurrent, total: pdfExportTotal }) : (isWebRuntime() ? t('web.exportConfirm') : t('analysis.exportConfirm'))}</md-filled-button>
       </div>
     </form>
   </dialog>
@@ -1515,7 +1732,7 @@
   .export-notice-copy { display: grid; min-width: 0; flex: 1; gap: 2px; }
   .export-notice-copy code { overflow: hidden; color: var(--md-sys-color-on-surface-variant); font-family: "Cascadia Code", ui-monospace, monospace; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
   .analysis-results { display: grid; gap: 12px; }
-  .analysis-toolbar { display: grid; gap: 10px; }
+  .analysis-toolbar { display: grid; gap: 10px; overflow: visible; }
   .analysis-workspace { display: grid; align-content: start; gap: 16px; overflow: visible; }
   .period-summary { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-variant-numeric: tabular-nums; }
   .period-summary .current { color: var(--md-sys-color-primary); font-weight: 650; }
@@ -1547,15 +1764,15 @@
   .analysis-progress md-linear-progress { width: 100%; --md-linear-progress-track-height: 9px; --md-linear-progress-active-indicator-height: 9px; }
   .analysis-progress-footer { margin-top: 14px; }
   .analysis-progress-footer > strong { color: var(--md-sys-color-on-surface-variant); font-variant-numeric: tabular-nums; }
-  .analysis-filters { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
-  .analysis-filter-tools { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(260px, 360px); align-items: stretch; gap: 8px; }
+  .analysis-filters { display: flex; flex-direction: column; gap: 10px; overflow: visible; padding: 12px 14px; }
+  .analysis-filter-tools { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 360px); align-items: stretch; gap: 8px; }
   .analysis-filter-tools .analysis-search { min-width: 0; }
   .promoter-group-selector { display: grid; min-width: 0; min-height: 44px; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; padding-left: 12px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; background: var(--md-sys-color-surface-container-lowest); }
   .promoter-group-selector:focus-within { border-color: var(--md-sys-color-primary); box-shadow: 0 0 0 3px var(--app-field-ring); }
   .promoter-group-selector > span { color: var(--md-sys-color-on-surface-variant); font-size: 11px; font-weight: 680; white-space: nowrap; }
   .promoter-group-selector select { width: 100%; min-width: 0; min-height: 42px; overflow: hidden; padding: 0 30px 0 0; border: 0; outline: 0; color: var(--md-sys-color-on-surface); background-color: transparent; font-weight: 680; text-overflow: ellipsis; white-space: nowrap; }
   .promoter-group-selector option { color: var(--md-sys-color-on-surface); background-color: var(--md-sys-color-surface-container-lowest); }
-  .facet-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .facet-row { display: flex; flex-wrap: wrap; gap: 8px; overflow: visible; }
   .facet-menu { position: relative; }
   .facet-menu > summary { display: flex; min-height: 44px; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; color: var(--md-sys-color-on-surface-variant); background: var(--md-sys-color-surface-container-lowest); list-style: none; }
   .facet-menu > summary::-webkit-details-marker { display: none; }
@@ -1563,11 +1780,15 @@
   .facet-menu > summary strong { color: var(--md-sys-color-primary); font-size: 12px; }
   .facet-menu > summary .material-symbols-rounded { font-size: 19px; transition: transform 120ms ease; }
   .facet-menu[open] > summary .material-symbols-rounded { transform: rotate(180deg); }
-  .facet-popover { position: absolute; z-index: 12; top: calc(100% + 7px); left: 0; width: min(330px, calc(100vw - 40px)); padding: 10px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 14px; background: var(--md-sys-color-surface-container-lowest); box-shadow: var(--app-shadow-high); }
+  .facet-popover { position: absolute; z-index: 40; top: calc(100% + 7px); left: 0; width: min(330px, calc(100vw - 24px)); max-width: calc(100vw - 24px); padding: 10px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 14px; background: var(--md-sys-color-surface-container-lowest); box-shadow: var(--app-shadow-high); }
+  .facet-menu:last-child .facet-popover,
+  .facet-menu:nth-last-child(-n+2) .facet-popover { left: auto; right: 0; }
   .facet-actions { justify-content: flex-end; padding: 2px 4px 8px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
-  .facet-options { display: grid; max-height: 260px; gap: 3px; overflow: auto; padding-top: 7px; }
+  .facet-options { display: grid; max-height: min(260px, 45vh); gap: 3px; overflow: auto; padding-top: 7px; }
   .facet-options label { display: flex; align-items: center; gap: 10px; padding: 8px; cursor: pointer; border-radius: 9px; }
   .facet-options label:hover { background: var(--md-sys-color-surface-container-low); }
+  .facet-options span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .facet-empty { padding: 16px 8px; color: var(--md-sys-color-on-surface-variant); font-size: 13px; text-align: center; }
   .analysis-search { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 44px; padding: 0 11px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; background: var(--md-sys-color-surface-container-lowest); }
   .analysis-search:focus-within { border-color: var(--md-sys-color-primary); box-shadow: 0 0 0 3px var(--app-field-ring); }
   .analysis-search > .material-symbols-rounded { color: var(--md-sys-color-outline); font-size: 20px; }

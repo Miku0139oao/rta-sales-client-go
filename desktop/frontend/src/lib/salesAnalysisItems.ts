@@ -1,7 +1,95 @@
 import type { SalesAnalysisItem, SalesAnalysisPackedItems, SalesAnalysisPeriodResult, SalesAnalysisResult, SalesAnalysisStoreSummary } from './types';
 
+export type AnalysisCategoryKey = 'category1' | 'category2' | 'category3' | 'category4' | 'category5';
+
+export function periodNeedsItemHydration(period: SalesAnalysisPeriodResult | undefined): boolean {
+  if (!period) return false;
+  if (!Array.isArray(period.items)) return true;
+  return (period.itemCount ?? 0) > period.items.length;
+}
+
 export function needsSalesAnalysisItemHydration(result: SalesAnalysisResult): boolean {
-  return (result.periods ?? []).some((period) => (period.itemCount ?? 0) > (period.items?.length ?? 0));
+  return (result.periods ?? []).some(periodNeedsItemHydration);
+}
+
+export function categoryCodeOf(item: SalesAnalysisItem, key: AnalysisCategoryKey): string {
+  if (key === 'category1') return item.category1Code?.trim() ?? '';
+  if (key === 'category2') return item.category2Code?.trim() ?? '';
+  if (key === 'category3') return item.category3Code?.trim() ?? '';
+  if (key === 'category4') return item.category4Code?.trim() ?? '';
+  return item.category5Code?.trim() ?? '';
+}
+
+export function categoryNameOf(item: SalesAnalysisItem, key: AnalysisCategoryKey): string {
+  return item[key]?.trim() ?? '';
+}
+
+export function categoryLabelOf(item: SalesAnalysisItem, key: AnalysisCategoryKey, uncategorized: string): string {
+  const code = categoryCodeOf(item, key);
+  const name = categoryNameOf(item, key);
+  if (code && name && name !== code) return `${code}  ${name}`;
+  return name || code || uncategorized;
+}
+
+export function itemMatchesCategorySelection(
+  item: SalesAnalysisItem,
+  key: AnalysisCategoryKey,
+  selected: ReadonlySet<string>,
+  uncategorized: string,
+): boolean {
+  if (selected.size === 0) return true;
+  const code = categoryCodeOf(item, key);
+  const name = categoryNameOf(item, key) || uncategorized;
+  const label = categoryLabelOf(item, key, uncategorized);
+  return selected.has(label) || selected.has(name) || (Boolean(code) && selected.has(code));
+}
+
+export function packSalesAnalysisItems(
+  periodKey: string,
+  items: SalesAnalysisItem[],
+  stores: SalesAnalysisStoreSummary[] = [],
+): SalesAnalysisPackedItems {
+  const dict = [''];
+  const index = new Map<string, number>([['', 0]]);
+  const intern = (value?: string): number => {
+    const text = (value ?? '').trim();
+    if (!text) return 0;
+    const existing = index.get(text);
+    if (existing !== undefined) return existing;
+    const next = dict.length;
+    dict.push(text);
+    index.set(text, next);
+    return next;
+  };
+  const storeIndex = new Map(stores.map((store, current) => [store.businessId, current]));
+  return {
+    periodKey,
+    dict,
+    rows: items.map((item) => ({
+      s: storeIndex.get(item.storeId) ?? 0,
+      ac: intern(item.articleCode),
+      an: intern(item.articleName),
+      br: intern(item.brandName),
+      c1: intern(item.category1),
+      k1: intern(item.category1Code),
+      c2: intern(item.category2),
+      k2: intern(item.category2Code),
+      c3: intern(item.category3),
+      k3: intern(item.category3Code),
+      c4: intern(item.category4),
+      k4: intern(item.category4Code),
+      c5: intern(item.category5),
+      k5: intern(item.category5Code),
+      t: item.transactionCount,
+      sq: item.saleQuantity,
+      sa: item.saleAmount,
+      rq: item.returnQuantity,
+      rt: item.returnTransactionCount,
+      ra: item.returnAmount,
+      nq: item.netQuantity,
+      ns: item.netSalesAmount,
+    })),
+  };
 }
 
 export function unpackSalesAnalysisItems(batch: SalesAnalysisPackedItems, stores: SalesAnalysisStoreSummary[] = []): SalesAnalysisItem[] {

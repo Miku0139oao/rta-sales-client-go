@@ -12,6 +12,7 @@ cookies.json
 .env
 .env.*
 !.env.example
+!.env.web
 
 # Build and test output
 bin/
@@ -20,10 +21,12 @@ output/
 coverage.out
 *.test
 *.exe
+rta-web-linux-amd64
 desktop/frontend/node_modules/
 desktop/frontend/coverage/
 desktop/frontend/dist/*
 !desktop/frontend/dist/.gitkeep
+desktop/frontend/dist-web/
 desktop/frontend/src/lib/wails/
 desktop/frontend/bindings/
 desktop/frontend/package.json.md5

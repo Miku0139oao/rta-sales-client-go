@@ -1,0 +1,18 @@
+[Unit]
+Description=RTA sales analysis web API
+After=network.target
+
+[Service]
+Type=simple
+User=caddy
+Group=caddy
+Environment=RTA_WEB_LISTEN=127.0.0.1:8787
+Environment=RTA_WEB_STATIC=/srv/pre-rtasales
+ExecStart=/usr/local/bin/rta-web
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

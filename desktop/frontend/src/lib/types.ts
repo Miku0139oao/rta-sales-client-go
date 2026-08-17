@@ -464,6 +464,7 @@ export interface BackendApi {
   cancelSalesAnalysis(operationId: string): Promise<void>;
   chooseSalesAnalysisPDFDirectory(): Promise<string>;
   writeSalesAnalysisPDF(request: SalesAnalysisPDFWriteRequest): Promise<string>;
+  writeSalesAnalysisTextExport(request: SalesAnalysisPDFWriteRequest): Promise<string>;
   analyze(request: AnalyzeRequest): Promise<AnalysisResult>;
   cancelAnalysis(operationId: string): Promise<void>;
   retryFailed(operationId: string): Promise<AnalysisResult>;

@@ -173,7 +173,7 @@ go build -o rta-xlsx-fill.exe ./cmd/rta-xlsx-fill
 ./scripts/build-desktop.ps1
 ```
 
-完成後看 `release\`。腳本會先編 frontend（Vite 會清掉舊的 dist，免得舊 js 被打進 exe），再用 Wails v3 `go build`。可攜版遇到沒有 WebView2 只提示；安裝檔會下載 Runtime。
+完成後看 `release\`。腳本會先編 frontend（Vite 會清掉舊的 dist，免得舊 js 被打進 exe），再用 Wails v3 `go build`，本機有 Microsoft Trusted Signing 時會簽 portable 與安裝檔。CI 預設仍是未簽名。已編好的檔可用 `./scripts/sign-windows.ps1 -Required -Files release\RTA-Excel-Filler-setup.exe,release\RTA-Excel-Filler-portable.exe` 補簽。可攜版遇到沒有 WebView2 只提示；安裝檔會下載 Runtime。
 
 產品名稱跟版本改 `cmd/rta-excel-filler/wails.json` 跟 `cmd/rta-excel-filler/build/windows/info.json`。
 

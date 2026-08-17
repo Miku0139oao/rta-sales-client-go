@@ -50,6 +50,52 @@ func TestWriteSalesAnalysisPDFDoesNotOverwriteExistingReport(t *testing.T) {
 	}
 }
 
+func TestWriteSalesAnalysisTextExportDoesNotOverwriteExistingBriefing(t *testing.T) {
+	app, _, _ := newTestApp(t, new(fakeEngine), fakeClients{})
+	output := t.TempDir()
+	data := []byte("# Microsoft Copilot briefing\n")
+	request := SalesAnalysisPDFWriteRequest{
+		Directory: output, Filename: "RTA-Sales-107-ai.md",
+		DataBase64: base64.StdEncoding.EncodeToString(data),
+	}
+
+	first, err := app.WriteSalesAnalysisTextExport(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := app.WriteSalesAnalysisTextExport(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second || filepath.Base(second) != "RTA-Sales-107-ai-2.md" {
+		t.Fatalf("existing briefing was not preserved: first=%q second=%q", first, second)
+	}
+	written, err := os.ReadFile(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(written) != string(data) {
+		t.Fatalf("written briefing changed: %q", written)
+	}
+}
+
+func TestWriteSalesAnalysisTextExportRejectsUnsafeInput(t *testing.T) {
+	app, _, _ := newTestApp(t, new(fakeEngine), fakeClients{})
+	output := t.TempDir()
+	valid := base64.StdEncoding.EncodeToString([]byte("# briefing"))
+	tests := []SalesAnalysisPDFWriteRequest{
+		{Filename: "report.md", DataBase64: valid},
+		{Directory: output, Filename: "..\\escape.md", DataBase64: valid},
+		{Directory: output, Filename: "report.pdf", DataBase64: valid},
+		{Directory: output, Filename: "report.md", DataBase64: base64.StdEncoding.EncodeToString([]byte("bad\x00text"))},
+	}
+	for _, request := range tests {
+		if _, err := app.WriteSalesAnalysisTextExport(request); err == nil {
+			t.Fatalf("unsafe request was accepted: %#v", request)
+		}
+	}
+}
+
 func TestWriteSalesAnalysisPDFRejectsUnsafeInput(t *testing.T) {
 	app, _, _ := newTestApp(t, new(fakeEngine), fakeClients{})
 	output := t.TempDir()

@@ -12,7 +12,13 @@ import '@material/web/dialog/dialog.js';
 import { mount } from 'svelte';
 import App from './App.svelte';
 import './app.css';
-import './lib/wailsBridge';
+
+if (import.meta.env.VITE_WEB === 'true') {
+  const { installWebBackend } = await import('./lib/webBackend');
+  installWebBackend();
+} else {
+  await import('./lib/wailsBridge');
+}
 
 const target = document.getElementById('app');
 

@@ -6,6 +6,7 @@
   import ItemCodesPage from './lib/pages/ItemCodesPage.svelte';
   import SettingsPage from './lib/pages/SettingsPage.svelte';
   import { translator } from './lib/i18n';
+  import { isWebRuntime } from './lib/runtime';
   import { loadSettings, saveSettings } from './lib/settings';
   import { applyTheme, resolveTheme, systemPrefersDark, watchSystemTheme } from './lib/theme';
   import type { AppSettings, Page, ThemePreference } from './lib/types';
@@ -152,6 +153,15 @@
     </aside>
 
     <main id="main-content" bind:this={mainContent} tabindex="-1" onwheel={relayMainWheel}>
+      {#if isWebRuntime()}
+        <div class="notice warning-notice web-preview-notice" role="status">
+          <span class="material-symbols-rounded" aria-hidden="true">language</span>
+          <div>
+            <strong>{t('web.bannerTitle')}</strong>
+            <p>{t('web.bannerBody')}</p>
+          </div>
+        </div>
+      {/if}
       {#if activePage === 'excel'}
         <ExcelPage
           {t}

@@ -16,7 +16,7 @@ const maxSalesAnalysisPDFBytes = 64 << 20
 // the frontend renders a separate PDF for each successful store.
 func (a *App) ChooseSalesAnalysisPDFDirectory() (string, error) {
 	directory, err := a.dialogs.OpenDirectory(a.appContext(), fileDialogOptions{
-		Title: "Export store PDF reports / 匯出門店 PDF 報告",
+		Title: "Export reports / 匯出報告",
 	})
 	if err != nil || strings.TrimSpace(directory) == "" {
 		return "", err
@@ -46,6 +46,41 @@ func (a *App) WriteSalesAnalysisPDF(request SalesAnalysisPDFWriteRequest) (strin
 		return "", errors.New("generated report is not a valid PDF")
 	}
 	return writeUniquePDF(directory, filename, data)
+}
+
+const maxSalesAnalysisTextBytes = 8 << 20
+
+// WriteSalesAnalysisTextExport stores a Markdown or JSON briefing without
+// overwriting an existing file. Used for Microsoft Copilot analysis packs.
+func (a *App) WriteSalesAnalysisTextExport(request SalesAnalysisPDFWriteRequest) (string, error) {
+	directory, err := validPDFDirectory(request.Directory)
+	if err != nil {
+		return "", err
+	}
+	filename, err := validTextExportFilename(request.Filename)
+	if err != nil {
+		return "", err
+	}
+	if len(request.DataBase64) > base64.StdEncoding.EncodedLen(maxSalesAnalysisTextBytes) {
+		return "", errors.New("analysis export is too large")
+	}
+	data, err := base64.StdEncoding.DecodeString(request.DataBase64)
+	if err != nil {
+		return "", fmt.Errorf("decode analysis export: %w", err)
+	}
+	if len(data) == 0 || len(data) > maxSalesAnalysisTextBytes || bytes.IndexByte(data, 0) >= 0 {
+		return "", errors.New("generated analysis export is not valid text")
+	}
+	return writeUniquePDF(directory, filename, data)
+}
+
+func validTextExportFilename(value string) (string, error) {
+	filename := strings.TrimSpace(value)
+	ext := strings.ToLower(filepath.Ext(filename))
+	if filename == "" || strings.ContainsAny(filename, `/\`) || filepath.Base(filename) != filename || (ext != ".md" && ext != ".json") {
+		return "", errors.New("invalid analysis export filename")
+	}
+	return filename, nil
 }
 
 func validPDFDirectory(value string) (string, error) {

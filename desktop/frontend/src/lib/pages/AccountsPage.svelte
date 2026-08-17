@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { backend } from '../backend';
   import { errorMessage, type Translator } from '../i18n';
+  import { isWebRuntime } from '../runtime';
   import { modal } from '../modal';
   import type { AnalysisProgress, Locale, Profile, ProfileTestResult, ProfileUpsertRequest } from '../types';
 
@@ -262,6 +263,13 @@
       <span class="material-symbols-rounded" slot="icon">add</span>{t('accounts.add')}
     </md-filled-button>
   </div>
+
+  {#if isWebRuntime()}
+    <div class="notice warning-notice" role="status">
+      <span class="material-symbols-rounded" aria-hidden="true">info</span>
+      <span>{t('web.accountsHint')}</span>
+    </div>
+  {/if}
 
   {#if error}
     <div class="notice error-notice" role="alert">

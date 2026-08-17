@@ -151,7 +151,48 @@ describe('sales analysis page', () => {
     await fireEvent.click(screen.getByText('開始分析'));
     await waitFor(() => expect(getSalesAnalysisItems).toHaveBeenCalledWith({ operationId: 'slim-1', periodKey: 'current' }));
     await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' }).closest('section')).toHaveTextContent('Mask'));
-    expect(screen.queryByText('沒有符合條件的資料')).not.toBeInTheDocument();
+    expect(screen.queryAllByText('沒有符合條件的資料')).toHaveLength(0);
+  });
+
+  it('lists 商品部門 options after a slim summary sends an empty items array', async () => {
+    const getSalesAnalysisItems = vi.fn(async () => ({
+      periodKey: 'current',
+      dict: ['', '552646', 'Mask', 'A-HEALTH & BEAUTY', 'A', 'BEAUTY CARE', 'A02', 'SKIN CARE', 'A0201', 'FACIAL', 'MASQUE', '900001', 'Wipes', 'B-NON FOOD', 'HOUSEHOLD'],
+      rows: [
+        { s: 0, ac: 1, an: 2, c1: 3, k1: 4, c2: 5, k2: 6, c3: 7, k3: 8, c4: 9, c5: 10, t: 2, sq: 3, sa: 110, nq: 2, ns: 100 },
+        { s: 0, ac: 11, an: 12, c1: 13, c2: 14, t: 1, sq: 2, sa: 80, nq: 2, ns: 80 },
+      ],
+    }));
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [{
+        id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
+      }]),
+      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      RunSalesAnalysis: vi.fn(async () => ({
+        operationId: 'dept-filter', from: '2026-08-01', to: '2026-08-31', complete: true,
+        selectedStores: 1, successfulStores: 1, queryDurationMs: 10,
+        totals: analysisResult.totals, stores: [{ businessId: '107', label: '107 - Central', totals: analysisResult.totals }],
+        periods: [{
+          key: 'current', label: '本期', from: '2026-08-01', to: '2026-08-31', complete: true,
+          successfulStores: 1, itemCount: 2, items: [], totals: analysisResult.totals,
+          stores: [{ businessId: '107', label: '107 - Central', totals: analysisResult.totals }],
+        }],
+      })),
+      GetSalesAnalysisItems: getSalesAnalysisItems,
+      ClearSalesAnalysis: vi.fn(async () => undefined),
+    } });
+    render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
+    await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
+    await fireEvent.click(screen.getByText('開始分析'));
+    await waitFor(() => expect(getSalesAnalysisItems).toHaveBeenCalledWith({ operationId: 'dept-filter', periodKey: 'current' }));
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' }).closest('section')).toHaveTextContent('Mask'));
+
+    await fireEvent.click(screen.getAllByText('商品部門')[0]!);
+    const department = await screen.findByText(/A02\s+BEAUTY CARE/);
+    expect(screen.getByText('HOUSEHOLD')).toBeInTheDocument();
+    await fireEvent.click(department.closest('label') ?? department);
+    await waitFor(() => expect(screen.queryByText('Wipes')).not.toBeInTheDocument());
+    expect(screen.getAllByText('Mask').length).toBeGreaterThan(0);
   });
 
   it('queries multiple stores through one profile and filters all five category levels locally', async () => {
@@ -246,13 +287,15 @@ describe('sales analysis page', () => {
     await waitFor(() => expect(screen.getByText('護膚')).toBeInTheDocument());
     expect(screen.getAllByText('Mask').length).toBeGreaterThan(0);
     await fireEvent.click(screen.getByRole('tab', { name: '商品' }));
-    expect(screen.getByText('Mask')).toBeInTheDocument();
-    expect(screen.getByText('Wipes')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('heading', { name: '商品明細' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Mask').length).toBeGreaterThan(0));
+    expect(screen.getAllByText('Wipes').length).toBeGreaterThan(0);
 
     await fireEvent.click(screen.getAllByText('商品分類')[0]!);
-    await fireEvent.click(screen.getByLabelText('A-HEALTH & BEAUTY'));
+    const category = await screen.findByText(/A-HEALTH/);
+    await fireEvent.click(category.closest('label') ?? category);
     await waitFor(() => expect(screen.queryByText('Wipes')).not.toBeInTheDocument());
-    expect(screen.getByText('Mask')).toBeInTheDocument();
+    expect(screen.getAllByText('Mask').length).toBeGreaterThan(0);
     expect(container.textContent).toContain('100.00');
 
     await fireEvent.click(screen.getByRole('tab', { name: '分類' }));
@@ -446,7 +489,7 @@ describe('sales analysis page', () => {
     expect(writeSalesAnalysisPDF.mock.calls[0]?.[0]).toMatchObject({ filename: 'RTA-Sales-all-20260801-20260831.pdf' });
   });
 
-  it('appends selected promoter groups as chapters inside each target PDF', async () => {
+  it('keeps selected promoter groups as a summary inside each target PDF', async () => {
     const getSalesAnalysisReportMemo = vi.fn(async (_request: unknown) => reportMemo());
     const writeSalesAnalysisPDF = vi.fn(async (...args: unknown[]) => {
       const request = args[0] as { directory: string; filename: string };
@@ -487,8 +530,9 @@ describe('sales analysis page', () => {
     await waitFor(() => expect(exportButton).not.toBeDisabled());
     await fireEvent.click(exportButton);
     await waitFor(() => expect(screen.getByRole('heading', { name: '匯出篩選' })).toBeInTheDocument());
-    expect(screen.getByRole('heading', { name: '附加群組章節' })).toBeInTheDocument();
-    expect(screen.getByText('加入同一份 PDF，不會另外產生檔案')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '群組報告' })).toBeInTheDocument();
+    expect(screen.getByText('總報告只放摘要，避免頁數暴增')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: '只顯示總結在總報告' })).toBeChecked();
     expect(screen.getByRole('heading', { name: '報告範圍' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '分類條件' })).toBeInTheDocument();
     expect(screen.queryByText('Promoter Group')).not.toBeInTheDocument();
@@ -497,7 +541,7 @@ describe('sales analysis page', () => {
     expect(screen.getByLabelText('家居組 · 1 個 Item Code')).not.toBeChecked();
     await fireEvent.click(screen.getByLabelText('家居組 · 1 個 Item Code'));
     await fireEvent.click(screen.getByLabelText('全選門店'));
-    expect(screen.getAllByText('3 份 PDF').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('3 個檔案').length).toBeGreaterThan(0);
     const confirm = screen.getByText('選資料夾並匯出').closest('md-filled-button') ?? screen.getByText('選資料夾並匯出');
     await fireEvent.click(confirm);
 
@@ -557,13 +601,96 @@ describe('sales analysis page', () => {
     await fireEvent.click(screen.getByText('開始分析'));
     await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
     await fireEvent.click(screen.getByText('匯出 PDF'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: '附加群組章節' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: '群組報告' })).toBeInTheDocument());
     expect(screen.getByLabelText('我的護膚 · 1 個 Item Code')).not.toBeChecked();
     const confirm = screen.getByText('選資料夾並匯出').closest('md-filled-button') ?? screen.getByText('選資料夾並匯出');
     await fireEvent.click(confirm);
     await waitFor(() => expect(writeSalesAnalysisPDF).toHaveBeenCalledTimes(1));
     expect(writeSalesAnalysisPDF.mock.calls[0]?.[0]).toMatchObject({ filename: 'RTA-Sales-all-20260801-20260831.pdf' });
     expect(vi.mocked(generateSalesAnalysisPDF).mock.calls[0]![7]).toEqual([]);
+  });
+
+  it('writes independent detailed group PDFs when that option is selected', async () => {
+    const writeSalesAnalysisPDF = vi.fn(async (...args: unknown[]) => {
+      const request = args[0] as { directory: string; filename: string };
+      return `${request.directory}\\${request.filename}`;
+    });
+    const { generateSalesAnalysisPDF } = await import('../sales-report-pdf');
+    vi.mocked(generateSalesAnalysisPDF).mockClear();
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [{
+        id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
+      }]),
+      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      ListManCodeGroups: vi.fn(async () => [
+        { id: 'g-skin', name: '我的護膚', codes: ['552646'] },
+      ]),
+      RunSalesAnalysis: vi.fn(async () => analysisResult),
+      GetSalesAnalysisItems: vi.fn(async () => ({ periodKey: 'current', dict: [''], rows: [] })),
+      ClearSalesAnalysis: vi.fn(async () => undefined),
+      ChooseSalesAnalysisPDFDirectory: vi.fn(async () => 'D:\\RTA Reports'),
+      GetSalesAnalysisReportMemo: vi.fn(async () => reportMemo()),
+      WriteSalesAnalysisPDF: writeSalesAnalysisPDF,
+    } });
+    render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
+    await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
+    await fireEvent.click(screen.getByText('開始分析'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
+    await fireEvent.click(screen.getByText('匯出 PDF'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: '群組報告' })).toBeInTheDocument());
+    await fireEvent.click(screen.getByLabelText('我的護膚 · 1 個 Item Code'));
+    await fireEvent.click(screen.getByRole('radio', { name: '詳細（獨立匯出 PDF）' }));
+    expect(screen.getAllByText('2 個檔案').length).toBeGreaterThan(0);
+    const confirm = screen.getByText('選資料夾並匯出').closest('md-filled-button') ?? screen.getByText('選資料夾並匯出');
+    await fireEvent.click(confirm);
+    await waitFor(() => expect(writeSalesAnalysisPDF).toHaveBeenCalledTimes(2));
+    expect(writeSalesAnalysisPDF.mock.calls.map((call) => call[0])).toEqual([
+      expect.objectContaining({ filename: 'RTA-Sales-all-20260801-20260831.pdf' }),
+      expect.objectContaining({ filename: 'RTA-Sales-all-我的護膚-20260801-20260831.pdf' }),
+    ]);
+    expect(vi.mocked(generateSalesAnalysisPDF).mock.calls[1]?.[8]).toEqual({
+      groupId: 'g-skin', groupName: '我的護膚', itemCodes: ['552646'],
+    });
+  });
+
+  it('exports a Microsoft Copilot markdown briefing beside the PDF', async () => {
+    const writeSalesAnalysisPDF = vi.fn(async (...args: unknown[]) => {
+      const request = args[0] as { directory: string; filename: string };
+      return `${request.directory}\\${request.filename}`;
+    });
+    const writeSalesAnalysisTextExport = vi.fn(async (...args: unknown[]) => {
+      const request = args[0] as { directory: string; filename: string; dataBase64: string };
+      return `${request.directory}\\${request.filename}`;
+    });
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [{
+        id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
+      }]),
+      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      ListManCodeGroups: vi.fn(async () => []),
+      RunSalesAnalysis: vi.fn(async () => analysisResult),
+      GetSalesAnalysisItems: vi.fn(async () => ({ periodKey: 'current', dict: [''], rows: [] })),
+      ClearSalesAnalysis: vi.fn(async () => undefined),
+      ChooseSalesAnalysisPDFDirectory: vi.fn(async () => 'D:\\RTA Reports'),
+      GetSalesAnalysisReportMemo: vi.fn(async () => reportMemo()),
+      WriteSalesAnalysisPDF: writeSalesAnalysisPDF,
+      WriteSalesAnalysisTextExport: writeSalesAnalysisTextExport,
+    } });
+    render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
+    await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
+    await fireEvent.click(screen.getByText('開始分析'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
+    await fireEvent.click(screen.getByText('匯出 PDF'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: '匯出格式' })).toBeInTheDocument());
+    await fireEvent.click(screen.getByLabelText(/匯出給 AI 分析/));
+    expect(screen.getAllByText('2 個檔案').length).toBeGreaterThan(0);
+    const confirm = screen.getByText('選資料夾並匯出').closest('md-filled-button') ?? screen.getByText('選資料夾並匯出');
+    await fireEvent.click(confirm);
+    await waitFor(() => expect(writeSalesAnalysisTextExport).toHaveBeenCalledTimes(1));
+    expect(writeSalesAnalysisPDF).toHaveBeenCalledTimes(1);
+    const briefing = writeSalesAnalysisTextExport.mock.calls[0]![0] as { filename: string; dataBase64: string };
+    expect(briefing.filename).toBe('RTA-Sales-all-20260801-20260831-ai.md');
+    expect(Buffer.from(briefing.dataBase64, 'base64').toString('utf8')).toContain('Microsoft Copilot');
   });
 
   it('keeps English group-chapter copy in the export dialog', async () => {
@@ -585,8 +712,11 @@ describe('sales analysis page', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Top 15 by sales' })).toBeInTheDocument());
     await fireEvent.click(screen.getByText('Export PDF'));
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Export filters' })).toBeInTheDocument());
-    expect(screen.getByRole('heading', { name: 'Additional group chapters' })).toBeInTheDocument();
-    expect(screen.getByText('Added to the same PDF; they do not create extra files')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Group reports' })).toBeInTheDocument();
+    expect(screen.getByText('The main report only keeps a summary so it stays short')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Summary only in the main report' })).toBeChecked();
+    expect(screen.getByText('Export for AI analysis')).toBeInTheDocument();
+    expect(screen.getByText('Markdown for Microsoft Copilot')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Category options' })).toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: 'All products' })).not.toBeInTheDocument();
   });

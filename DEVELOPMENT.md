@@ -173,7 +173,7 @@ Portable plus installer:
 ./scripts/build-desktop.ps1
 ```
 
-Output lands in `release\`. The script builds the frontend first (Vite empties `dist` so old hashed files are not embedded), then `go build`s the Wails v3 app. Portable fails if WebView2 is missing; the installer may download it.
+Output lands in `release\`. The script builds the frontend first (Vite empties `dist` so old hashed files are not embedded), then `go build`s the Wails v3 app, then signs the portable exe and NSIS installer with Microsoft Trusted Signing when `signtool`, `Azure.CodeSigning.Dlib.dll`, and `metadata.json` are on the machine. CI ships unsigned binaries unless those tools are present. Sign already-built files with `./scripts/sign-windows.ps1 -Required -Files release\RTA-Excel-Filler-setup.exe,release\RTA-Excel-Filler-portable.exe`. Portable fails if WebView2 is missing; the installer may download it.
 
 Change the product name or version in `cmd/rta-excel-filler/wails.json` and `cmd/rta-excel-filler/build/windows/info.json`.
 

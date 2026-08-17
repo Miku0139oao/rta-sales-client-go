@@ -31,14 +31,14 @@
 ## 怎麼安裝
 
 1. 至 [Releases](https://github.com/Miku0139oao/rta-sales-client-go/releases) 下載最新版本。
-2. 在壓縮檔或資料夾中找到 **`RTA-Excel-Filler-setup.exe`**，雙擊安裝。
+2. 在壓縮檔或資料夾中找到 **`RTA-Excel-Filler-setup.exe`**，雙擊安裝。安裝檔以 Microsoft Trusted Signing 簽署，發行者為 **瀚仁 張**。若 Windows 或 Edge 仍提示「不常下載」，選保留／仍要執行即可。
 3. 安裝完成後，按鍵盤上的 **Windows 鍵**，搜尋 **RTA 銷售分析**，即可開啟。
 
 同一時間僅能開啟一個視窗。若啟動後沒有反應，請先檢查工作列是否已在執行。
 
 兩分鐘畫面教學（無須聲音，字幕即可）：
 
-[使用教學](https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.4.2/RTA-Sales-Analyzer-tutorial.mp4)
+[使用教學](https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.4.3/RTA-Sales-Analyzer-tutorial.mp4)
 
 ### 其他發行檔案
 

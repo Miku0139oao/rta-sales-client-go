@@ -663,6 +663,10 @@ main:focus {
   background: var(--app-warning-container);
 }
 
+.web-preview-notice {
+  margin-top: 0;
+}
+
 .success-notice {
   border: 1px solid var(--app-info-border);
   color: var(--app-on-info);
@@ -1756,6 +1760,18 @@ th.proposed-column {
 
 .empty-state h2 {
   margin: 0 0 7px;
+}
+
+.empty-state p {
+  max-width: 34rem;
+  margin: 0 0 16px;
+  color: var(--md-sys-color-on-surface-variant);
+  line-height: 1.5;
+}
+
+.empty-state md-filled-button + md-filled-button,
+.empty-state md-filled-tonal-button + md-filled-button {
+  margin-top: 10px;
 }
 
 .settings-grid {

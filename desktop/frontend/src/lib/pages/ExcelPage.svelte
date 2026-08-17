@@ -3,6 +3,7 @@
   import { backend } from '../backend';
   import { defaultWorkbookEndDate, initialPreviewFilter, splitSavedPath } from '../excelWorkflow';
   import { errorMessage, type Translator } from '../i18n';
+  import { isWebRuntime } from '../runtime';
   import { modal } from '../modal';
   import type {
     AnalysisProgress,
@@ -130,6 +131,34 @@
     const selected = paths.find((path) => isXlsxPath(path)) ?? paths[0];
     const requestGeneration = ++generation;
     await acceptWorkbook(selected, requestGeneration);
+  }
+
+  async function acceptWebFiles(files: FileList | File[] | null | undefined) {
+    if (!isWebRuntime() || opening || scanning || analyzing || retrying || saving || !files || files.length === 0) return;
+    const list = Array.from(files);
+    const file = list.find((item) => item.name.toLowerCase().endsWith('.xlsx')) ?? list[0];
+    if (!file) return;
+    const requestGeneration = ++generation;
+    opening = true;
+    operationError = '';
+    try {
+      const { uploadWebFile, syncWebSession } = await import('../webApi');
+      const { loadWebSnapshot } = await import('../webStorage');
+      const snapshot = loadWebSnapshot();
+      await syncWebSession({
+        profiles: snapshot.profiles.map((profile) => ({
+          id: profile.id, displayName: profile.displayName, enabled: profile.enabled, priority: profile.priority,
+        })),
+        secrets: snapshot.secrets,
+        groups: snapshot.manCodeGroups,
+      });
+      const uploaded = await uploadWebFile(file);
+      await acceptWorkbook(uploaded.path, requestGeneration);
+    } catch (error) {
+      if (requestGeneration === generation) await showOperationError(errorMessage(settings.locale, error));
+    } finally {
+      if (requestGeneration === generation) opening = false;
+    }
   }
 
   async function acceptWorkbook(selected: string, requestGeneration: number) {
@@ -475,6 +504,8 @@
       data-file-drop-target
       class:drop-disabled={workflowBusy}
       aria-label={t('excel.open')}
+      ondragover={(event) => { if (isWebRuntime()) event.preventDefault(); }}
+      ondrop={(event) => { if (isWebRuntime()) { event.preventDefault(); void acceptWebFiles(event.dataTransfer?.files); } }}
     >
       <div class="file-illustration" aria-hidden="true">
         <span class="material-symbols-rounded sheet-symbol">table_view</span>

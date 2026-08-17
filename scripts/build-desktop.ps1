@@ -8,11 +8,15 @@
 
 .PARAMETER SkipInstaller
     Do not produce RTA-Excel-Filler-setup.exe.
+
+.PARAMETER RequireSign
+    Fail the build if Microsoft Trusted Signing is not available.
 #>
 [CmdletBinding()]
 param(
     [switch]$SkipPortable,
-    [switch]$SkipInstaller
+    [switch]$SkipInstaller,
+    [switch]$RequireSign
 )
 
 Set-StrictMode -Version Latest
@@ -81,6 +85,19 @@ if (-not $SkipInstaller -and -not (Test-CommandExists 'makensis')) {
 
 $WailsCommand = Get-Wails3Command
 
+function Invoke-AuthenticodeSign {
+    param([Parameter(Mandatory = $true)][string[]]$Files)
+    $signer = Join-Path $PSScriptRoot 'sign-windows.ps1'
+    $signArgs = @{ Files = $Files }
+    if ($RequireSign) {
+        $signArgs.Required = $true
+    }
+    & $signer @signArgs
+    if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) {
+        throw "Authenticode signing failed with exit code $LASTEXITCODE"
+    }
+}
+
 function Invoke-Wails3 {
     param([Parameter(Mandatory = $true)][string[]]$WailsArgs)
     $allArgs = @($WailsCommand.Prefix + $WailsArgs)
@@ -132,6 +149,8 @@ if (-not (Test-Path -LiteralPath $builtExe)) {
     throw "go build did not produce $builtExe"
 }
 
+Invoke-AuthenticodeSign -Files @($builtExe)
+
 if (-not $SkipPortable) {
     Copy-Item -LiteralPath $builtExe -Destination (Join-Path $ReleaseDir 'RTA-Excel-Filler-portable.exe') -Force
 }
@@ -176,7 +195,9 @@ if (-not $SkipInstaller) {
     if ($installer.Count -eq 0) {
         throw 'makensis did not produce an NSIS installer'
     }
-    Copy-Item -LiteralPath $installer[0].FullName -Destination (Join-Path $ReleaseDir 'RTA-Excel-Filler-setup.exe') -Force
+    $setupPath = Join-Path $ReleaseDir 'RTA-Excel-Filler-setup.exe'
+    Copy-Item -LiteralPath $installer[0].FullName -Destination $setupPath -Force
+    Invoke-AuthenticodeSign -Files @($setupPath)
 }
 
 $checksums = @(

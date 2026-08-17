@@ -31,14 +31,14 @@ The installer is the recommended distribution. Windows 10 and Windows 11 normall
 ## Install
 
 1. Download the latest files from [Releases](https://github.com/Miku0139oao/rta-sales-client-go/releases).
-2. Run **`RTA-Excel-Filler-setup.exe`**.
+2. Run **`RTA-Excel-Filler-setup.exe`**. The installer is signed with Microsoft Trusted Signing as **瀚仁 張**. If Windows or Edge still says the file is uncommon, choose Keep / Run anyway.
 3. Open the Start menu, search for **RTA 銷售分析**, and launch the application.
 
 Only one window may run at a time. If a launch appears to do nothing, check the taskbar; the application may already be open.
 
 A two-minute silent walkthrough with captions:
 
-[Usage tutorial](https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.4.2/RTA-Sales-Analyzer-tutorial.mp4)
+[Usage tutorial](https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.4.3/RTA-Sales-Analyzer-tutorial.mp4)
 
 ### Other release files
 

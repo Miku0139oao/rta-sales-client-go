@@ -120,6 +120,8 @@ interface Labels {
   touristTotal: string;
   storeComparison: string;
   store: string;
+  groupSummary: string;
+  group: string;
   weeklyTitle: string;
   week: string;
   thisWeek: string;
@@ -215,15 +217,16 @@ export async function generateSalesAnalysisPDF(
   fontBase64?: string,
   accumulator?: SalesReportAccumulator,
   extraChapters: SalesReportChapter[] = [],
+  scope?: SalesReportScope,
 ): Promise<Uint8Array> {
   try {
     const extraScopes = extraChapters.map((chapter) => chapter.scope);
     const [resolvedFont, { jsPDF: PDFDocument }] = await Promise.all([
-      fontBase64 ? Promise.resolve(fontBase64) : prepareSalesAnalysisFont(result, categoryLevel, locale, filter, undefined, extraScopes),
+      fontBase64 ? Promise.resolve(fontBase64) : prepareSalesAnalysisFont(result, categoryLevel, locale, filter, scope, extraScopes),
       import('jspdf'),
     ]);
     return renderSalesAnalysisPDF(
-      result, storeId, categoryLevel, locale, resolvedFont, PDFDocument, filter, accumulator, undefined, extraChapters,
+      result, storeId, categoryLevel, locale, resolvedFont, PDFDocument, filter, accumulator, scope, extraChapters,
     );
   } catch (error) {
     if (error instanceof AppError) throw error;
@@ -294,10 +297,9 @@ function renderSalesAnalysisPDF(
     result, storeId, categoryLevel, locale, filter, labels, headerId, baseStoreLabel, combined, stores,
     accumulator, scope, startOnCurrentPage: true,
   }, footers);
-  for (const chapter of extraChapters) {
-    appendReportSection(doc, {
-      result, storeId, categoryLevel, locale, filter, labels, headerId, baseStoreLabel, combined, stores,
-      accumulator: chapter.accumulator, scope: chapter.scope, startOnCurrentPage: false,
+  if (!scope && extraChapters.length > 0) {
+    appendGroupSummaryPages(doc, {
+      result, storeId, categoryLevel, filter, labels, headerId, baseStoreLabel, extraChapters,
     }, footers);
   }
 
@@ -378,6 +380,103 @@ function appendReportSection(doc: jsPDF, options: ReportSectionOptions, footers:
   footers.push({ start, end: doc.getNumberOfPages(), label: scope?.groupName ?? '' });
 }
 
+const GROUP_SUMMARY_ROWS_PER_PAGE = 16;
+
+interface GroupSummaryRow {
+  name: string;
+  current?: number;
+  previous?: number;
+  yearAgo?: number;
+}
+
+function appendGroupSummaryPages(
+  doc: jsPDF,
+  options: {
+    result: SalesAnalysisResult;
+    storeId: string;
+    categoryLevel: SalesReportCategoryLevel;
+    filter: SalesReportFilter;
+    labels: Labels;
+    headerId: string;
+    baseStoreLabel: string;
+    extraChapters: SalesReportChapter[];
+  },
+  footers: FooterChapter[],
+): void {
+  const { result, storeId, categoryLevel, filter, labels, headerId, baseStoreLabel, extraChapters } = options;
+  const rows = extraChapters.map((chapter) => {
+    const periods = storePeriods(
+      result, storeId, filter, categoryLevel, chapter.accumulator, labels.uncategorized, chapter.scope,
+    );
+    const current = periodByKey(periods, 'current') ?? periods[0];
+    const previous = periodByKey(periods, 'previous');
+    const yearAgo = periodByKey(periods, 'yearAgo');
+    return {
+      name: chapter.scope.groupName,
+      current: current?.totals.netSalesAmount,
+      previous: previous?.totals.netSalesAmount,
+      yearAgo: yearAgo?.totals.netSalesAmount,
+    } satisfies GroupSummaryRow;
+  });
+  if (rows.length === 0) return;
+  doc.addPage();
+  const start = doc.getNumberOfPages();
+  const span = (() => {
+    const periods = storePeriods(result, storeId, filter, categoryLevel, undefined, labels.uncategorized);
+    const current = periodByKey(periods, 'current') ?? periods[0];
+    return current ? `${current.from} - ${current.to}` : '';
+  })();
+  for (let offset = 0; offset < rows.length; offset += GROUP_SUMMARY_ROWS_PER_PAGE) {
+    if (offset > 0) doc.addPage();
+    drawGroupSummaryPage(
+      doc, rows.slice(offset, offset + GROUP_SUMMARY_ROWS_PER_PAGE), headerId, baseStoreLabel, span, labels,
+    );
+  }
+  footers.push({ start, end: doc.getNumberOfPages(), label: labels.groupSummary });
+}
+
+function drawGroupSummaryPage(
+  doc: jsPDF,
+  rows: GroupSummaryRow[],
+  storeId: string,
+  storeLabel: string,
+  period: string,
+  labels: Labels,
+): void {
+  drawPageHeader(doc, labels.groupSummary, period, storeId, storeLabel);
+  card(doc, CONTENT_X, CONTENT_Y, CONTENT_WIDTH, CONTENT_HEIGHT);
+  panelTitle(doc, CONTENT_X, CONTENT_Y, CONTENT_WIDTH, labels.groupSummary);
+  const innerX = CONTENT_X + 4;
+  const tableY = CONTENT_Y + 18;
+  const innerWidth = CONTENT_WIDTH - 8;
+  const columns = [92, 38, 38, 32, 38, innerWidth - 238];
+  drawTableHeader(doc, innerX, tableY, columns, [
+    labels.group, labels.current, labels.previous, labels.vsPrevious, labels.yearAgo, labels.vsYearAgo,
+  ]);
+  rows.forEach((row, index) => {
+    const rowY = tableY + 9.4 + index * 8.6;
+    if (index % 2 === 0) {
+      setFill(doc, COLORS.surface);
+      doc.roundedRect(innerX, rowY - 5, innerWidth, 8, 1.2, 1.2, 'F');
+    }
+    setText(doc, COLORS.ink, 7.6, 'bold');
+    doc.text(fitText(doc, row.name || '-', columns[0] - 4), innerX + 2, rowY);
+    const values: Array<{ text: string; color: RGB; bold?: boolean }> = [
+      { text: row.current === undefined ? '-' : formatMoney(row.current), color: COLORS.ink, bold: true },
+      { text: row.previous === undefined ? '-' : formatMoney(row.previous), color: COLORS.slate },
+      percentCell(delta(row.current, row.previous)),
+      { text: row.yearAgo === undefined ? '-' : formatMoney(row.yearAgo), color: COLORS.slate },
+      percentCell(delta(row.current, row.yearAgo)),
+    ];
+    let cellX = innerX + columns[0];
+    values.forEach((value, valueIndex) => {
+      setText(doc, value.color, 7.1, value.bold ? 'bold' : 'normal');
+      doc.text(value.text, cellX + columns[valueIndex + 1] - 2, rowY, { align: 'right' });
+      cellX += columns[valueIndex + 1];
+    });
+  });
+}
+
 export function listSuccessfulReportStores(result: SalesAnalysisResult): SalesAnalysisStore[] {
   const periods = normalizedPeriods(result);
   const current = periods.find((period) => period.key === 'current') ?? periods[0];
@@ -402,12 +501,13 @@ export function isAllStoresReport(storeId: string): boolean {
   return storeId === ALL_STORES_REPORT_ID;
 }
 
-export function salesAnalysisPDFFilename(storeId: string, from: string, to: string): string {
+export function salesAnalysisPDFFilename(storeId: string, from: string, to: string, groupName?: string): string {
   const safeStore = isAllStoresReport(storeId) ? 'all' : (storeId.trim().replace(/[^\p{L}\p{N}_-]+/gu, '-') || 'store');
+  const safeGroup = (groupName ?? '').trim().replace(/[^\p{L}\p{N}_-]+/gu, '-').replace(/^-+|-+$/g, '');
   const start = from.replaceAll('-', '') || 'report';
   const end = to.replaceAll('-', '');
   const period = end && end !== start ? `${start}-${end}` : start;
-  return `RTA-Sales-${safeStore}-${period}.pdf`;
+  return `RTA-Sales-${safeStore}${safeGroup ? `-${safeGroup}` : ''}-${period}.pdf`;
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {
@@ -1624,6 +1724,7 @@ function reportLabels(locale: Locale): Labels {
       quantityRanking: 'Category quantity ranking', product: 'Product', amount: 'Sales', quantity: 'Qty', uncategorized: 'Uncategorized',
       allStores: 'All stores', localTotal: 'Local total', touristTotal: 'Tourist total',
       storeComparison: 'Store comparison', store: 'Store',
+      groupSummary: 'Group summary', group: 'Group',
       weeklyTitle: 'Weekly sales change', week: 'Week', thisWeek: 'This week', lastWeek: 'Last week',
       variance: 'Var', variancePercent: 'Var %', weekday: 'Weekday', weekend: 'Weekend', customers: 'Txns',
     };
@@ -1640,6 +1741,7 @@ function reportLabels(locale: Locale): Labels {
     quantityRanking: '分類商品銷量排行', product: '商品', amount: '銷售額', quantity: '銷量', uncategorized: '未分類',
     allStores: '全部門店', localTotal: '本地合計', touristTotal: '旅客合計',
     storeComparison: '門店比較', store: '門店',
+    groupSummary: '群組總結', group: '群組',
     weeklyTitle: '每週銷售變化', week: '週次', thisWeek: '本週', lastWeek: '上週',
     variance: '差異', variancePercent: '差異 %', weekday: '平日', weekend: '週末', customers: '交易',
   };

@@ -601,7 +601,11 @@ export const backend: BackendApi = {
     }
   },
 
-  getLatestArticleNames: async () => ({ ...lastArticleNames }),
+  getLatestArticleNames: async () => {
+    if (Object.keys(lastArticleNames).length > 0) return { ...lastArticleNames };
+    lastArticleNames = await invoke(['GetLatestArticleNames'], [], async () => ({ ...lastArticleNames }));
+    return { ...lastArticleNames };
+  },
 
   listSalesAnalysisStores: (profileId: string, simulateStoreCount = 0) =>
     invoke(['ListSalesAnalysisStores'], [{ profileId, simulateStoreCount }], async () => mockAnalysisStoresFor(simulateStoreCount)),
@@ -638,6 +642,9 @@ export const backend: BackendApi = {
 
   writeSalesAnalysisPDF: (request: SalesAnalysisPDFWriteRequest) =>
     invoke(['WriteSalesAnalysisPDF'], [request], async () => `${request.directory}\\${request.filename}`),
+
+  writeSalesAnalysisTextExport: (request: SalesAnalysisPDFWriteRequest) =>
+    invoke(['WriteSalesAnalysisTextExport'], [request], async () => `${request.directory}\\${request.filename}`),
 
   analyze: (request: AnalyzeRequest) => invoke(['Analyze'], [request], mockAnalyze),
 

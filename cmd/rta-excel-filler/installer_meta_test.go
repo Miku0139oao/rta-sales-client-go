@@ -62,6 +62,9 @@ func TestInstallerProductMetadataMatchesWailsJSON(t *testing.T) {
 			t.Fatalf("build-desktop.ps1 must pass %s so a regenerated nsh cannot ship stale defaults", flag)
 		}
 	}
+	if !strings.Contains(string(script), "sign-windows.ps1") {
+		t.Fatal("build-desktop.ps1 must sign the exe and installer with scripts/sign-windows.ps1")
+	}
 }
 
 func nshDefine(t *testing.T, source, key string) string {
