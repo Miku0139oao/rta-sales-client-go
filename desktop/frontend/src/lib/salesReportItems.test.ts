@@ -77,4 +77,21 @@ describe('sales report item visibility', () => {
       mode: 'blacklist', excludeZeroGifts: false, excludeStamps: true, categories: [],
     })).toBe(true);
   });
+
+  it('keeps only the analysis-page facet selections', () => {
+    const respiratory = item({
+      category5: 'RESPIRATORY SYSTEM', category5Code: 'A01010203', articleCode: '1', articleName: 'Spray',
+    });
+    const nutrition = item({
+      category5: 'NUTRITION', category5Code: 'A01010207', articleCode: '2', articleName: 'Vitamin',
+    });
+    const filter = {
+      ...defaultSalesReportFilter(),
+      facets: { category5: ['A01010203  RESPIRATORY SYSTEM'] },
+    };
+    expect(includeInSalesReport(respiratory, filter)).toBe(true);
+    expect(includeInSalesReport(nutrition, filter)).toBe(false);
+    expect(includeInSalesReport(respiratory, { ...defaultSalesReportFilter(), search: 'Vitamin' })).toBe(false);
+    expect(includeInSalesReport(nutrition, { ...defaultSalesReportFilter(), search: 'Vitamin' })).toBe(true);
+  });
 });

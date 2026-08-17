@@ -311,6 +311,9 @@ export interface SalesAnalysisReportMemoRequest {
   excludeStamps: boolean;
   mode: 'blacklist' | 'whitelist' | string;
   categories?: string[];
+  facets?: Partial<Record<'category1' | 'category2' | 'category3' | 'category4' | 'category5', string[]>>;
+  search?: string;
+  uncategorized?: string;
 }
 
 export interface SalesAnalysisRankedItem {

@@ -52,6 +52,36 @@ func TestGetSalesAnalysisReportMemoKeepsOneStoreAndDropsZeroGifts(t *testing.T) 
 	}
 }
 
+func TestGetSalesAnalysisReportMemoAppliesAnalysisFacets(t *testing.T) {
+	period := SalesAnalysisPeriodResult{
+		Key: "current",
+		Stores: []SalesAnalysisStoreSummary{
+			{BusinessID: "107", Label: "107 - Central"},
+		},
+		Items: []SalesAnalysisItem{
+			{StoreID: "107", ArticleCode: "A1", ArticleName: "Spray", Category5: "RESPIRATORY SYSTEM", Category5Code: "A01010203", NetSalesAmount: 100, NetQuantity: 2},
+			{StoreID: "107", ArticleCode: "B1", ArticleName: "Vitamin", Category5: "NUTRITION", Category5Code: "A01010207", NetSalesAmount: 80, NetQuantity: 4},
+		},
+	}
+	app := &App{}
+	app.rememberSalesAnalysis(SalesAnalysisResult{
+		OperationID: "op-facets",
+		Stores:      period.Stores,
+		Periods:     []SalesAnalysisPeriodResult{period},
+	}, map[string]SalesAnalysisPackedItems{"current": packSalesAnalysisItems(period)})
+
+	memo, err := app.GetSalesAnalysisReportMemo(SalesAnalysisReportMemoRequest{
+		OperationID: "op-facets", CategoryLevel: "category2", Mode: "blacklist",
+		Facets: map[string][]string{"category5": {"A01010203  RESPIRATORY SYSTEM"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(memo.Periods) != 1 || len(memo.Periods[0].TopAmount) != 1 || memo.Periods[0].TopAmount[0].Code != "A1" {
+		t.Fatalf("facet memo=%#v", memo)
+	}
+}
+
 func TestGetSalesAnalysisReportMemoScopesProductsByManCodeGroup(t *testing.T) {
 	app, _, _ := newTestApp(t, new(fakeEngine), fakeClients{})
 	groupA, err := app.SaveManCodeGroup(SaveManCodeGroupRequest{

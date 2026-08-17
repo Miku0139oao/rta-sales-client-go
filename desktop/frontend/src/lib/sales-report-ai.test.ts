@@ -53,8 +53,30 @@ describe('sales analysis AI export', () => {
     expect(markdown).toContain('我的護膚');
     expect(markdown).toContain('HK$180.00');
     expect(markdown).toContain('+100.0%');
+    expect(markdown).toContain('只准使用這份檔案裡的數字');
+    expect(markdown).toContain('不准發明商品');
     expect(markdown).toContain('```json');
     expect(markdown).toContain('"id": "g-skin"');
     expect(markdown).not.toContain('undefined');
+  });
+
+  it('tells Copilot the file is already filtered', () => {
+    const markdown = buildSalesAnalysisAIMarkdown({
+      locale: 'zh-TW',
+      storeId: '107',
+      storeLabel: '107 - Tai Wai',
+      from: '2026-08-01',
+      to: '2026-08-16',
+      categoryLevel: 'category2',
+      filter: {
+        ...defaultSalesReportFilter(),
+        facets: { category5: ['A01010203  RESPIRATORY SYSTEM'] },
+      },
+      base: memo(),
+      groups: [],
+    });
+    expect(markdown).toContain('小分類: A01010203  RESPIRATORY SYSTEM');
+    expect(markdown).toContain('已限於下列篩選');
+    expect(markdown).toContain('"alreadyFiltered": true');
   });
 });

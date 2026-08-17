@@ -303,14 +303,17 @@ type SalesAnalysisPackedItems struct {
 }
 
 type SalesAnalysisReportMemoRequest struct {
-	OperationID      string   `json:"operationId"`
-	StoreID          string   `json:"storeId,omitempty"`
-	GroupID          string   `json:"groupId,omitempty"`
-	CategoryLevel    string   `json:"categoryLevel"`
-	ExcludeZeroGifts bool     `json:"excludeZeroGifts"`
-	ExcludeStamps    bool     `json:"excludeStamps"`
-	Mode             string   `json:"mode"`
-	Categories       []string `json:"categories,omitempty"`
+	OperationID      string              `json:"operationId"`
+	StoreID          string              `json:"storeId,omitempty"`
+	GroupID          string              `json:"groupId,omitempty"`
+	CategoryLevel    string              `json:"categoryLevel"`
+	ExcludeZeroGifts bool                `json:"excludeZeroGifts"`
+	ExcludeStamps    bool                `json:"excludeStamps"`
+	Mode             string              `json:"mode"`
+	Categories       []string            `json:"categories,omitempty"`
+	Facets           map[string][]string `json:"facets,omitempty"`
+	Search           string              `json:"search,omitempty"`
+	Uncategorized    string              `json:"uncategorized,omitempty"`
 }
 
 type SalesAnalysisReportMemo struct {

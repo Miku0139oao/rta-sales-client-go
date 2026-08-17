@@ -439,7 +439,7 @@ describe('sales analysis page', () => {
     expect(grid?.querySelector('.export-section-categories')).toHaveClass('export-section', 'export-section-categories');
     expect(dialog.querySelector('#export-groups-title')).not.toBeInTheDocument();
     expect(dialog.querySelector('.export-choice-list-categories')).toHaveClass('export-choice-list', 'pane-scroll');
-    expect(screen.getByRole('heading', { name: '分類條件' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '報告內容' })).toBeInTheDocument();
     expect(screen.getByText('忽略沒有金額的贈品（保留現金券）')).toBeInTheDocument();
     expect(screen.getByText('忽略印花')).toBeInTheDocument();
     expect(screen.queryByText('Promoter Group')).not.toBeInTheDocument();
@@ -534,7 +534,7 @@ describe('sales analysis page', () => {
     expect(screen.getByText('總報告只放摘要，避免頁數暴增')).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: '只顯示總結在總報告' })).toBeChecked();
     expect(screen.getByRole('heading', { name: '報告範圍' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '分類條件' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '報告內容' })).toBeInTheDocument();
     expect(screen.queryByText('Promoter Group')).not.toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: '全部商品' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('我的護膚 · 1 個 Item Code')).toBeChecked();
@@ -690,7 +690,63 @@ describe('sales analysis page', () => {
     expect(writeSalesAnalysisPDF).toHaveBeenCalledTimes(1);
     const briefing = writeSalesAnalysisTextExport.mock.calls[0]![0] as { filename: string; dataBase64: string };
     expect(briefing.filename).toBe('RTA-Sales-all-20260801-20260831-ai.md');
-    expect(Buffer.from(briefing.dataBase64, 'base64').toString('utf8')).toContain('Microsoft Copilot');
+    const markdown = Buffer.from(briefing.dataBase64, 'base64').toString('utf8');
+    expect(markdown).toContain('Microsoft Copilot');
+    expect(markdown).toContain('只准使用這份檔案裡的數字');
+  });
+
+  it('carries the on-screen 小分類 filter into PDF and AI export', async () => {
+    const getSalesAnalysisReportMemo = vi.fn(async () => reportMemo());
+    const writeSalesAnalysisPDF = vi.fn(async (...args: unknown[]) => {
+      const request = args[0] as { directory: string; filename: string };
+      return `${request.directory}\\${request.filename}`;
+    });
+    const writeSalesAnalysisTextExport = vi.fn(async (...args: unknown[]) => {
+      const request = args[0] as { directory: string; filename: string };
+      return `${request.directory}\\${request.filename}`;
+    });
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [{
+        id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
+      }]),
+      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      RunSalesAnalysis: vi.fn(async () => analysisResult),
+      GetSalesAnalysisItems: vi.fn(async () => ({ periodKey: 'current', dict: [''], rows: [] })),
+      ClearSalesAnalysis: vi.fn(async () => undefined),
+      ChooseSalesAnalysisPDFDirectory: vi.fn(async () => 'D:\\RTA Reports'),
+      GetSalesAnalysisReportMemo: getSalesAnalysisReportMemo,
+      WriteSalesAnalysisPDF: writeSalesAnalysisPDF,
+      WriteSalesAnalysisTextExport: writeSalesAnalysisTextExport,
+    } });
+    render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
+    await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
+    await fireEvent.click(screen.getByText('開始分析'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
+    await fireEvent.click(screen.getAllByText('小分類')[0]!);
+    const segment = await screen.findByText('MASQUE');
+    await fireEvent.click(segment.closest('label') ?? segment);
+    await waitFor(() => expect(screen.queryByText('Wipes')).not.toBeInTheDocument());
+    const exportButton = screen.getByText('匯出 PDF').closest('md-filled-button') ?? screen.getByText('匯出 PDF');
+    await waitFor(() => expect(exportButton).not.toBeDisabled());
+
+    await fireEvent.click(exportButton);
+    await waitFor(() => expect(screen.getByRole('heading', { name: '匯出篩選' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('radio', { name: '依目前分析篩選' })).toBeChecked());
+    expect(screen.getByText('小分類 · 1 項')).toBeInTheDocument();
+    expect(screen.getAllByText('MASQUE').length).toBeGreaterThan(0);
+    await fireEvent.click(screen.getByLabelText(/匯出給 AI 分析/));
+    const confirm = screen.getByText('選資料夾並匯出').closest('md-filled-button') ?? screen.getByText('選資料夾並匯出');
+    await fireEvent.click(confirm);
+
+    await waitFor(() => expect(getSalesAnalysisReportMemo).toHaveBeenCalled());
+    expect(getSalesAnalysisReportMemo.mock.calls.at(0)?.at(0)).toEqual(expect.objectContaining({
+      facets: expect.objectContaining({ category5: ['MASQUE'] }),
+    }));
+    await waitFor(() => expect(writeSalesAnalysisTextExport).toHaveBeenCalledTimes(1));
+    const briefing = writeSalesAnalysisTextExport.mock.calls[0]![0] as { dataBase64: string };
+    const markdown = Buffer.from(briefing.dataBase64, 'base64').toString('utf8');
+    expect(markdown).toContain('小分類: MASQUE');
+    expect(markdown).toContain('已經是篩選後的結果');
   });
 
   it('keeps English group-chapter copy in the export dialog', async () => {
@@ -717,7 +773,7 @@ describe('sales analysis page', () => {
     expect(screen.getByRole('radio', { name: 'Summary only in the main report' })).toBeChecked();
     expect(screen.getByText('Export for AI analysis')).toBeInTheDocument();
     expect(screen.getByText('Markdown for Microsoft Copilot')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Category options' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Report contents' })).toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: 'All products' })).not.toBeInTheDocument();
   });
 

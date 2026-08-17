@@ -19,6 +19,7 @@
     defaultSalesReportFilter,
     includeInSalesReport,
     reportCategoryId,
+    type SalesReportFacets,
     type SalesReportFilter,
   } from '../salesReportItems';
   import { weeklySegmentRows } from '../storeSegment';
@@ -101,6 +102,8 @@
   let exportGroupDetail = false;
   let exportPDFEnabled = true;
   let exportAIEnabled = false;
+  let exportUseScreenFilters = false;
+  let exportCanUseScreenFilters = false;
   let exportTargetTotal = 0;
   let exportFilesCount = 0;
   let pdfExportCurrent = 0;
@@ -436,6 +439,13 @@
     exportGroupDetail = false;
     exportPDFEnabled = true;
     exportAIEnabled = false;
+    exportCanUseScreenFilters = filtersActive(selections, search);
+    exportUseScreenFilters = exportCanUseScreenFilters;
+    exportFilter = {
+      ...defaultSalesReportFilter(),
+      uncategorized: t('analysis.uncategorized'),
+      ...(exportUseScreenFilters ? screenExportSnapshot() : {}),
+    };
     exportDialog = true;
   }
 
@@ -489,6 +499,39 @@
       ? exportCategoryOptions().map((option) => option.id)
       : exportFilter.categories;
     exportFilter = { ...exportFilter, mode, categories };
+  }
+
+  function screenExportSnapshot(): Pick<SalesReportFilter, 'facets' | 'search'> {
+    const selected: SalesReportFacets = {};
+    for (const { key } of facets) {
+      if (selections[key].size > 0) selected[key] = [...selections[key]];
+    }
+    return { facets: selected, search: search.trim() };
+  }
+
+  function exportScreenFilterRows(): Array<{ label: string; values: string[] }> {
+    const rows: Array<{ label: string; values: string[] }> = [];
+    for (const facet of facets) {
+      const values = exportFilter.facets?.[facet.key] ?? [];
+      if (values.length > 0) rows.push({ label: t(facet.label), values });
+    }
+    if (exportFilter.search?.trim()) {
+      rows.push({ label: t('analysis.search'), values: [exportFilter.search.trim()] });
+    }
+    return rows;
+  }
+
+  function setExportUseScreenFilters(next: boolean) {
+    exportUseScreenFilters = next;
+    exportFilter = {
+      ...exportFilter,
+      ...(next ? screenExportSnapshot() : { facets: {}, search: '' }),
+    };
+  }
+
+  function activeExportFilter(): SalesReportFilter {
+    if (exportUseScreenFilters) return exportFilter;
+    return { ...exportFilter, facets: {}, search: '' };
   }
 
   function exportCategoryOptions(): Array<{ id: string; name: string; code: string }> {
@@ -560,6 +603,9 @@
         excludeStamps: exportFilter.excludeStamps,
         mode: exportFilter.mode,
         categories: exportFilter.categories,
+        facets: exportUseScreenFilters ? exportFilter.facets : undefined,
+        search: exportUseScreenFilters ? exportFilter.search : undefined,
+        uncategorized: t('analysis.uncategorized'),
       });
       let loaded = false;
       const writeFile = async (storeId: string) => {
@@ -587,7 +633,7 @@
           let data: Uint8Array;
           try {
             data = await generateSalesAnalysisPDF(
-              slim, storeId, groupLevel, settings.locale, exportFilter, fontBase64,
+              slim, storeId, groupLevel, settings.locale, activeExportFilter(), fontBase64,
               salesReportAccumulatorFromMemo(baseMemo),
               extraChapters,
             );
@@ -605,7 +651,7 @@
               let detail: Uint8Array;
               try {
                 detail = await generateSalesAnalysisPDF(
-                  slim, storeId, groupLevel, settings.locale, exportFilter, fontBase64,
+                  slim, storeId, groupLevel, settings.locale, activeExportFilter(), fontBase64,
                   salesReportAccumulatorFromMemo(memo),
                   [],
                   { groupId: group.id, groupName: group.name, itemCodes: group.codes },
@@ -633,7 +679,7 @@
             from: reportFrom,
             to: reportTo,
             categoryLevel: groupLevel,
-            filter: exportFilter,
+            filter: activeExportFilter(),
             base: baseMemo,
             groups: groupMemos.map(({ group, memo }) => ({
               groupId: group.id,
@@ -1611,6 +1657,55 @@
     <form class="export-dialog-body" onsubmit={(event) => { event.preventDefault(); void exportPDF(); }}>
       <div class="export-dialog-scroll pane-scroll" tabindex="-1" data-autofocus>
         <div class="export-dialog-grid">
+          <section class="export-section export-section-categories" aria-labelledby="export-category-title">
+            <div class="export-section-heading">
+              <div>
+                <h3 id="export-category-title">{t('analysis.exportCategorySection')}</h3>
+                <p>{t('analysis.exportContentHint')}</p>
+              </div>
+            </div>
+            {#if exportCanUseScreenFilters}
+              <div class="export-mode" role="radiogroup" aria-label={t('analysis.exportCategorySection')}>
+                <button type="button" class:active={exportUseScreenFilters} role="radio" aria-checked={exportUseScreenFilters} disabled={exportingPDF} onclick={() => setExportUseScreenFilters(true)}>{t('analysis.exportUseScreenFilters')}</button>
+                <button type="button" class:active={!exportUseScreenFilters} role="radio" aria-checked={!exportUseScreenFilters} disabled={exportingPDF} onclick={() => setExportUseScreenFilters(false)}>{t('analysis.exportIgnoreScreenFilters')}</button>
+              </div>
+              {#if exportUseScreenFilters}
+                <div class="export-screen-filters">
+                  {#each exportScreenFilterRows() as row}
+                    <div class="export-screen-filter">
+                      <strong>{row.label} · {t('analysis.exportScreenFilterCount', { count: row.values.length })}</strong>
+                      <ul>{#each row.values as value}<li>{value}</li>{/each}</ul>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            {:else}
+              <div class="export-mode" role="radiogroup" aria-label={t('analysis.exportCategorySection')}>
+                <button type="button" class:active={exportFilter.mode === 'blacklist'} role="radio" aria-checked={exportFilter.mode === 'blacklist'} disabled={exportingPDF} onclick={() => setExportMode('blacklist')}>{t('analysis.exportModeAll')}</button>
+                <button type="button" class:active={exportFilter.mode === 'whitelist'} role="radio" aria-checked={exportFilter.mode === 'whitelist'} disabled={exportingPDF} onclick={() => setExportMode('whitelist')}>{t('analysis.exportModeOnly')}</button>
+              </div>
+              <div class="export-choice-panel">
+                <div class="export-choice-heading">
+                  <strong id="export-content-title">{exportFilter.mode === 'whitelist' ? t('analysis.exportKeepCategories') : t('analysis.exportSkipCategories')}</strong>
+                  <div>
+                    <button type="button" disabled={exportingPDF} onclick={() => { exportFilter = { ...exportFilter, categories: exportCategoryOptions().map((option) => option.id) }; }}>{t('analysis.selectAll')}</button>
+                    <button type="button" disabled={exportingPDF} onclick={() => { exportFilter = { ...exportFilter, categories: [] }; }}>{t('analysis.clear')}</button>
+                  </div>
+                </div>
+                <div class="export-choice-list export-choice-list-categories pane-scroll">
+                  {#each exportCategoryOptions() as option (option.id)}
+                    <label><input type="checkbox" checked={exportFilter.categories.includes(option.id)} disabled={exportingPDF} onchange={() => toggleExportCategory(option.id)} /><span>{option.code ? `${option.code}  ${option.name}` : option.name}</span></label>
+                  {:else}
+                    <div class="export-choice-empty">{t('analysis.noResults')}</div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+            <div class="export-flags">
+              <label class="export-check"><input type="checkbox" checked={exportFilter.excludeZeroGifts} disabled={exportingPDF} onchange={() => { exportFilter = { ...exportFilter, excludeZeroGifts: !exportFilter.excludeZeroGifts }; }} /><span>{t('analysis.exportSkipGifts')}</span></label>
+              <label class="export-check"><input type="checkbox" checked={exportFilter.excludeStamps} disabled={exportingPDF} onchange={() => { exportFilter = { ...exportFilter, excludeStamps: !exportFilter.excludeStamps }; }} /><span>{t('analysis.exportSkipStamps')}</span></label>
+            </div>
+          </section>
           <section class="export-section" aria-labelledby="export-outputs-title">
             <div class="export-section-heading">
               <h3 id="export-outputs-title">{t('analysis.exportOutputs')}</h3>
@@ -1678,48 +1773,19 @@
               </div>
             </section>
           {/if}
-          <section class="export-section export-section-categories" aria-labelledby="export-category-title">
-            <div class="export-section-heading">
-              <h3 id="export-category-title">{t('analysis.exportCategorySection')}</h3>
-            </div>
-            <div class="export-mode" role="radiogroup" aria-label={t('analysis.exportCategorySection')}>
-              <button type="button" class:active={exportFilter.mode === 'blacklist'} role="radio" aria-checked={exportFilter.mode === 'blacklist'} disabled={exportingPDF} onclick={() => setExportMode('blacklist')}>{t('analysis.exportModeAll')}</button>
-              <button type="button" class:active={exportFilter.mode === 'whitelist'} role="radio" aria-checked={exportFilter.mode === 'whitelist'} disabled={exportingPDF} onclick={() => setExportMode('whitelist')}>{t('analysis.exportModeOnly')}</button>
-            </div>
-            <div class="export-flags">
-              <label class="export-check"><input type="checkbox" checked={exportFilter.excludeZeroGifts} disabled={exportingPDF} onchange={() => { exportFilter = { ...exportFilter, excludeZeroGifts: !exportFilter.excludeZeroGifts }; }} /><span>{t('analysis.exportSkipGifts')}</span></label>
-              <label class="export-check"><input type="checkbox" checked={exportFilter.excludeStamps} disabled={exportingPDF} onchange={() => { exportFilter = { ...exportFilter, excludeStamps: !exportFilter.excludeStamps }; }} /><span>{t('analysis.exportSkipStamps')}</span></label>
-            </div>
-            <div class="export-choice-panel">
-              <div class="export-choice-heading">
-                <strong id="export-content-title">{exportFilter.mode === 'whitelist' ? t('analysis.exportKeepCategories') : t('analysis.exportSkipCategories')}</strong>
-                <div>
-                  <button type="button" disabled={exportingPDF} onclick={() => { exportFilter = { ...exportFilter, categories: exportCategoryOptions().map((option) => option.id) }; }}>{t('analysis.selectAll')}</button>
-                  <button type="button" disabled={exportingPDF} onclick={() => { exportFilter = { ...exportFilter, categories: [] }; }}>{t('analysis.clear')}</button>
-                </div>
-              </div>
-              <div class="export-choice-list export-choice-list-categories pane-scroll">
-                {#each exportCategoryOptions() as option (option.id)}
-                  <label><input type="checkbox" checked={exportFilter.categories.includes(option.id)} disabled={exportingPDF} onchange={() => toggleExportCategory(option.id)} /><span>{option.code ? `${option.code}  ${option.name}` : option.name}</span></label>
-                {:else}
-                  <div class="export-choice-empty">{t('analysis.noResults')}</div>
-                {/each}
-              </div>
-            </div>
-          </section>
         </div>
       </div>
       {#if exportTargetTotal === 0}
         <p class="export-dialog-warning">{t('analysis.exportNeedTarget')}</p>
       {:else if !exportPDFEnabled && !exportAIEnabled}
         <p class="export-dialog-warning">{t('analysis.exportNeedOutput')}</p>
-      {:else if exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0}
+      {:else if !exportUseScreenFilters && exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0}
         <p class="export-dialog-warning">{t('analysis.exportNeedCategory')}</p>
       {/if}
       <div class="dialog-actions export-dialog-actions">
         <span class="export-file-count">{t('analysis.exportFileCount', { count: exportFilesCount })}</span>
         <md-text-button type="button" onclick={closeExportDialog} disabled={exportingPDF}>{t('common.cancel')}</md-text-button>
-        <md-filled-button type="submit" onclick={() => void exportPDF()} disabled={exportingPDF || exportFilesCount === 0 || (exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0)}>{exportingPDF ? t('analysis.exportingPDFProgress', { current: pdfExportCurrent, total: pdfExportTotal }) : (isWebRuntime() ? t('web.exportConfirm') : t('analysis.exportConfirm'))}</md-filled-button>
+        <md-filled-button type="submit" onclick={() => void exportPDF()} disabled={exportingPDF || exportFilesCount === 0 || (!exportUseScreenFilters && exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0)}>{exportingPDF ? t('analysis.exportingPDFProgress', { current: pdfExportCurrent, total: pdfExportTotal }) : (isWebRuntime() ? t('web.exportConfirm') : t('analysis.exportConfirm'))}</md-filled-button>
       </div>
     </form>
   </dialog>
@@ -1987,6 +2053,11 @@
   .export-flags { display: grid; gap: var(--export-gap); }
   .export-check { display: flex; align-items: flex-start; gap: 0.65em; min-width: 0; color: var(--md-sys-color-on-surface); font-size: var(--export-text); line-height: 1.4; }
   .export-check-card { padding: 0.65em 0.75em; border: 1px solid var(--md-sys-color-outline-variant); border-radius: calc(var(--export-radius) - 2px); background: var(--md-sys-color-surface-container-lowest); }
+  .export-screen-filters { display: grid; gap: 0.55em; padding: 0.65em 0.75em; border: 1px solid var(--md-sys-color-outline-variant); border-radius: calc(var(--export-radius) - 2px); background: var(--md-sys-color-surface-container-lowest); }
+  .export-screen-filter { display: grid; gap: 0.25em; min-width: 0; }
+  .export-screen-filter strong { color: var(--md-sys-color-on-surface); font-size: var(--export-text); }
+  .export-screen-filter ul { display: grid; gap: 0.15em; margin: 0; padding: 0; list-style: none; color: var(--md-sys-color-on-surface-variant); font-size: var(--export-meta); }
+  .export-screen-filter li { overflow: hidden; text-overflow: ellipsis; }
   .export-check b { display: block; font-weight: 700; }
   .export-check small { display: block; color: var(--md-sys-color-on-surface-variant); font-size: var(--export-meta); }
   .export-check input { flex: 0 0 auto; width: var(--export-check); height: var(--export-check); margin-top: 1px; accent-color: var(--md-sys-color-primary); }

@@ -51,6 +51,9 @@ func (a *App) GetSalesAnalysisReportMemo(request SalesAnalysisReportMemoRequest)
 		excludeStamps:    request.ExcludeStamps,
 		mode:             strings.TrimSpace(request.Mode),
 		categories:       request.Categories,
+		facets:           request.Facets,
+		search:           strings.TrimSpace(request.Search),
+		uncategorized:    strings.TrimSpace(request.Uncategorized),
 	}
 	focusCatalog := catalog
 	groupID := strings.TrimSpace(request.GroupID)
@@ -112,6 +115,9 @@ type reportMemoFilter struct {
 	excludeStamps    bool
 	mode             string
 	categories       []string
+	facets           map[string][]string
+	search           string
+	uncategorized    string
 	itemCodes        map[string]struct{}
 }
 
@@ -157,7 +163,7 @@ func buildPeriodMemo(
 		if storeIndex >= 0 && row.S != storeIndex {
 			continue
 		}
-		if !includePackedReportRow(packed.Dict, row, filter, level) {
+		if !includePackedReportRow(packed.Dict, row, stores, filter, level) {
 			continue
 		}
 		builder.totals.SaleQuantity += row.Sq
@@ -301,7 +307,7 @@ func rankedGreater(left, right float64, leftID, rightID string) bool {
 	return leftID < rightID
 }
 
-func includePackedReportRow(dict []string, row SalesAnalysisPackedRow, filter reportMemoFilter, level string) bool {
+func includePackedReportRow(dict []string, row SalesAnalysisPackedRow, stores []SalesAnalysisStoreSummary, filter reportMemoFilter, level string) bool {
 	if filter.itemCodes != nil {
 		code := strings.TrimSpace(packedString(dict, row.Ac))
 		if _, ok := filter.itemCodes[code]; !ok {
@@ -323,6 +329,12 @@ func includePackedReportRow(dict []string, row SalesAnalysisPackedRow, filter re
 	if filter.excludeZeroGifts && math.Abs(row.Ns) <= reportNominalAmount && isGiftCategoryText(categoryFields) && !cashCouponPattern.MatchString(text) {
 		return false
 	}
+	if !packedRowMatchesFacets(dict, row, filter) {
+		return false
+	}
+	if !packedRowMatchesSearch(dict, row, stores, filter.search) {
+		return false
+	}
 	if len(filter.categories) == 0 {
 		return filter.mode != "whitelist"
 	}
@@ -336,6 +348,84 @@ func includePackedReportRow(dict []string, row SalesAnalysisPackedRow, filter re
 		return listed
 	}
 	return !listed
+}
+
+func packedRowMatchesFacets(dict []string, row SalesAnalysisPackedRow, filter reportMemoFilter) bool {
+	if len(filter.facets) == 0 {
+		return true
+	}
+	for _, level := range []string{"category1", "category2", "category3", "category4", "category5"} {
+		selected := filter.facets[level]
+		if len(selected) == 0 {
+			continue
+		}
+		code, name := packedCategory(dict, row, level)
+		if !categorySelectionContains(selected, code, name, filter.uncategorized) {
+			return false
+		}
+	}
+	return true
+}
+
+func packedRowMatchesSearch(dict []string, row SalesAnalysisPackedRow, stores []SalesAnalysisStoreSummary, search string) bool {
+	term := strings.ToLower(strings.TrimSpace(search))
+	if term == "" {
+		return true
+	}
+	storeID, storeLabel := "", ""
+	if row.S >= 0 && row.S < len(stores) {
+		storeID = stores[row.S].BusinessID
+		storeLabel = stores[row.S].Label
+	}
+	fields := []string{
+		storeID, storeLabel,
+		packedString(dict, row.Ac), packedString(dict, row.An), packedString(dict, row.Br),
+		packedString(dict, row.C1), packedString(dict, row.K1),
+		packedString(dict, row.C2), packedString(dict, row.K2),
+		packedString(dict, row.C3), packedString(dict, row.K3),
+		packedString(dict, row.C4), packedString(dict, row.K4),
+		packedString(dict, row.C5), packedString(dict, row.K5),
+	}
+	for _, field := range fields {
+		if strings.Contains(strings.ToLower(field), term) {
+			return true
+		}
+	}
+	return false
+}
+
+func categorySelectionContains(selected []string, code, name, uncategorized string) bool {
+	label := reportCategoryLabel(code, name, uncategorized)
+	fallbackName := name
+	if fallbackName == "" {
+		fallbackName = reportUncategorized(uncategorized)
+	}
+	for _, value := range selected {
+		if value == label || value == fallbackName || (code != "" && value == code) {
+			return true
+		}
+	}
+	return false
+}
+
+func reportCategoryLabel(code, name, uncategorized string) string {
+	if code != "" && name != "" && name != code {
+		return code + "  " + name
+	}
+	if name != "" {
+		return name
+	}
+	if code != "" {
+		return code
+	}
+	return reportUncategorized(uncategorized)
+}
+
+func reportUncategorized(value string) string {
+	if strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	return "未分類"
 }
 
 func isGiftCategoryText(values []string) bool {

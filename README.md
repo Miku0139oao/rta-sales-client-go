@@ -38,7 +38,7 @@ Only one window may run at a time. If a launch appears to do nothing, check the 
 
 A two-minute silent walkthrough with captions:
 
-[Usage tutorial](https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.4.3/RTA-Sales-Analyzer-tutorial.mp4)
+[Usage tutorial](https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.4.4/RTA-Sales-Analyzer-tutorial.mp4)
 
 ### Other release files
 

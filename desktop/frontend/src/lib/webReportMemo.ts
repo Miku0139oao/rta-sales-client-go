@@ -126,6 +126,9 @@ function filterItems(
     excludeStamps: request.excludeStamps,
     mode: request.mode === 'whitelist' ? 'whitelist' : 'blacklist',
     categories: request.categories ?? [],
+    facets: request.facets ?? {},
+    search: request.search ?? '',
+    uncategorized: request.uncategorized,
   };
   const level = categoryLevel(request.categoryLevel);
   const codes = new Set((group?.codes ?? []).map((code) => code.trim()).filter(Boolean));

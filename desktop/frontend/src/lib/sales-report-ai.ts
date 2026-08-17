@@ -1,5 +1,5 @@
 import { ALL_STORES_REPORT_ID, isAllStoresReport, salesAnalysisPDFFilename } from './sales-report-pdf';
-import type { SalesReportFilter } from './salesReportItems';
+import { salesReportHasScreenFilters, type SalesReportFilter } from './salesReportItems';
 import type {
   Locale,
   SalesAnalysisPeriodMemo,
@@ -37,17 +37,22 @@ export function buildSalesAnalysisAIMarkdown(input: SalesReportAIInput): string 
   const previous = periodMemo(input.base, 'previous');
   const yearAgo = periodMemo(input.base, 'yearAgo');
   const storeName = isAllStoresReport(input.storeId) ? copy.allStores : (input.storeLabel || input.storeId);
+  const filterLines = describeFilter(input.filter, copy);
   const payload = {
     storeId: isAllStoresReport(input.storeId) ? ALL_STORES_REPORT_ID : input.storeId,
     storeLabel: storeName,
     from: input.from,
     to: input.to,
     categoryLevel: input.categoryLevel,
+    currency: 'HKD',
+    alreadyFiltered: filterLines.length > 0,
     filter: {
       mode: input.filter.mode,
       excludeZeroGifts: input.filter.excludeZeroGifts,
       excludeStamps: input.filter.excludeStamps,
       categories: input.filter.categories,
+      facets: input.filter.facets ?? {},
+      search: input.filter.search ?? '',
     },
     totals: {
       current: compactTotals(current?.totals),
@@ -85,25 +90,50 @@ export function buildSalesAnalysisAIMarkdown(input: SalesReportAIInput): string 
     `---`,
     `title: ${yamlEscape(`${copy.title} — ${storeName}`)}`,
     `purpose: microsoft-copilot-sales-briefing`,
+    `audience: ${yamlEscape(copy.audience)}`,
     `store: ${yamlEscape(storeName)}`,
     `period: ${input.from} / ${input.to}`,
+    `currency: HKD`,
     `---`,
     ``,
     `# ${copy.title} — ${storeName}`,
     ``,
-    copy.howto,
+    `## ${copy.instructions}`,
+    ``,
+    `1. ${copy.ruleSource}`,
+    `2. ${copy.ruleNoInvent}`,
+    `3. ${copy.ruleCurrency}`,
+    `4. ${copy.ruleScope}`,
+    `5. ${copy.ruleOutput}`,
+    ``,
+    `### ${copy.askTitle}`,
+    ``,
+    `- ${copy.ask1}`,
+    `- ${copy.ask2}`,
+    `- ${copy.ask3}`,
     ``,
     `## ${copy.snapshot}`,
     ``,
     `- ${copy.store}: ${storeName}`,
     `- ${copy.period}: ${input.from} → ${input.to}`,
+    `- ${copy.currencyLabel}: HKD / HK$`,
+  ];
+
+  if (filterLines.length > 0) {
+    lines.push(`- ${copy.scopeNote}: ${copy.scopeFiltered}`);
+    for (const line of filterLines) lines.push(`  - ${line}`);
+  } else {
+    lines.push(`- ${copy.scopeNote}: ${copy.scopeAll}`);
+  }
+
+  lines.push(
     `- ${copy.netSales}: ${money(current?.totals?.netSalesAmount)} (${copy.vsPrevious} ${percent(current?.totals?.netSalesAmount, previous?.totals?.netSalesAmount)}; ${copy.vsYearAgo} ${percent(current?.totals?.netSalesAmount, yearAgo?.totals?.netSalesAmount)})`,
     `- ${copy.netQuantity}: ${qty(current?.totals?.netQuantity)} (${copy.vsYearAgo} ${percent(current?.totals?.netQuantity, yearAgo?.totals?.netQuantity)})`,
     `- ${copy.transactions}: ${qty(current?.totals?.transactionCount)}`,
     ``,
     `## ${copy.groupSummary}`,
     ``,
-  ];
+  );
 
   if (input.groups.length === 0) {
     lines.push(copy.noGroups, '');
@@ -133,8 +163,32 @@ export function buildSalesAnalysisAIMarkdown(input: SalesReportAIInput): string 
   appendItemTable(lines, payload.topQuantity, copy);
 
   lines.push(`## ${copy.structured}`, '');
+  lines.push(copy.jsonHint, '');
   lines.push('```json', JSON.stringify(payload, null, 2), '```', '');
   return lines.join('\n');
+}
+
+function describeFilter(filter: SalesReportFilter, copy: ReturnType<typeof aiCopy>): string[] {
+  const lines: string[] = [];
+  const labels: Record<string, string> = {
+    category1: copy.category1,
+    category2: copy.category2,
+    category3: copy.category3,
+    category4: copy.category4,
+    category5: copy.category5,
+  };
+  for (const key of ['category1', 'category2', 'category3', 'category4', 'category5'] as const) {
+    const values = filter.facets?.[key] ?? [];
+    if (values.length > 0) lines.push(`${labels[key]}: ${values.join('；')}`);
+  }
+  if (filter.search?.trim()) lines.push(`${copy.search}: ${filter.search.trim()}`);
+  if (filter.mode === 'whitelist' && filter.categories.length > 0) {
+    lines.push(`${copy.keepOnly}: ${filter.categories.join('；')}`);
+  } else if (filter.mode === 'blacklist' && filter.categories.length > 0) {
+    lines.push(`${copy.exclude}: ${filter.categories.join('；')}`);
+  }
+  if (salesReportHasScreenFilters(filter) || filter.categories.length > 0) return lines;
+  return lines;
 }
 
 function appendItemTable(
@@ -204,15 +258,33 @@ function aiCopy(locale: Locale) {
   if (locale === 'en') {
     return {
       title: 'RTA sales analysis',
+      audience: 'Microsoft Copilot',
       allStores: 'All stores',
-      howto: [
-        'Use this file as the only source for Microsoft Copilot.',
-        'Upload it to Windows Copilot, copilot.microsoft.com, or Microsoft 365 Copilot, then ask for exceptions, declining groups, and where to put effort next month.',
-        'Answer in the user\'s language. Currency is HKD. Do not invent numbers that are not in this file.',
-      ].join(' '),
-      snapshot: 'Snapshot',
+      instructions: 'Instructions for Copilot',
+      ruleSource: 'Use only the numbers in this file. If a figure is not here, say it is not in the file.',
+      ruleNoInvent: 'Do not invent products, categories, stores, or amounts.',
+      ruleCurrency: 'All money is Hong Kong dollars (HKD / HK$). Do not convert currency.',
+      ruleScope: 'The tables below are already filtered. Do not add categories or products that are not listed.',
+      ruleOutput: 'Answer in the user\'s language. Keep answers short. Every claim must cite a number from this file.',
+      askTitle: 'Suggested questions',
+      ask1: 'In 3 sentences, how did this period perform versus last period and last year?',
+      ask2: 'Which listed products or categories dropped, and by how much?',
+      ask3: 'Give at most 5 next-month actions. Each action must point to one number in the tables.',
+      snapshot: 'Scope and totals',
       store: 'Store',
       period: 'Period',
+      currencyLabel: 'Currency',
+      scopeNote: 'Coverage',
+      scopeFiltered: 'Already limited to the filters below. Treat missing categories as out of scope, not zero sales.',
+      scopeAll: 'Whole-store figures in this file, after skipping zero-value gifts and stamps if those flags are on.',
+      search: 'Search',
+      keepOnly: 'Keep only',
+      exclude: 'Exclude',
+      category1: 'Merchandise class',
+      category2: 'Department',
+      category3: 'Category',
+      category4: 'Sub-category',
+      category5: 'Segment',
       netSales: 'Net sales',
       netQuantity: 'Net quantity',
       transactions: 'Transactions',
@@ -232,20 +304,39 @@ function aiCopy(locale: Locale) {
       topQuantity: 'Top products by quantity',
       product: 'Product',
       amount: 'Sales',
-      structured: 'Structured data',
+      structured: 'Machine-readable data',
+      jsonHint: 'Use the JSON only to look up exact figures. Do not ignore the rules above.',
     };
   }
   return {
     title: 'RTA 銷售分析',
+    audience: 'Microsoft Copilot',
     allStores: '全部門店',
-    howto: [
-      '這份檔案是給 Microsoft Copilot 用的分析摘要。',
-      '上傳到 Windows Copilot、copilot.microsoft.com 或 Microsoft 365 Copilot，然後問異常、掉量群組，以及下個月人力該放哪。',
-      '請用繁中回答。金額是港幣。不要發明這份檔沒有出現的數字。',
-    ].join(''),
-    snapshot: '總覽',
+    instructions: '給 Copilot 的規則（必須遵守）',
+    ruleSource: '只准使用這份檔案裡的數字。檔案沒有的數字，就寫「檔案沒有」。',
+    ruleNoInvent: '不准發明商品、分類、門店或金額。',
+    ruleCurrency: '金額一律是港幣（HKD / HK$），不要換算其他幣別。',
+    ruleScope: '下面的表已經是篩選後的結果。沒有出現的分類或商品視為不在範圍，不是銷售為 0。',
+    ruleOutput: '用繁體中文回答，短句。每一個判斷都要引用這份檔裡的一個數字。',
+    askTitle: '建議這樣問',
+    ask1: '用 3 句話說明本期相對上期、去年同期的表現。',
+    ask2: '表裡哪些商品或分類在掉？掉多少？',
+    ask3: '下個月最多給 5 個行動，每一點都要對到表裡的一個數字。',
+    snapshot: '範圍與總數',
     store: '門店',
     period: '期間',
+    currencyLabel: '幣別',
+    scopeNote: '資料範圍',
+    scopeFiltered: '已限於下列篩選。沒列出的分類不要當「沒賣掉」。',
+    scopeAll: '這份檔是全店數字；若有勾忽略贈品／印花，那些列已不含在內。',
+    search: '搜尋',
+    keepOnly: '只保留',
+    exclude: '排除',
+    category1: '商品分類',
+    category2: '商品部門',
+    category3: '商品種類',
+    category4: '四級類目',
+    category5: '小分類',
     netSales: '淨銷售額',
     netQuantity: '淨銷售數量',
     transactions: '交易次數',
@@ -265,6 +356,7 @@ function aiCopy(locale: Locale) {
     topQuantity: '銷量 Top 商品',
     product: '商品',
     amount: '銷售額',
-    structured: '結構化資料',
+    structured: '機器可讀資料',
+    jsonHint: 'JSON 只用來核對精確數字，上面的規則仍要遵守。',
   };
 }
