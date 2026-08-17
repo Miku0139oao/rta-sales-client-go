@@ -27,6 +27,8 @@ desktop/frontend/coverage/
 desktop/frontend/dist/*
 !desktop/frontend/dist/.gitkeep
 desktop/frontend/dist-web/
+docs/tutorial-build/frames/
+docs/tutorial-frames/
 desktop/frontend/src/lib/wails/
 desktop/frontend/bindings/
 desktop/frontend/package.json.md5

@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <title>RTA 銷售分析使用教學</title>
+  <style>
+    html, body { margin: 0; background: #0f2a24; }
+    .slide {
+      width: 1920px;
+      height: 1080px;
+      position: relative;
+      overflow: hidden;
+      font-family: "Segoe UI", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+      background: #f4f7f5;
+    }
+    .title-slide { display: grid; place-items: center; background: #1b4d3e; color: #fff; }
+    .title-slide h1 { margin: 0 0 18px; font-size: 72px; font-weight: 700; letter-spacing: .04em; }
+    .title-slide p { margin: 0; font-size: 32px; color: #cfe8dc; }
+    .end-slide .meta { margin-top: 28px; font-size: 24px; color: #9cc9b6; }
+    .frame {
+      position: absolute; inset: 0 0 148px 0;
+      display: grid; place-items: center;
+      padding: 36px 56px 12px;
+    }
+    .shot {
+      width: 1680px; height: 820px;
+      object-fit: contain;
+      object-position: top center;
+      border-radius: 18px;
+      background: #fff;
+      box-shadow: 0 18px 50px rgba(15, 42, 36, .18);
+    }
+    .card {
+      width: 1680px; min-height: 720px;
+      padding: 56px 72px;
+      border-radius: 24px;
+      background: #fff;
+      box-shadow: 0 18px 50px rgba(15, 42, 36, .16);
+    }
+    .card h2 { margin: 0 0 28px; font-size: 46px; color: #16352c; }
+    .card ol, .card ul { margin: 0; padding-left: 1.15em; color: #24443a; font-size: 32px; line-height: 1.55; }
+    .card li { margin: 10px 0; }
+    .card table { width: 100%; border-collapse: collapse; font-size: 28px; }
+    .card th, .card td { padding: 14px 16px; text-align: left; border-bottom: 1px solid #d7e4de; }
+    .card th { color: #3d6a5b; font-weight: 650; }
+    .caption {
+      position: absolute; left: 0; right: 0; bottom: 0; height: 148px;
+      display: grid; place-items: center;
+      padding: 0 80px;
+      background: #12241e;
+      color: #fff;
+      font-size: 34px;
+      font-weight: 500;
+      text-align: center;
+      line-height: 1.35;
+    }
+    .badge { display: inline-block; margin-bottom: 18px; padding: 6px 14px; border-radius: 999px; background: #dceee6; color: #1b4d3e; font-size: 22px; font-weight: 700; }
+    .mock-export { width: 980px; padding: 28px 32px; border-radius: 20px; background: #1c2422; color: #e8eeeb; box-shadow: 0 18px 50px rgba(0,0,0,.28); }
+    .mock-export h3 { margin: 0 0 8px; font-size: 28px; }
+    .hint { margin: 0 0 18px; color: #9aa8a2; font-size: 18px; }
+    .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+    .seg b { display: grid; place-items: center; min-height: 52px; border-radius: 12px; font-size: 20px; }
+    .on { background: #2f6b57; }
+    .off { background: #2a3330; color: #b7c2bd; }
+    .chip { margin: 0 0 8px; color: #c5d4ce; font-size: 20px; }
+    .fmt { display: grid; gap: 10px; }
+    .fmt div { padding: 14px 16px; border-radius: 12px; background: #262f2c; }
+    .fmt b { display: block; font-size: 20px; }
+    .fmt span { color: #9aa8a2; font-size: 16px; }
+    .check { color: #7dcea0; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const slides = [
+  { type: "title", title: "RTA 銷售分析", sub: "使用教學 · 0.4.4" },
+  { type: "bullets", heading: "這支教學會帶你做什麼", items: [
+    "加帳號並測試登入",
+    "查本期、上期、去年同期的銷售",
+    "用商品分類／部門／小分類縮小範圍",
+    "把畫面上的篩選匯出成 PDF 與 AI 檔",
+    "把當日數字填進公司 Excel（另存新檔）"
+  ], caption: "操作與舊版不同：畫面勾的分類現在會進報告。" },
+  { type: "bullets", heading: "安裝", items: [
+    "到 GitHub Releases 下載 RTA-Excel-Filler-setup.exe",
+    "雙擊安裝。若提示「不常下載」，選保留／仍要執行",
+    "按 Windows 鍵，搜尋「RTA 銷售分析」開啟",
+    "同一時間只能開一個視窗；沒反應先看工作列"
+  ], caption: "一般使用者請用安裝檔，不要用原始碼。" },
+  { type: "shot", src: "../images/account-pool-desktop-verified.png", caption: "左邊選「帳號」，按右上角新增。填顯示名稱、帳號、密碼。" },
+  { type: "bullets", heading: "測試並啟用", items: [
+    "建議按「測試並啟用」，程式會真的登入 RTA",
+    "用來確認帳密、驗證碼與門店權限",
+    "未啟用的帳號不會用於分析與 Excel 填入",
+    "多本帳號時，清單由上到下是優先順序"
+  ], caption: "密碼放在 Windows 認證管理員，不會明文出現。" },
+  { type: "bullets", heading: "商品代碼（選用）", items: [
+    "左邊「商品代碼」可建 promoter group",
+    "一組 Item Code，之後可只看這組貨",
+    "匯出時也可把群組摘要加進總報告",
+    "沒有群組也能做全店分析"
+  ], caption: "有專櫃或自己跟的貨號時再建立，不是必做。" },
+  { type: "shot", src: "../images/sales-analysis-overview.png", caption: "「銷售分析」：選帳號與門店，用月份比較，再按開始分析。" },
+  { type: "table", heading: "月份比較會查五段時間", rows: [
+    ["本期", "你選的那個月"],
+    ["上期／前期", "上個月、再上個月"],
+    ["去年同期", "去年同一個月份"],
+    ["去年下月", "去年的下一個月，用來準備接下來要推的貨"]
+  ], caption: "月份還沒過完時，前四段會算到跟今天同一日。" },
+  { type: "bullets", heading: "查詢中", items: [
+    "本期明細會先出來，其餘期間在背景補",
+    "進度列顯示目前／全部",
+    "補完之前，匯出按鈕可能還不能按",
+    "可先看概覽，不必等全部結束才開始讀數字"
+  ], caption: "本期已可看時，其餘資料仍會繼續補上。" },
+  { type: "bullets", heading: "六個分頁", items: [
+    "概覽：淨銷、退款、件數、Top 商品",
+    "每週變化：各週、各店走勢",
+    "關注：去年下月賣得好的商品",
+    "分類／商品／門店：比較與明細"
+  ], caption: "交易次數與客單價是全店數字；一篩選就會隱藏。" },
+  { type: "shot", src: "../images/sales-analysis-overview.png", caption: "用商品分類、商品部門、小分類或搜尋縮小範圍。可同時勾好幾層。" },
+  { type: "export", caption: "按「匯出 PDF」。若畫面有篩選，預設「依目前分析篩選」。" },
+  { type: "bullets", heading: "PDF 與給 AI 的檔", items: [
+    "兩個格式用同一組條件，不用再勾一次分類",
+    "PDF：給人開會看的正式報告",
+    "匯出給 AI 分析：Markdown，上傳 Microsoft Copilot",
+    "可兩個都勾；要整店再改「不套用畫面篩選」"
+  ], caption: "畫面勾了什麼，報告就出什麼。這是跟舊版最大的差別。" },
+  { type: "bullets", heading: "AI 檔怎麼問 Copilot", items: [
+    "只准用檔裡的數字，不准發明商品或金額",
+    "幣別是港幣；沒列出的分類不要當成沒賣掉",
+    "檔裡有 3 個建議提問，請它引用表內數字",
+    "上傳 Windows Copilot 或 copilot.microsoft.com"
+  ], caption: "不要只丟原始報表。這份檔已經寫好規則。" },
+  { type: "bullets", heading: "群組報告", items: [
+    "有商品代碼時才會出現",
+    "預設：總報告只放各群組一頁摘要",
+    "需要完整章節時，再選「詳細（獨立匯出 PDF）」",
+    "沒勾群組就只出全店報告，這是正常的"
+  ], caption: "不要把所有群組詳細都塞進同一份 PDF。" },
+  { type: "shot", src: "../images/excel-range-desktop.png", caption: "「Excel 填入」：開啟活頁簿，核對範圍後按開始分析。" },
+  { type: "bullets", heading: "Excel 三步", items: [
+    "選擇範圍：工作表、開始日、結束日",
+    "檢查結果：將變更／不變／問題列",
+    "另存並寫入：一定是新檔，來源檔不會被改",
+    "只寫 L 欄金額與 AB 欄交易次數"
+  ], caption: "來源檔永遠另存。公式儲存格不會被改寫。" },
+  { type: "bullets", heading: "請記住", items: [
+    "同時只能開一個視窗",
+    "匯出前等進度走完",
+    "改過篩選後請重開匯出對話框",
+    "帳號刪除才會連密碼一起清掉"
+  ], caption: "完整逐步說明見程式資料夾 docs／GitHub 的教學文件。" },
+  { type: "title", title: "可以開始用了", sub: "RTA 銷售分析 0.4.4", end: true }
+];
+
+const i = Math.max(0, Math.min(slides.length - 1, Number(new URLSearchParams(location.search).get("s") || "0")));
+const s = slides[i];
+const root = document.getElementById("root");
+
+function bullets(s) {
+  return `<div class="slide"><div class="frame"><div class="card"><span class="badge">步驟</span><h2>${s.heading}</h2><ol>${s.items.map((x) => `<li>${x}</li>`).join("")}</ol></div></div><div class="caption">${s.caption}</div></div>`;
+}
+function table(s) {
+  return `<div class="slide"><div class="frame"><div class="card"><span class="badge">說明</span><h2>${s.heading}</h2><table><tbody>${s.rows.map((r) => `<tr><th>${r[0]}</th><td>${r[1]}</td></tr>`).join("")}</tbody></table></div></div><div class="caption">${s.caption}</div></div>`;
+}
+function shot(s) {
+  return `<div class="slide"><div class="frame"><img class="shot" src="${s.src}" alt="" /></div><div class="caption">${s.caption}</div></div>`;
+}
+function title(s) {
+  return `<div class="slide title-slide${s.end ? " end-slide" : ""}"><div><h1>${s.title}</h1><p>${s.sub}</p>${s.end ? `<p class="meta">無聲教學 · 畫面有字即可</p>` : ""}</div></div>`;
+}
+function exportSlide(s) {
+  return `<div class="slide"><div class="frame"><div class="mock-export">
+    <h3>匯出篩選</h3>
+    <p class="hint">PDF 與 AI 分析檔都用同一組條件</p>
+    <div class="seg"><b class="on">依目前分析篩選</b><b class="off">不套用畫面篩選</b></div>
+    <div class="chip">小分類 · 2 項</div>
+    <div class="chip">A01010203　RESPIRATORY SYSTEM</div>
+    <div class="chip">A01010204　NEURO-MUSCULAR SYSTEM</div>
+    <div class="fmt">
+      <div><b class="check">☑ PDF 報告</b><span>給人閱讀的正式報告</span></div>
+      <div><b class="check">☑ 匯出給 AI 分析</b><span>Markdown，上傳 Microsoft Copilot</span></div>
+    </div>
+  </div></div><div class="caption">${s.caption}</div></div>`;
+}
+
+const render = { title, bullets, table, shot, export: exportSlide };
+root.innerHTML = render[s.type](s);
+document.title = `slide-${String(i).padStart(2, "0")}`;
+</script>
+</body>
+</html>

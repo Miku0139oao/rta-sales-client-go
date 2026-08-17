@@ -36,9 +36,11 @@ The installer is the recommended distribution. Windows 10 and Windows 11 normall
 
 Only one window may run at a time. If a launch appears to do nothing, check the taskbar; the application may already be open.
 
-A two-minute silent walkthrough with captions:
+A silent walkthrough with captions, updated for 0.4.4 filters and export:
 
-[Usage tutorial](https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.4.4/RTA-Sales-Analyzer-tutorial.mp4)
+[Tutorial video](https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.4.4/RTA-Sales-Analyzer-tutorial.mp4)
+
+A longer written guide (Traditional Chinese): [docs/tutorial.zh-TW.md](docs/tutorial.zh-TW.md)
 
 ### Other release files
 
@@ -119,17 +121,17 @@ Last year's following month is always the full month.
 Transactions and basket value are whole-store figures.  
 If you filter to one category or one product, those two numbers are hidden, because the source has no figure at that grain.
 
-### Export PDFs
+### Export PDF and AI files
 
-Click **Export PDFs (combined + stores)** and select a folder.
+Click **Export PDF**. If category filters or search are active, the dialog defaults to **Use the current analysis filters** and lists what you selected.
 
-The application produces:
+- **PDF report** and **Export for AI analysis** share that same filter. You do not pick categories again.
+- Choose **Ignore on-screen filters** if you want whole-store figures.
+- The AI file is Markdown for Microsoft Copilot. It includes hard rules and suggested questions.
+- If you have item-code groups, the main PDF keeps a one-page summary per group unless you ask for a separate detailed PDF.
 
-- 1 combined report for every successful store
-- 1 report per successful store
-
-The success banner shows the folder. Click **Open folder** to open it.  
-If a file name already exists, a number is added. **Existing files are not overwritten.**
+Pick a folder to write the files. If a name already exists, a number is added. **Existing files are not overwritten.**  
+The full walkthrough is in [docs/tutorial.zh-TW.md](docs/tutorial.zh-TW.md).
 
 ---
 
