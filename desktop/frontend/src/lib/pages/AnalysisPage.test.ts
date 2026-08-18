@@ -14,7 +14,14 @@ vi.mock('../sales-report-pdf', async (importOriginal) => {
     prepareSalesAnalysisFontFromText: vi.fn(async () => 'Zm9udA=='),
   };
 });
+vi.mock('../runtime', () => ({ isWebRuntime: vi.fn(() => false) }));
+vi.mock('../webStorage', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../webStorage')>();
+  return { ...actual, loadWebAnalysisSnapshot: vi.fn(() => null) };
+});
 
+import { isWebRuntime } from '../runtime';
+import { loadWebAnalysisSnapshot } from '../webStorage';
 import AnalysisPage from './AnalysisPage.svelte';
 
 function reportMemo() {
@@ -91,7 +98,11 @@ analysisResult.periods = [
   { key: 'yearAgoNext', label: '去年下月', from: '2025-09-01', to: '2025-09-30', complete: true, successfulStores: 2, totals: analysisResult.totals, stores: [], items: analysisResult.items, issues: [] },
 ];
 
-beforeEach(() => configureBackend(undefined));
+beforeEach(() => {
+  configureBackend(undefined);
+  vi.mocked(isWebRuntime).mockReturnValue(false);
+  vi.mocked(loadWebAnalysisSnapshot).mockReturnValue(null);
+});
 afterEach(() => {
   cleanup();
   configureBackend(undefined);
@@ -118,6 +129,29 @@ describe('sales analysis page', () => {
     await waitFor(() => expect(screen.getByText('已選 16 間門店')).toBeInTheDocument());
     expect(listStores).toHaveBeenCalledWith({ profileId: 'profile-1', simulateStoreCount: 16 });
     expect(screen.getByText('107 - Central · 模擬 16')).toBeInTheDocument();
+  });
+
+  it('reloads stores after 修改查詢 when a web snapshot skipped the query form', async () => {
+    vi.mocked(isWebRuntime).mockReturnValue(true);
+    vi.mocked(loadWebAnalysisSnapshot).mockReturnValue({
+      ...analysisResult,
+      stores: [{ businessId: '107', label: '107 - Central', totals: analysisResult.totals }],
+    });
+    const listStores = vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]);
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [{
+        id: 'profile-1', displayName: 'tat', enabled: true, priority: 1, hasCredentials: true,
+      }]),
+      ListSalesAnalysisStores: listStores,
+      ClearSalesAnalysis: vi.fn(async () => undefined),
+    } });
+    render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
+    await waitFor(() => expect(screen.getByText('修改查詢')).toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument();
+    await fireEvent.click(screen.getByText('修改查詢'));
+    await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
+    expect(screen.queryByText('這個帳號沒有可用門店')).not.toBeInTheDocument();
+    expect(listStores).toHaveBeenCalled();
   });
 
   it('loads packed product rows after a slim analysis summary', async () => {

@@ -158,6 +158,7 @@
   let pageRows: SalesAnalysisItem[] = [];
   let loadedSimulateCount: number | undefined;
   let hydrateGeneration = 0;
+  let storeLoadGeneration = 0;
 
   $: if (!loadingProfiles && profileId && loadedSimulateCount !== settings.simulateStoreCount) {
     loadedSimulateCount = settings.simulateStoreCount;
@@ -256,7 +257,7 @@
         const saved = loadWebAnalysisSnapshot();
         if (saved) result = saved;
       }
-      if (profileId && !result) await loadStores();
+      if (profileId) await loadStores({ keepResult: Boolean(result) });
     } catch (caught) {
       error = errorMessage(settings.locale, caught);
     } finally {
@@ -264,21 +265,32 @@
     }
   }
 
-  async function loadStores() {
+  async function loadStores(options: { keepResult?: boolean } = {}) {
     if (!profileId) return;
+    const generation = ++storeLoadGeneration;
     loadingStores = true;
     error = '';
-    void discardResult();
+    if (!options.keepResult) void discardResult();
     stores = [];
     selectedStoreIds = new Set<string>();
     try {
-      stores = await backend.listSalesAnalysisStores(profileId, settings.simulateStoreCount);
-      selectedStoreIds = new Set(stores.map((store) => store.businessId));
+      const listed = await backend.listSalesAnalysisStores(profileId, settings.simulateStoreCount);
+      if (generation !== storeLoadGeneration) return;
+      stores = listed;
+      selectedStoreIds = new Set(listed.map((store) => store.businessId));
     } catch (caught) {
+      if (generation !== storeLoadGeneration) return;
       error = errorMessage(settings.locale, caught);
     } finally {
-      loadingStores = false;
+      if (generation === storeLoadGeneration) loadingStores = false;
     }
+  }
+
+  async function changeQuery() {
+    dismissExportNotice();
+    resetFilters();
+    await discardResult();
+    if (profileId) await loadStores({ keepResult: true });
   }
 
   function toggleStore(storeId: string) {
@@ -1298,7 +1310,7 @@
         <md-filled-button type="button" onclick={openExportDialog} disabled={exportingPDF || loadingItems || result.pending}>
           <span class="material-symbols-rounded" slot="icon" aria-hidden="true">picture_as_pdf</span>{exportingPDF ? t('analysis.exportingPDFProgress', { current: pdfExportCurrent, total: pdfExportTotal }) : t('analysis.exportPDF')}
         </md-filled-button>
-        <md-outlined-button type="button" onclick={() => { dismissExportNotice(); resetFilters(); void discardResult(); }} disabled={exportingPDF}>
+        <md-outlined-button type="button" onclick={() => void changeQuery()} disabled={exportingPDF}>
           <span class="material-symbols-rounded" slot="icon" aria-hidden="true">tune</span>{t('analysis.changeQuery')}
         </md-outlined-button>
       </div>
