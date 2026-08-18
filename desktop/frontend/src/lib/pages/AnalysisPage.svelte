@@ -182,6 +182,7 @@
     if (!matchesFilters(item, selections, search)) return false;
     return !groupScopeActive || selectedGroupCodes.has(item.articleCode.trim());
   });
+  $: productScopeActive = groupScopeActive || filtersActive(selections, search);
   $: facetOptionMap = listFacetOptionMap(currentPeriod, selections, selectedGroupCodes, groupScopeActive, settings.locale);
   $: currentTotals = totalsForPeriod(currentPeriod, selections, search, selectedGroupCodes, groupScopeActive);
   $: previousTotals = totalsForPeriod(periodByKey(reportPeriods, 'previous'), selections, search, selectedGroupCodes, groupScopeActive);
@@ -189,8 +190,12 @@
   $: yearAgoTotals = totalsForPeriod(periodByKey(reportPeriods, 'yearAgo'), selections, search, selectedGroupCodes, groupScopeActive);
   $: performanceRows = buildPerformanceRows(currentTotals, previousTotals, yearAgoTotals);
   $: categoryRows = buildCategoryComparison(reportPeriods, groupLevel, selections, search, selectedGroupCodes, groupScopeActive);
-  $: topSales = buildTopItems(filteredItems, 'amount').slice(0, 15);
-  $: topQuantity = buildTopItems(filteredItems, 'quantity').slice(0, 15);
+  $: topSales = productScopeActive || (currentPeriod?.items?.length ?? 0) > 0
+    ? buildTopItems(filteredItems, 'amount').slice(0, 15)
+    : rankedToTopItems(currentPeriod?.topAmount);
+  $: topQuantity = productScopeActive || (currentPeriod?.items?.length ?? 0) > 0
+    ? buildTopItems(filteredItems, 'quantity').slice(0, 15)
+    : rankedToTopItems(currentPeriod?.topQuantity);
   $: salesRankingPeriods = reportPeriods.filter((period) => ['current', 'yearAgo', 'yearAgoNext'].includes(period.key));
   $: quantityRankingPeriods = reportPeriods.filter((period) => ['current', 'previous', 'previous2'].includes(period.key));
   $: salesRankingPeriod = periodByKey(salesRankingPeriods, salesRankingKey) ?? salesRankingPeriods[0];
@@ -534,8 +539,24 @@
     return { ...exportFilter, facets: {}, search: '' };
   }
 
+  function rankedToTopItems(items: Array<{ id?: string; code?: string; name?: string; brand?: string; amount?: number; quantity?: number }> | undefined): TopItem[] {
+    return (items ?? []).map((item) => ({
+      id: item.id || item.code || item.name || '',
+      code: item.code ?? '',
+      name: item.name || t('common.notAvailable'),
+      brand: item.brand ?? '',
+      amount: item.amount ?? 0,
+      quantity: item.quantity ?? 0,
+    }));
+  }
+
   function exportCategoryOptions(): Array<{ id: string; name: string; code: string }> {
     const grouped = new Map<string, { id: string; name: string; code: string }>();
+    if ((currentPeriod?.items?.length ?? 0) === 0) {
+      return (currentPeriod?.categoryGroups?.[groupLevel] ?? []).map((group) => ({
+        id: group.id, name: group.name, code: group.code ?? '',
+      }));
+    }
     for (const item of currentPeriod?.items ?? []) {
       const id = reportCategoryId(item, groupLevel);
       if (!id) continue;
@@ -923,6 +944,9 @@
     key: CategoryKey,
   ): string[] {
     if (!period) return [];
+    if ((period.items?.length ?? 0) === 0 && !scoped && !filtersActive(current, '')) {
+      return [...(period.facetOptions?.[key] ?? [])];
+    }
     return [...new Set((period.items ?? [])
       .filter((item) => matchesGroup(item, groupCodes, scoped) && matchesSelections(item, current, key))
       .map((item) => categoryLabel(item, key)))]
@@ -990,8 +1014,13 @@
     const matching = (period?.items ?? []).filter((item) =>
       matchesFilters(item, current, searchTerm) && matchesGroup(item, groupCodes, scoped));
     if (scoped || filtersActive(current, searchTerm)) return summarize(matching);
-    const sku = new Set(matching.map((item) => item.articleCode || item.articleName));
-    const totals: FilteredTotals = { ...period.totals, skuCount: sku.size };
+    const sku = matching.length > 0
+      ? new Set(matching.map((item) => item.articleCode || item.articleName))
+      : new Set<string>();
+    const totals: FilteredTotals = {
+      ...period.totals,
+      skuCount: matching.length > 0 ? sku.size : (period.itemCount ?? 0),
+    };
     if (totals.transactionCount && totals.transactionCount > 0 && totals.trendNetSalesAmount !== undefined) {
       totals.basketValue = totals.trendNetSalesAmount / totals.transactionCount;
     }
@@ -1014,8 +1043,19 @@
     groupCodes: Set<string>, scoped: boolean,
   ): CategoryComparisonRow[] {
     const grouped = new Map<string, CategoryComparisonRow>();
+    const useSummary = !scoped && !filtersActive(current, searchTerm)
+      && periods.every((period) => !['current', 'previous', 'previous2', 'yearAgo'].includes(period.key) || (period.items?.length ?? 0) === 0);
     for (const period of periods) {
       if (!['current', 'previous', 'previous2', 'yearAgo'].includes(period.key)) continue;
+      if (useSummary) {
+        for (const group of period.categoryGroups?.[key] ?? []) {
+          const id = group.id || group.code || group.name;
+          const row: CategoryComparisonRow = grouped.get(id) ?? { id, name: group.name, code: group.code ?? '', current: 0, previous: 0, previous2: 0, yearAgo: 0 };
+          row[period.key as 'current' | 'previous' | 'previous2' | 'yearAgo'] += group.amount;
+          grouped.set(id, row);
+        }
+        continue;
+      }
       for (const item of period.items ?? []) {
         if (!includeInSalesReport(item) || !matchesFilters(item, current, searchTerm) || !matchesGroup(item, groupCodes, scoped)) continue;
         const name = categoryValue(item, key);

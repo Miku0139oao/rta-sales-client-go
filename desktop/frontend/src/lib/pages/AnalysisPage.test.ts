@@ -139,6 +139,8 @@ describe('sales analysis page', () => {
           key: 'current', label: '本期', from: '2026-08-01', to: '2026-08-31', complete: true,
           successfulStores: 1, itemCount: 1, totals: analysisResult.totals,
           stores: [{ businessId: '107', label: '107 - Central', totals: analysisResult.totals }],
+          topAmount: [{ id: '552646', code: '552646', name: 'Mask', amount: 100, quantity: 2 }],
+          facetOptions: { category2: ['A02  BEAUTY CARE'] },
         }],
       })),
       GetSalesAnalysisItems: getSalesAnalysisItems,
@@ -149,8 +151,10 @@ describe('sales analysis page', () => {
     });
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
     await fireEvent.click(screen.getByText('開始分析'));
-    await waitFor(() => expect(getSalesAnalysisItems).toHaveBeenCalledWith({ operationId: 'slim-1', periodKey: 'current' }));
     await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' }).closest('section')).toHaveTextContent('Mask'));
+    expect(getSalesAnalysisItems).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole('tab', { name: '商品' }));
+    await waitFor(() => expect(getSalesAnalysisItems).toHaveBeenCalledWith({ operationId: 'slim-1', periodKey: 'current' }));
     expect(screen.queryAllByText('沒有符合條件的資料')).toHaveLength(0);
   });
 
@@ -176,6 +180,8 @@ describe('sales analysis page', () => {
           key: 'current', label: '本期', from: '2026-08-01', to: '2026-08-31', complete: true,
           successfulStores: 1, itemCount: 2, items: [], totals: analysisResult.totals,
           stores: [{ businessId: '107', label: '107 - Central', totals: analysisResult.totals }],
+          topAmount: [{ id: '552646', code: '552646', name: 'Mask', amount: 100, quantity: 2 }],
+          facetOptions: { category2: ['A02  BEAUTY CARE', 'HOUSEHOLD'] },
         }],
       })),
       GetSalesAnalysisItems: getSalesAnalysisItems,
@@ -184,8 +190,8 @@ describe('sales analysis page', () => {
     render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
     await fireEvent.click(screen.getByText('開始分析'));
-    await waitFor(() => expect(getSalesAnalysisItems).toHaveBeenCalledWith({ operationId: 'dept-filter', periodKey: 'current' }));
     await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' }).closest('section')).toHaveTextContent('Mask'));
+    expect(getSalesAnalysisItems).not.toHaveBeenCalled();
 
     await fireEvent.click(screen.getAllByText('商品部門')[0]!);
     const department = await screen.findByText(/A02\s+BEAUTY CARE/);
@@ -866,6 +872,7 @@ describe('sales analysis page', () => {
         itemCount: 2,
         items: undefined,
         stores: periodStores,
+        topAmount: [{ id: '552646', code: '552646', name: 'Mask', amount: 100, quantity: 2 }],
       })),
     };
     const getSalesAnalysisItems = vi.fn(async (request: unknown) => {

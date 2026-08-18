@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"runtime/debug"
+	"sort"
 	"strings"
 
 	rtasales "github.com/Miku0139oao/rta-sales-client-go/rtasales"
@@ -207,6 +209,7 @@ func (a *App) rememberSalesAnalysis(result SalesAnalysisResult, packed map[strin
 			packed[period.Key] = packSalesAnalysisItems(period)
 		}
 	}
+	enrichPeriodSummaries(&result, packed)
 	slim := slimSalesAnalysis(result)
 	a.salesResultMu.Lock()
 	a.salesResult = &slim
@@ -438,6 +441,181 @@ func unpackSalesAnalysisItems(batch SalesAnalysisPackedItems, stores []SalesAnal
 		})
 	}
 	return items
+}
+
+func enrichPeriodSummaries(result *SalesAnalysisResult, packed map[string]SalesAnalysisPackedItems) {
+	if result == nil {
+		return
+	}
+	for index := range result.Periods {
+		period := &result.Periods[index]
+		if len(period.TopAmount) > 0 || len(period.FacetOptions) > 0 {
+			continue
+		}
+		batch, ok := packed[period.Key]
+		if !ok {
+			if len(period.Items) > 0 {
+				attachPeriodSummary(period, packSalesAnalysisItems(*period))
+			}
+			continue
+		}
+		attachPeriodSummary(period, batch)
+	}
+}
+
+func attachPeriodSummary(period *SalesAnalysisPeriodResult, packed SalesAnalysisPackedItems) {
+	items := unpackSalesAnalysisItems(packed, period.Stores)
+	if period.ItemCount == 0 {
+		period.ItemCount = len(items)
+	}
+	visible := make([]SalesAnalysisItem, 0, len(items))
+	for _, item := range items {
+		if includeSummaryItem(item) {
+			visible = append(visible, item)
+		}
+	}
+	period.TopAmount = rankSummaryItems(visible, true, reportTopProducts)
+	period.TopQuantity = rankSummaryItems(visible, false, reportTopProducts)
+	period.FacetOptions = facetOptionsFromItems(items)
+	period.CategoryGroups = categoryGroupsFromItems(visible)
+}
+
+func includeSummaryItem(item SalesAnalysisItem) bool {
+	name := item.ArticleName
+	if stampItemPattern.MatchString(name) {
+		return false
+	}
+	if math.Abs(item.NetSalesAmount) <= reportNominalAmount && giftCategoryPattern.MatchString(item.Category2+" "+item.Category3) && !cashCouponPattern.MatchString(name) {
+		return false
+	}
+	return true
+}
+
+func rankSummaryItems(items []SalesAnalysisItem, byAmount bool, limit int) []SalesAnalysisRankedItem {
+	byID := make(map[string]*SalesAnalysisRankedItem, len(items))
+	for _, item := range items {
+		id := strings.TrimSpace(item.ArticleCode)
+		if id == "" {
+			id = strings.TrimSpace(item.ArticleName)
+		}
+		if id == "" {
+			continue
+		}
+		current := byID[id]
+		if current == nil {
+			current = &SalesAnalysisRankedItem{
+				ID: id, Code: strings.TrimSpace(item.ArticleCode), Name: strings.TrimSpace(item.ArticleName),
+				Brand: item.BrandName, Category2Code: item.Category2Code, Category3Code: item.Category3Code, Category4Code: item.Category4Code,
+			}
+			byID[id] = current
+		}
+		current.Amount += item.NetSalesAmount
+		current.Quantity += item.NetQuantity
+	}
+	ranked := make([]SalesAnalysisRankedItem, 0, len(byID))
+	for _, item := range byID {
+		ranked = append(ranked, *item)
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		if byAmount {
+			return rankedGreater(ranked[i].Amount, ranked[j].Amount, ranked[i].ID, ranked[j].ID)
+		}
+		return rankedGreater(ranked[i].Quantity, ranked[j].Quantity, ranked[i].ID, ranked[j].ID)
+	})
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	return ranked
+}
+
+func facetOptionsFromItems(items []SalesAnalysisItem) map[string][]string {
+	levels := []struct {
+		key      string
+		codeOf   func(SalesAnalysisItem) string
+		nameOf   func(SalesAnalysisItem) string
+	}{
+		{"category1", func(item SalesAnalysisItem) string { return item.Category1Code }, func(item SalesAnalysisItem) string { return item.Category1 }},
+		{"category2", func(item SalesAnalysisItem) string { return item.Category2Code }, func(item SalesAnalysisItem) string { return item.Category2 }},
+		{"category3", func(item SalesAnalysisItem) string { return item.Category3Code }, func(item SalesAnalysisItem) string { return item.Category3 }},
+		{"category4", func(item SalesAnalysisItem) string { return item.Category4Code }, func(item SalesAnalysisItem) string { return item.Category4 }},
+		{"category5", func(item SalesAnalysisItem) string { return item.Category5Code }, func(item SalesAnalysisItem) string { return item.Category5 }},
+	}
+	out := make(map[string][]string, len(levels))
+	for _, level := range levels {
+		seen := map[string]struct{}{}
+		labels := make([]string, 0)
+		for _, item := range items {
+			label := summaryCategoryLabel(level.codeOf(item), level.nameOf(item))
+			if _, ok := seen[label]; ok {
+				continue
+			}
+			seen[label] = struct{}{}
+			labels = append(labels, label)
+		}
+		sort.Strings(labels)
+		out[level.key] = labels
+	}
+	return out
+}
+
+func categoryGroupsFromItems(items []SalesAnalysisItem) map[string][]SalesAnalysisCategoryGroup {
+	levels := []struct {
+		key    string
+		codeOf func(SalesAnalysisItem) string
+		nameOf func(SalesAnalysisItem) string
+	}{
+		{"category1", func(item SalesAnalysisItem) string { return item.Category1Code }, func(item SalesAnalysisItem) string { return item.Category1 }},
+		{"category2", func(item SalesAnalysisItem) string { return item.Category2Code }, func(item SalesAnalysisItem) string { return item.Category2 }},
+		{"category3", func(item SalesAnalysisItem) string { return item.Category3Code }, func(item SalesAnalysisItem) string { return item.Category3 }},
+		{"category4", func(item SalesAnalysisItem) string { return item.Category4Code }, func(item SalesAnalysisItem) string { return item.Category4 }},
+		{"category5", func(item SalesAnalysisItem) string { return item.Category5Code }, func(item SalesAnalysisItem) string { return item.Category5 }},
+	}
+	out := make(map[string][]SalesAnalysisCategoryGroup, len(levels))
+	for _, level := range levels {
+		grouped := map[string]*SalesAnalysisCategoryGroup{}
+		for _, item := range items {
+			code := strings.TrimSpace(level.codeOf(item))
+			name := strings.TrimSpace(level.nameOf(item))
+			if name == "" {
+				name = "未分類"
+			}
+			id := code
+			if id == "" {
+				id = name
+			}
+			current := grouped[id]
+			if current == nil {
+				current = &SalesAnalysisCategoryGroup{ID: id, Code: code, Name: name}
+				grouped[id] = current
+			}
+			current.Amount += item.NetSalesAmount
+			current.Quantity += item.NetQuantity
+		}
+		groups := make([]SalesAnalysisCategoryGroup, 0, len(grouped))
+		for _, group := range grouped {
+			groups = append(groups, *group)
+		}
+		sort.Slice(groups, func(i, j int) bool {
+			return rankedGreater(groups[i].Amount, groups[j].Amount, groups[i].ID, groups[j].ID)
+		})
+		out[level.key] = groups
+	}
+	return out
+}
+
+func summaryCategoryLabel(code, name string) string {
+	code = strings.TrimSpace(code)
+	name = strings.TrimSpace(name)
+	if code != "" && name != "" && name != code {
+		return code + "  " + name
+	}
+	if name != "" {
+		return name
+	}
+	if code != "" {
+		return code
+	}
+	return "未分類"
 }
 
 type packedStringDict struct {

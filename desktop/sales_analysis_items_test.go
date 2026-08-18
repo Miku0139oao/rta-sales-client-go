@@ -54,6 +54,37 @@ func TestPackSalesAnalysisItemsInternsRepeatedText(t *testing.T) {
 	}
 }
 
+func TestAttachPeriodSummaryOmitsItemRowsFromTheSlimPeriod(t *testing.T) {
+	period := SalesAnalysisPeriodResult{
+		Key: "current",
+		Stores: []SalesAnalysisStoreSummary{
+			{BusinessID: "107", Label: "107 - Central"},
+		},
+		Items: []SalesAnalysisItem{
+			{StoreID: "107", ArticleCode: "A1", ArticleName: "Mask", Category2: "BEAUTY CARE", Category2Code: "A02", NetSalesAmount: 100, NetQuantity: 2},
+			{StoreID: "107", ArticleCode: "B1", ArticleName: "Wipes", Category2: "HOUSEHOLD", Category2Code: "B12", NetSalesAmount: 80, NetQuantity: 4},
+		},
+	}
+	packed := packSalesAnalysisItems(period)
+	period.Items = nil
+	attachPeriodSummary(&period, packed)
+	if period.ItemCount != 2 {
+		t.Fatalf("itemCount=%d", period.ItemCount)
+	}
+	if len(period.Items) != 0 {
+		t.Fatalf("summary should not keep article rows: %#v", period.Items)
+	}
+	if len(period.TopAmount) != 2 || period.TopAmount[0].Code != "A1" {
+		t.Fatalf("topAmount=%#v", period.TopAmount)
+	}
+	if len(period.FacetOptions["category2"]) != 2 {
+		t.Fatalf("facetOptions=%#v", period.FacetOptions)
+	}
+	if len(period.CategoryGroups["category2"]) != 2 {
+		t.Fatalf("categoryGroups=%#v", period.CategoryGroups)
+	}
+}
+
 func TestClearSalesAnalysisDropsPackedRowsAfterResultIsDiscarded(t *testing.T) {
 	app, _, _ := newTestApp(t, new(fakeEngine), fakeClients{byAccount: map[string]accountClient{
 		"analysis-account": &salesAnalysisFakeClient{

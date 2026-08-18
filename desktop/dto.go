@@ -285,9 +285,13 @@ type SalesAnalysisPeriodResult struct {
 	SuccessfulStores int                         `json:"successfulStores"`
 	Totals           SalesAnalysisTotals         `json:"totals"`
 	Stores           []SalesAnalysisStoreSummary `json:"stores"`
-	Items            []SalesAnalysisItem         `json:"items,omitempty"`
-	ItemCount        int                         `json:"itemCount"`
-	Issues           []SalesAnalysisIssue        `json:"issues,omitempty"`
+	Items            []SalesAnalysisItem                    `json:"items,omitempty"`
+	ItemCount        int                                    `json:"itemCount"`
+	Issues           []SalesAnalysisIssue                   `json:"issues,omitempty"`
+	TopAmount        []SalesAnalysisRankedItem              `json:"topAmount,omitempty"`
+	TopQuantity      []SalesAnalysisRankedItem              `json:"topQuantity,omitempty"`
+	FacetOptions     map[string][]string                    `json:"facetOptions,omitempty"`
+	CategoryGroups   map[string][]SalesAnalysisCategoryGroup `json:"categoryGroups,omitempty"`
 }
 
 type SalesAnalysisItemsRequest struct {

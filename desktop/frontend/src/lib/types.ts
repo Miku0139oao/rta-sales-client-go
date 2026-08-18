@@ -263,6 +263,10 @@ export interface SalesAnalysisPeriodResult {
   items?: SalesAnalysisItem[];
   itemCount?: number;
   issues?: SalesAnalysisIssue[];
+  topAmount?: SalesAnalysisRankedItem[];
+  topQuantity?: SalesAnalysisRankedItem[];
+  facetOptions?: Partial<Record<'category1' | 'category2' | 'category3' | 'category4' | 'category5', string[]>>;
+  categoryGroups?: Partial<Record<'category1' | 'category2' | 'category3' | 'category4' | 'category5', SalesAnalysisCategoryGroup[]>>;
 }
 
 export interface SalesAnalysisItemsRequest {

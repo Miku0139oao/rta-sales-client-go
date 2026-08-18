@@ -107,7 +107,7 @@ describe('sales analysis item batches', () => {
   });
 
   it('loads only the periods a report view needs', () => {
-    expect(periodKeysForView('overview')).toEqual(['current']);
+    expect(periodKeysForView('overview')).toEqual([]);
     expect(periodKeysForView('products')).toEqual(['current']);
     expect(periodKeysForView('stores')).toEqual([]);
     expect(periodKeysForView('weekly')).toEqual([]);

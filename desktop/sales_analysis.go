@@ -400,7 +400,9 @@ func assembleArticlePeriod(
 		applyAllStoresTrend(&periodResult, trend)
 	}
 	periodResult.Complete = len(periodResult.Issues) == 0
-	return periodResult, builder.finish(period.key)
+	packed := builder.finish(period.key)
+	attachPeriodSummary(&periodResult, packed)
+	return periodResult, packed
 }
 
 func periodTrendOutcome(outcomes []storeOutcome, storeCount int) (storeOutcome, bool) {

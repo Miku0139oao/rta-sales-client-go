@@ -155,8 +155,8 @@ export function periodItems(period: SalesAnalysisPeriodResult | undefined): Sale
 }
 
 export function periodKeysForView(view: 'overview' | 'focus' | 'categories' | 'products' | 'stores' | 'weekly', rankingKeys: string[] = []): string[] {
-  if (view === 'stores' || view === 'weekly') return [];
-  if (view === 'overview' || view === 'products') return ['current'];
+  if (view === 'stores' || view === 'weekly' || view === 'overview') return [];
+  if (view === 'products') return ['current'];
   if (view === 'focus') return ['current', 'yearAgoNext'];
   const keys = ['current', 'previous', 'previous2', 'yearAgo', ...rankingKeys];
   return [...new Set(keys.filter(Boolean))];
