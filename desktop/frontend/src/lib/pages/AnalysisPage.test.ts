@@ -440,6 +440,8 @@ describe('sales analysis page', () => {
     expect(dialog.querySelector('#export-groups-title')).not.toBeInTheDocument();
     expect(dialog.querySelector('.export-choice-list-categories')).toHaveClass('export-choice-list', 'pane-scroll');
     expect(screen.getByRole('heading', { name: '報告內容' })).toBeInTheDocument();
+    expect(screen.getByText('將匯出分析裡的全部商品')).toBeInTheDocument();
+    expect(screen.getByText('進階：再排除或只留某些分類')).toBeInTheDocument();
     expect(screen.getByText('忽略沒有金額的贈品（保留現金券）')).toBeInTheDocument();
     expect(screen.getByText('忽略印花')).toBeInTheDocument();
     expect(screen.queryByText('Promoter Group')).not.toBeInTheDocument();

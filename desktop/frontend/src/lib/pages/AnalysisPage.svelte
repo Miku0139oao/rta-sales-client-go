@@ -1664,47 +1664,60 @@
                 <p>{t('analysis.exportContentHint')}</p>
               </div>
             </div>
-            {#if exportCanUseScreenFilters}
+            {#if exportCanUseScreenFilters && exportUseScreenFilters}
               <div class="export-mode" role="radiogroup" aria-label={t('analysis.exportCategorySection')}>
-                <button type="button" class:active={exportUseScreenFilters} role="radio" aria-checked={exportUseScreenFilters} disabled={exportingPDF} onclick={() => setExportUseScreenFilters(true)}>{t('analysis.exportUseScreenFilters')}</button>
-                <button type="button" class:active={!exportUseScreenFilters} role="radio" aria-checked={!exportUseScreenFilters} disabled={exportingPDF} onclick={() => setExportUseScreenFilters(false)}>{t('analysis.exportIgnoreScreenFilters')}</button>
+                <button type="button" class:active={true} role="radio" aria-checked={true} disabled={exportingPDF} onclick={() => setExportUseScreenFilters(true)}>{t('analysis.exportUseScreenFilters')}</button>
+                <button type="button" class:active={false} role="radio" aria-checked={false} disabled={exportingPDF} onclick={() => setExportUseScreenFilters(false)}>{t('analysis.exportIgnoreScreenFilters')}</button>
               </div>
-              {#if exportUseScreenFilters}
-                <div class="export-screen-filters">
-                  {#each exportScreenFilterRows() as row}
-                    <div class="export-screen-filter">
-                      <strong>{row.label} · {t('analysis.exportScreenFilterCount', { count: row.values.length })}</strong>
-                      <ul>{#each row.values as value}<li>{value}</li>{/each}</ul>
-                    </div>
-                  {/each}
+              <div class="export-screen-filters">
+                {#each exportScreenFilterRows() as row}
+                  <div class="export-screen-filter">
+                    <strong>{row.label} · {t('analysis.exportScreenFilterCount', { count: row.values.length })}</strong>
+                    <ul>{#each row.values as value}<li>{value}</li>{/each}</ul>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <div class="export-all-copy">
+                <strong>{t('analysis.exportAllNow')}</strong>
+                <p>{t('analysis.exportAllNowHint')}</p>
+              </div>
+              {#if exportCanUseScreenFilters}
+                <div class="export-mode" role="radiogroup" aria-label={t('analysis.exportCategorySection')}>
+                  <button type="button" class:active={false} role="radio" aria-checked={false} disabled={exportingPDF} onclick={() => setExportUseScreenFilters(true)}>{t('analysis.exportUseScreenFilters')}</button>
+                  <button type="button" class:active={true} role="radio" aria-checked={true} disabled={exportingPDF} onclick={() => setExportUseScreenFilters(false)}>{t('analysis.exportIgnoreScreenFilters')}</button>
                 </div>
               {/if}
-            {:else}
-              <div class="export-mode" role="radiogroup" aria-label={t('analysis.exportCategorySection')}>
-                <button type="button" class:active={exportFilter.mode === 'blacklist'} role="radio" aria-checked={exportFilter.mode === 'blacklist'} disabled={exportingPDF} onclick={() => setExportMode('blacklist')}>{t('analysis.exportModeAll')}</button>
-                <button type="button" class:active={exportFilter.mode === 'whitelist'} role="radio" aria-checked={exportFilter.mode === 'whitelist'} disabled={exportingPDF} onclick={() => setExportMode('whitelist')}>{t('analysis.exportModeOnly')}</button>
-              </div>
-              <div class="export-choice-panel">
-                <div class="export-choice-heading">
-                  <strong id="export-content-title">{exportFilter.mode === 'whitelist' ? t('analysis.exportKeepCategories') : t('analysis.exportSkipCategories')}</strong>
-                  <div>
-                    <button type="button" disabled={exportingPDF} onclick={() => { exportFilter = { ...exportFilter, categories: exportCategoryOptions().map((option) => option.id) }; }}>{t('analysis.selectAll')}</button>
-                    <button type="button" disabled={exportingPDF} onclick={() => { exportFilter = { ...exportFilter, categories: [] }; }}>{t('analysis.clear')}</button>
-                  </div>
-                </div>
-                <div class="export-choice-list export-choice-list-categories pane-scroll">
-                  {#each exportCategoryOptions() as option (option.id)}
-                    <label><input type="checkbox" checked={exportFilter.categories.includes(option.id)} disabled={exportingPDF} onchange={() => toggleExportCategory(option.id)} /><span>{option.code ? `${option.code}  ${option.name}` : option.name}</span></label>
-                  {:else}
-                    <div class="export-choice-empty">{t('analysis.noResults')}</div>
-                  {/each}
-                </div>
-              </div>
             {/if}
             <div class="export-flags">
               <label class="export-check"><input type="checkbox" checked={exportFilter.excludeZeroGifts} disabled={exportingPDF} onchange={() => { exportFilter = { ...exportFilter, excludeZeroGifts: !exportFilter.excludeZeroGifts }; }} /><span>{t('analysis.exportSkipGifts')}</span></label>
               <label class="export-check"><input type="checkbox" checked={exportFilter.excludeStamps} disabled={exportingPDF} onchange={() => { exportFilter = { ...exportFilter, excludeStamps: !exportFilter.excludeStamps }; }} /><span>{t('analysis.exportSkipStamps')}</span></label>
             </div>
+            {#if !exportUseScreenFilters}
+              <details class="export-advanced">
+                <summary>{t('analysis.exportAdvancedCategories')}</summary>
+                <div class="export-mode" role="radiogroup" aria-label={t('analysis.exportAdvancedCategories')}>
+                  <button type="button" class:active={exportFilter.mode === 'blacklist'} role="radio" aria-checked={exportFilter.mode === 'blacklist'} disabled={exportingPDF} onclick={() => setExportMode('blacklist')}>{t('analysis.exportModeAll')}</button>
+                  <button type="button" class:active={exportFilter.mode === 'whitelist'} role="radio" aria-checked={exportFilter.mode === 'whitelist'} disabled={exportingPDF} onclick={() => setExportMode('whitelist')}>{t('analysis.exportModeOnly')}</button>
+                </div>
+                <div class="export-choice-panel">
+                  <div class="export-choice-heading">
+                    <strong id="export-content-title">{exportFilter.mode === 'whitelist' ? t('analysis.exportKeepCategories') : t('analysis.exportSkipCategories')}</strong>
+                    <div>
+                      <button type="button" disabled={exportingPDF} onclick={() => { exportFilter = { ...exportFilter, categories: exportCategoryOptions().map((option) => option.id) }; }}>{t('analysis.selectAll')}</button>
+                      <button type="button" disabled={exportingPDF} onclick={() => { exportFilter = { ...exportFilter, categories: [] }; }}>{t('analysis.clear')}</button>
+                    </div>
+                  </div>
+                  <div class="export-choice-list export-choice-list-categories pane-scroll">
+                    {#each exportCategoryOptions() as option (option.id)}
+                      <label><input type="checkbox" checked={exportFilter.categories.includes(option.id)} disabled={exportingPDF} onchange={() => toggleExportCategory(option.id)} /><span>{option.code ? `${option.code}  ${option.name}` : option.name}</span></label>
+                    {:else}
+                      <div class="export-choice-empty">{t('analysis.noResults')}</div>
+                    {/each}
+                  </div>
+                </div>
+              </details>
+            {/if}
           </section>
           <section class="export-section" aria-labelledby="export-outputs-title">
             <div class="export-section-heading">
@@ -2053,6 +2066,15 @@
   .export-flags { display: grid; gap: var(--export-gap); }
   .export-check { display: flex; align-items: flex-start; gap: 0.65em; min-width: 0; color: var(--md-sys-color-on-surface); font-size: var(--export-text); line-height: 1.4; }
   .export-check-card { padding: 0.65em 0.75em; border: 1px solid var(--md-sys-color-outline-variant); border-radius: calc(var(--export-radius) - 2px); background: var(--md-sys-color-surface-container-lowest); }
+  .export-all-copy { display: grid; gap: 0.25em; padding: 0.7em 0.8em; border: 1px solid var(--md-sys-color-outline-variant); border-radius: calc(var(--export-radius) - 2px); background: var(--md-sys-color-surface-container-lowest); }
+  .export-all-copy strong { font-size: var(--export-text); }
+  .export-all-copy p { margin: 0; color: var(--md-sys-color-on-surface-variant); font-size: var(--export-meta); line-height: 1.45; }
+  .export-advanced { border: 1px solid var(--md-sys-color-outline-variant); border-radius: calc(var(--export-radius) - 2px); background: var(--md-sys-color-surface-container-lowest); }
+  .export-advanced > summary { cursor: pointer; padding: 0.7em 0.8em; color: var(--md-sys-color-on-surface-variant); font-size: var(--export-text); font-weight: 650; list-style: none; }
+  .export-advanced > summary::-webkit-details-marker { display: none; }
+  .export-advanced[open] > summary { border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+  .export-advanced > :not(summary) { margin: 0.65em 0.75em 0.75em; }
+  .export-advanced .export-choice-panel { margin-top: 0.65em; }
   .export-screen-filters { display: grid; gap: 0.55em; padding: 0.65em 0.75em; border: 1px solid var(--md-sys-color-outline-variant); border-radius: calc(var(--export-radius) - 2px); background: var(--md-sys-color-surface-container-lowest); }
   .export-screen-filter { display: grid; gap: 0.25em; min-width: 0; }
   .export-screen-filter strong { color: var(--md-sys-color-on-surface); font-size: var(--export-text); }
