@@ -1,4 +1,4 @@
-import type { SalesAnalysisItem, SalesAnalysisPackedItems, SalesAnalysisPeriodResult, SalesAnalysisResult, SalesAnalysisStoreSummary } from './types';
+import type { SalesAnalysisItem, SalesAnalysisPackedItems, SalesAnalysisPackedRow, SalesAnalysisPeriodResult, SalesAnalysisResult, SalesAnalysisStoreSummary } from './types';
 
 export type AnalysisCategoryKey = 'category1' | 'category2' | 'category3' | 'category4' | 'category5';
 

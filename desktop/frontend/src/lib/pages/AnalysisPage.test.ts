@@ -661,7 +661,7 @@ describe('sales analysis page', () => {
     });
   });
 
-  it('exports a Microsoft Copilot markdown briefing beside the PDF', async () => {
+  it('exports a generic AI markdown briefing beside the PDF', async () => {
     const writeSalesAnalysisPDF = vi.fn(async (...args: unknown[]) => {
       const request = args[0] as { directory: string; filename: string };
       return `${request.directory}\\${request.filename}`;
@@ -680,7 +680,15 @@ describe('sales analysis page', () => {
       GetSalesAnalysisItems: vi.fn(async () => ({ periodKey: 'current', dict: [''], rows: [] })),
       ClearSalesAnalysis: vi.fn(async () => undefined),
       ChooseSalesAnalysisPDFDirectory: vi.fn(async () => 'D:\\RTA Reports'),
-      GetSalesAnalysisReportMemo: vi.fn(async () => reportMemo()),
+      GetSalesAnalysisReportMemo: vi.fn(async () => ({
+        periods: [
+          { key: 'current', totals: { saleQuantity: 4, saleAmount: 180, returnQuantity: 0, returnAmount: 0, netQuantity: 4, netSalesAmount: 180 } },
+          { key: 'previous', totals: { saleQuantity: 3, saleAmount: 150, returnQuantity: 0, returnAmount: 0, netQuantity: 3, netSalesAmount: 150 } },
+          { key: 'previous2', totals: { saleQuantity: 3, saleAmount: 120, returnQuantity: 0, returnAmount: 0, netQuantity: 3, netSalesAmount: 120 } },
+          { key: 'yearAgo', totals: { saleQuantity: 2, saleAmount: 90, returnQuantity: 0, returnAmount: 0, netQuantity: 2, netSalesAmount: 90 } },
+          { key: 'yearAgoNext', totals: { saleQuantity: 5, saleAmount: 200, returnQuantity: 0, returnAmount: 0, netQuantity: 5, netSalesAmount: 200 } },
+        ],
+      })),
       WriteSalesAnalysisPDF: writeSalesAnalysisPDF,
       WriteSalesAnalysisTextExport: writeSalesAnalysisTextExport,
     } });
@@ -699,8 +707,11 @@ describe('sales analysis page', () => {
     const briefing = writeSalesAnalysisTextExport.mock.calls[0]![0] as { filename: string; dataBase64: string };
     expect(briefing.filename).toBe('RTA-Sales-all-20260801-20260831-ai.md');
     const markdown = Buffer.from(briefing.dataBase64, 'base64').toString('utf8');
-    expect(markdown).toContain('Microsoft Copilot');
+    expect(markdown).toContain('任何大型語言模型');
+    expect(markdown).not.toContain('Copilot');
     expect(markdown).toContain('只准使用這份檔案裡的數字');
+    expect(markdown).toContain('| 前期 | 2026-05-31 → 2026-06-30 | HK$120.00 |');
+    expect(markdown).toContain('| 去年下月 | 2025-09-01 → 2025-09-30 | HK$200.00 |');
   });
 
   it('carries the on-screen 小分類 filter into PDF and AI export', async () => {
@@ -780,7 +791,7 @@ describe('sales analysis page', () => {
     expect(screen.getByText('The main report only keeps a summary so it stays short')).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Summary only in the main report' })).toBeChecked();
     expect(screen.getByText('Export for AI analysis')).toBeInTheDocument();
-    expect(screen.getByText('Markdown for Microsoft Copilot')).toBeInTheDocument();
+    expect(screen.getByText('Markdown you can paste into any AI chat')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Report contents' })).toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: 'All products' })).not.toBeInTheDocument();
   });

@@ -702,6 +702,12 @@
             categoryLevel: groupLevel,
             filter: activeExportFilter(),
             base: baseMemo,
+            periodMeta: (slim.periods ?? []).map((period) => ({
+              key: period.key,
+              label: period.label,
+              from: period.from,
+              to: period.to,
+            })),
             groups: groupMemos.map(({ group, memo }) => ({
               groupId: group.id,
               groupName: group.name,

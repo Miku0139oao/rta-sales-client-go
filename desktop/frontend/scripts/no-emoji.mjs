@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const frontendRoot = fileURLToPath(new URL('../', import.meta.url));
 const sourceExtensions = new Set(['.css', '.html', '.js', '.json', '.mjs', '.svelte', '.ts']);
-const ignoredDirectories = new Set(['node_modules', 'dist', 'coverage', '.git']);
+const ignoredDirectories = new Set(['node_modules', 'dist', 'dist-web', 'coverage', '.git']);
 const emojiPattern = /\p{Extended_Pictographic}|\p{Emoji_Presentation}/gu;
 const violations = [];
 
