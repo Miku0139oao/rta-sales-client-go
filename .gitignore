@@ -17,6 +17,7 @@ cookies.json
 # Build and test output
 bin/
 release/
+release-ci-*/
 output/
 coverage.out
 *.test
