@@ -271,11 +271,11 @@
     </div>
     <div class="itemcode-heading-actions">
       <md-outlined-button onclick={exportCatalog} disabled={pageBusy}>
-        <span class="material-symbols-rounded" slot="icon">download</span>
+        <span class="material-symbols-rounded" slot="icon">upload</span>
         {transferKind === 'export' ? t('itemcodes.exporting') : t('itemcodes.export')}
       </md-outlined-button>
       <md-outlined-button onclick={importCatalog} disabled={pageBusy}>
-        <span class="material-symbols-rounded" slot="icon">upload</span>
+        <span class="material-symbols-rounded" slot="icon">download</span>
         {transferKind === 'import' ? t('itemcodes.importing') : t('itemcodes.import')}
       </md-outlined-button>
       <md-filled-button onclick={openCreate} disabled={pageBusy}>

@@ -195,6 +195,8 @@ describe('item code management', () => {
       props: { t: translator('zh-TW'), locale: 'zh-TW' },
     });
     await waitFor(() => expect(screen.getByText('保健')).toBeInTheDocument());
+    expect(button(container, '匯出').querySelector('.material-symbols-rounded')).toHaveTextContent('upload');
+    expect(button(container, '匯入').querySelector('.material-symbols-rounded')).toHaveTextContent('download');
 
     await fireEvent.click(button(container, '匯出'));
     await waitFor(() => expect(screen.getByText('已匯出商品代碼目錄。')).toBeInTheDocument());
