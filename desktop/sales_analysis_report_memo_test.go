@@ -34,8 +34,8 @@ func TestGetSalesAnalysisReportMemoKeepsOneStoreAndDropsZeroGifts(t *testing.T) 
 	if len(all.Periods) != 1 || len(all.Periods[0].TopAmount) != 2 {
 		t.Fatalf("combined memo=%#v", all)
 	}
-	if all.Periods[0].Totals != nil {
-		t.Fatalf("unscoped memo should preserve the previous response shape: %#v", all.Periods[0].Totals)
+	if all.Periods[0].Totals == nil || all.Periods[0].Totals.NetSalesAmount != 180 || all.Periods[0].Totals.NetQuantity != 6 {
+		t.Fatalf("unscoped memo totals=%#v, want item-sum 180 / 6", all.Periods[0].Totals)
 	}
 	if all.Periods[0].TopAmount[0].Code != "A1" || all.Periods[0].TopAmount[1].Code != "B1" {
 		t.Fatalf("top=%#v", all.Periods[0].TopAmount)

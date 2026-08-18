@@ -91,11 +91,18 @@ func (a *App) GetSalesAnalysisReportMemo(request SalesAnalysisReportMemoRequest)
 		}
 		builder := buildPeriodMemo(packed, periodStores(a.salesResult, period.Key), storeID, filter, level)
 		built[period.Key] = builder
-		memo := builder.finish(period.Key, "")
-		if filter.itemCodes != nil {
-			totals := builder.totals
-			memo.Totals = &totals
+		memo := builder.finish(period.Key, request.Uncategorized)
+		totals := builder.totals
+		if !reportMemoHasItemScope(filter) {
+			if store := periodStoreTotals(period, storeID); store != nil {
+				totals.TransactionCount = store.TransactionCount
+				totals.TrendNetSalesAmount = store.TrendNetSalesAmount
+			} else {
+				totals.TransactionCount = period.Totals.TransactionCount
+				totals.TrendNetSalesAmount = period.Totals.TrendNetSalesAmount
+			}
 		}
+		memo.Totals = &totals
 		periods = append(periods, memo)
 	}
 	if next, ok := built["yearAgoNext"]; ok {
@@ -119,6 +126,31 @@ type reportMemoFilter struct {
 	search           string
 	uncategorized    string
 	itemCodes        map[string]struct{}
+}
+
+func reportMemoHasItemScope(filter reportMemoFilter) bool {
+	if filter.itemCodes != nil || filter.search != "" || len(filter.categories) > 0 {
+		return true
+	}
+	for _, values := range filter.facets {
+		if len(values) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func periodStoreTotals(period SalesAnalysisPeriodResult, storeID string) *SalesAnalysisTotals {
+	if storeID == "" {
+		return nil
+	}
+	for index := range period.Stores {
+		if period.Stores[index].BusinessID == storeID {
+			totals := period.Stores[index].Totals
+			return &totals
+		}
+	}
+	return nil
 }
 
 type periodMemoBuilder struct {

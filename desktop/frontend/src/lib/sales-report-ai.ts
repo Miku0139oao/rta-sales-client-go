@@ -59,13 +59,7 @@ export function buildSalesAnalysisAIMarkdown(input: SalesReportAIInput): string 
       previous: compactTotals(previous?.totals),
       yearAgo: compactTotals(yearAgo?.totals),
     },
-    categories: (current?.amountGroups ?? []).slice(0, 12).map((group) => ({
-      id: group.id,
-      code: group.code ?? '',
-      name: group.name,
-      amount: group.amount,
-      quantity: group.quantity,
-    })),
+    categories: [] as ReturnType<typeof comparedCategories>,
     topSales: (current?.topAmount ?? []).slice(0, 15).map(compactItem),
     topQuantity: (current?.topQuantity ?? []).slice(0, 15).map(compactItem),
     groups: input.groups.map((group) => {
@@ -104,7 +98,10 @@ export function buildSalesAnalysisAIMarkdown(input: SalesReportAIInput): string 
     `2. ${copy.ruleNoInvent}`,
     `3. ${copy.ruleCurrency}`,
     `4. ${copy.ruleScope}`,
-    `5. ${copy.ruleOutput}`,
+    `5. ${copy.ruleRankings}`,
+    `6. ${copy.ruleZero}`,
+    `7. ${copy.ruleJson}`,
+    `8. ${copy.ruleOutput}`,
     ``,
     `### ${copy.askTitle}`,
     ``,
@@ -129,7 +126,14 @@ export function buildSalesAnalysisAIMarkdown(input: SalesReportAIInput): string 
   lines.push(
     `- ${copy.netSales}: ${money(current?.totals?.netSalesAmount)} (${copy.vsPrevious} ${percent(current?.totals?.netSalesAmount, previous?.totals?.netSalesAmount)}; ${copy.vsYearAgo} ${percent(current?.totals?.netSalesAmount, yearAgo?.totals?.netSalesAmount)})`,
     `- ${copy.netQuantity}: ${qty(current?.totals?.netQuantity)} (${copy.vsYearAgo} ${percent(current?.totals?.netQuantity, yearAgo?.totals?.netQuantity)})`,
-    `- ${copy.transactions}: ${qty(current?.totals?.transactionCount)}`,
+  );
+  if (current?.totals?.trendNetSalesAmount !== undefined) {
+    lines.push(`- ${copy.storeTrendSales}: ${money(current.totals.trendNetSalesAmount)} (${copy.storeTrendHint})`);
+  }
+  if (current?.totals?.transactionCount !== undefined) {
+    lines.push(`- ${copy.transactions}: ${qty(current.totals.transactionCount)} (${copy.storeTrendHint})`);
+  }
+  lines.push(
     ``,
     `## ${copy.groupSummary}`,
     ``,
@@ -146,13 +150,17 @@ export function buildSalesAnalysisAIMarkdown(input: SalesReportAIInput): string 
   }
 
   lines.push(`## ${copy.categoryPerformance}`, '');
-  const categories = payload.categories;
+  const categories = comparedCategories(current, previous, yearAgo);
+  payload.categories = categories;
   if (categories.length === 0) {
     lines.push(copy.noRows, '');
   } else {
-    lines.push(`| ${copy.category} | ${copy.current} | ${copy.quantity} |`, '| --- | ---: | ---: |');
+    lines.push(
+      `| ${copy.category} | ${copy.current} | ${copy.previous} | ${copy.vsPrevious} | ${copy.yearAgo} | ${copy.vsYearAgo} | ${copy.quantity} |`,
+      '| --- | ---: | ---: | ---: | ---: | ---: | ---: |',
+    );
     for (const group of categories) {
-      lines.push(`| ${mdCell(group.code ? `${group.code} ${group.name}` : group.name)} | ${money(group.amount)} | ${qty(group.quantity)} |`);
+      lines.push(`| ${mdCell(group.code ? `${group.code} ${group.name}` : group.name)} | ${money(group.amount)} | ${money(group.previousAmount)} | ${percent(group.amount, group.previousAmount)} | ${money(group.yearAgoAmount)} | ${percent(group.amount, group.yearAgoAmount)} | ${qty(group.quantity)} |`);
     }
     lines.push('');
   }
@@ -214,9 +222,10 @@ function periodMemo(memo: SalesAnalysisReportMemo, key: string): SalesAnalysisPe
 function compactTotals(totals: SalesAnalysisTotals | undefined) {
   if (!totals) return undefined;
   return {
-    netSalesAmount: totals.netSalesAmount,
-    netQuantity: totals.netQuantity,
-    transactionCount: totals.transactionCount,
+    netSalesAmount: roundMoney(totals.netSalesAmount),
+    netQuantity: roundMoney(totals.netQuantity),
+    transactionCount: totals.transactionCount === undefined ? undefined : roundMoney(totals.transactionCount),
+    trendNetSalesAmount: totals.trendNetSalesAmount === undefined ? undefined : roundMoney(totals.trendNetSalesAmount),
   };
 }
 
@@ -226,9 +235,37 @@ function compactItem(item: SalesAnalysisRankedItem) {
     code: item.code,
     name: item.name,
     brand: item.brand ?? '',
-    amount: item.amount,
-    quantity: item.quantity,
+    amount: roundMoney(item.amount),
+    quantity: roundMoney(item.quantity),
   };
+}
+
+function comparedCategories(
+  current: SalesAnalysisPeriodMemo | undefined,
+  previous: SalesAnalysisPeriodMemo | undefined,
+  yearAgo: SalesAnalysisPeriodMemo | undefined,
+) {
+  const previousById = categoryMap(previous);
+  const yearAgoById = categoryMap(yearAgo);
+  return (current?.amountGroups ?? []).slice(0, 12).map((group) => ({
+    id: group.id,
+    code: group.code ?? '',
+    name: group.name,
+    amount: roundMoney(group.amount),
+    quantity: roundMoney(group.quantity),
+    previousAmount: previousById.get(group.id),
+    yearAgoAmount: yearAgoById.get(group.id),
+  }));
+}
+
+function categoryMap(period: SalesAnalysisPeriodMemo | undefined): Map<string, number> {
+  const byId = new Map<string, number>();
+  for (const group of period?.amountGroups ?? []) byId.set(group.id, roundMoney(group.amount));
+  return byId;
+}
+
+function roundMoney(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
 function money(value: number | undefined): string {
@@ -265,11 +302,14 @@ function aiCopy(locale: Locale) {
       ruleNoInvent: 'Do not invent products, categories, stores, or amounts.',
       ruleCurrency: 'All money is Hong Kong dollars (HKD / HK$). Do not convert currency.',
       ruleScope: 'The tables below are already filtered. Do not add categories or products that are not listed.',
+      ruleRankings: 'Top-product tables are the top 15 only. Do not add them up and treat the sum as store sales.',
+      ruleZero: 'A row with HK$0.00 and a quantity is a real voucher or bag line, not an error.',
+      ruleJson: 'JSON matches the tables, rounded to 2 decimal places. Prefer the tables if anything looks inconsistent.',
       ruleOutput: 'Answer in the user\'s language. Keep answers short. Every claim must cite a number from this file.',
       askTitle: 'Suggested questions',
-      ask1: 'In 3 sentences, how did this period perform versus last period and last year?',
-      ask2: 'Which listed products or categories dropped, and by how much?',
-      ask3: 'Give at most 5 next-month actions. Each action must point to one number in the tables.',
+      ask1: 'Using only the totals section, how did this period perform versus last period and last year?',
+      ask2: 'In the category table, which listed categories fell versus last period, and by how much?',
+      ask3: 'Give at most 5 next-month actions. Each action must point to one number already in the tables.',
       snapshot: 'Scope and totals',
       store: 'Store',
       period: 'Period',
@@ -285,8 +325,10 @@ function aiCopy(locale: Locale) {
       category3: 'Category',
       category4: 'Sub-category',
       category5: 'Segment',
-      netSales: 'Net sales',
-      netQuantity: 'Net quantity',
+      netSales: 'Item-row net sales',
+      netQuantity: 'Item-row net quantity',
+      storeTrendSales: 'Store trend net sales',
+      storeTrendHint: 'store-level Trend View; do not expect this to equal the item-row or category sum',
       transactions: 'Transactions',
       vsPrevious: 'vs previous',
       vsYearAgo: 'vs year ago',
@@ -317,11 +359,14 @@ function aiCopy(locale: Locale) {
     ruleNoInvent: '不准發明商品、分類、門店或金額。',
     ruleCurrency: '金額一律是港幣（HKD / HK$），不要換算其他幣別。',
     ruleScope: '下面的表已經是篩選後的結果。沒有出現的分類或商品視為不在範圍，不是銷售為 0。',
+    ruleRankings: 'Top 商品只是前 15 名。不要把這 15 項加總當成全店銷售。',
+    ruleZero: '銷額 HK$0.00 但有銷量的列（現金券、膠袋）是真實列，不是錯誤。',
+    ruleJson: 'JSON 與上面的表是同一組數字，金額已四捨五入到兩位小數。若看起來不一致，以表格為準。',
     ruleOutput: '用繁體中文回答，短句。每一個判斷都要引用這份檔裡的一個數字。',
     askTitle: '建議這樣問',
-    ask1: '用 3 句話說明本期相對上期、去年同期的表現。',
-    ask2: '表裡哪些商品或分類在掉？掉多少？',
-    ask3: '下個月最多給 5 個行動，每一點都要對到表裡的一個數字。',
+    ask1: '只用「範圍與總數」裡的數字，說明本期相對上期、去年同期。',
+    ask2: '分類表裡哪些分類較上期下跌？跌多少？',
+    ask3: '下個月最多給 5 個行動，每一點都要引用表裡已有的一個數字。',
     snapshot: '範圍與總數',
     store: '門店',
     period: '期間',
@@ -337,8 +382,10 @@ function aiCopy(locale: Locale) {
     category3: '商品種類',
     category4: '四級類目',
     category5: '小分類',
-    netSales: '淨銷售額',
-    netQuantity: '淨銷售數量',
+    netSales: '商品列淨銷售額',
+    netQuantity: '商品列淨銷售數量',
+    storeTrendSales: '全店趨勢淨銷售額',
+    storeTrendHint: '門店趨勢數字，不必等於商品列或分類加總',
     transactions: '交易次數',
     vsPrevious: '較上期',
     vsYearAgo: '較去年同期',

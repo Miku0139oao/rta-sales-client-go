@@ -58,6 +58,37 @@ describe('sales analysis AI export', () => {
     expect(markdown).toContain('```json');
     expect(markdown).toContain('"id": "g-skin"');
     expect(markdown).not.toContain('undefined');
+    expect(markdown).toContain('Top 商品只是前 15 名');
+    expect(markdown).toContain('較上期');
+  });
+
+  it('rounds JSON money and does not ask Copilot to invent missing comparisons', () => {
+    const markdown = buildSalesAnalysisAIMarkdown({
+      locale: 'zh-TW',
+      storeId: '107',
+      storeLabel: '107 - Tai Wai',
+      from: '2026-08-01',
+      to: '2026-08-16',
+      categoryLevel: 'category2',
+      filter: defaultSalesReportFilter(),
+      base: {
+        periods: [{
+          key: 'current',
+          totals: { saleQuantity: 1, saleAmount: 461842.95999999996, returnQuantity: 0, returnAmount: 0, netQuantity: 1, netSalesAmount: 461842.95999999996 },
+          amountGroups: [{ id: 'A03', code: 'A03', name: 'PERSONAL CARE', amount: 461842.95999999996, quantity: 11338 }],
+        }, {
+          key: 'previous',
+          totals: { saleQuantity: 1, saleAmount: 500000, returnQuantity: 0, returnAmount: 0, netQuantity: 1, netSalesAmount: 500000 },
+          amountGroups: [{ id: 'A03', code: 'A03', name: 'PERSONAL CARE', amount: 500000, quantity: 12000 }],
+        }],
+      },
+      groups: [],
+    });
+    expect(markdown).toContain('461842.96');
+    expect(markdown).not.toContain('461842.95999999996');
+    expect(markdown).toContain('HK$461,842.96');
+    expect(markdown).toContain('-7.6%');
+    expect(markdown).toContain('只用「範圍與總數」裡的數字');
   });
 
   it('tells Copilot the file is already filtered', () => {
