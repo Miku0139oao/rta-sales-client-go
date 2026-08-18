@@ -127,7 +127,7 @@ Click **Export PDF**. If category filters or search are active, the dialog defau
 
 - **PDF report** and **Export for AI analysis** share that same filter. You do not pick categories again.
 - Choose **Ignore on-screen filters** if you want whole-store figures.
-- The AI file is Markdown you can paste into any AI chat. It includes hard rules and suggested questions.
+- The AI file is Markdown: drop it into any AI and it writes the report. No extra prompt.
 - If you have item-code groups, the main PDF keeps a one-page summary per group unless you ask for a separate detailed PDF.
 
 Pick a folder to write the files. If a name already exists, a number is added. **Existing files are not overwritten.**  

@@ -83,7 +83,10 @@ describe('sales analysis AI export', () => {
       }],
     });
     expect(markdown).toContain('任何大型語言模型');
-    expect(markdown).toContain('給 AI 的規則');
+    expect(markdown).toContain('這份檔就是完整任務與資料');
+    expect(markdown).toContain('立刻寫出這份報告');
+    expect(markdown).toContain('使用者不會再另外下指令');
+    expect(markdown).not.toContain('建議這樣問');
     expect(markdown).not.toContain('Copilot');
     expect(markdown).not.toContain('microsoft-copilot');
     expect(markdown).toContain('107 - Tai Wai');

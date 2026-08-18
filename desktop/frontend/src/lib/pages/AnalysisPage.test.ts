@@ -791,7 +791,7 @@ describe('sales analysis page', () => {
     expect(screen.getByText('The main report only keeps a summary so it stays short')).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Summary only in the main report' })).toBeChecked();
     expect(screen.getByText('Export for AI analysis')).toBeInTheDocument();
-    expect(screen.getByText('Markdown you can paste into any AI chat')).toBeInTheDocument();
+    expect(screen.getByText('Markdown: drop into any AI to get the report')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Report contents' })).toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: 'All products' })).not.toBeInTheDocument();
   });

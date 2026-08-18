@@ -125,15 +125,15 @@ const slides = [
   { type: "bullets", heading: "PDF 與給 AI 的檔", items: [
     "兩個格式用同一組條件，不用再勾一次分類",
     "PDF：給人開會看的正式報告",
-    "匯出給 AI 分析：Markdown，可貼到任何 AI 對話",
+    "匯出給 AI 分析：Markdown，丟進任何 AI 就會出報告",
     "可兩個都勾；要整店再改「不套用畫面篩選」"
   ], caption: "畫面勾了什麼，報告就出什麼。這是跟舊版最大的差別。" },
-  { type: "bullets", heading: "AI 檔怎麼問", items: [
+  { type: "bullets", heading: "AI 檔怎麼用", items: [
     "只准用檔裡的數字，不准發明商品或金額",
     "幣別是港幣；沒列出的分類不要當成沒賣掉",
     "檔裡有本期、上期、前期、去年同期、去年下月",
-    "貼到任何 AI 對話；用檔裡的 3 個建議提問"
-  ], caption: "不要只丟原始報表。這份檔已經寫好規則。" },
+    "整份丟進任何 AI，不用再打提問"
+  ], caption: "不要只丟原始報表。這份檔已經寫好任務。" },
   { type: "bullets", heading: "群組報告", items: [
     "有商品代碼時才會出現",
     "預設：總報告只放各群組一頁摘要",
@@ -182,7 +182,7 @@ function exportSlide(s) {
     <div class="chip">A01010204　NEURO-MUSCULAR SYSTEM</div>
     <div class="fmt">
       <div><b class="check">☑ PDF 報告</b><span>給人閱讀的正式報告</span></div>
-      <div><b class="check">☑ 匯出給 AI 分析</b><span>Markdown，可貼到任何 AI 對話</span></div>
+      <div><b class="check">☑ 匯出給 AI 分析</b><span>Markdown，丟進任何 AI 就會出報告</span></div>
     </div>
   </div></div><div class="caption">${s.caption}</div></div>`;
 }
