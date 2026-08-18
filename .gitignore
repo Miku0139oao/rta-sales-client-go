@@ -35,6 +35,9 @@ desktop/frontend/package.json.md5
 cmd/rta-excel-filler/build/bin/
 cmd/rta-excel-filler/bin/
 
+# Local agent skill scratch (do not publish)
+.devin/
+
 # Editors and operating systems
 .idea/
 .vscode/
