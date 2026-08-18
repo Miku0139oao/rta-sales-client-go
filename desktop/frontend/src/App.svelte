@@ -8,6 +8,7 @@
   import { translator } from './lib/i18n';
   import { isWebRuntime } from './lib/runtime';
   import { loadSettings, saveSettings } from './lib/settings';
+  import { readWebBannerAck, writeWebBannerAck } from './lib/webBannerAck';
   import { applyTheme, resolveTheme, systemPrefersDark, watchSystemTheme } from './lib/theme';
   import type { AppSettings, Page, ThemePreference } from './lib/types';
 
@@ -21,6 +22,7 @@
   let accountsBusy = false;
   let itemcodesBusy = false;
   let mainContent: HTMLElement;
+  let webBannerVisible = isWebRuntime() && !readWebBannerAck();
 
   $: t = translator(settings.locale);
   $: resolvedTheme = resolveTheme(settings.theme, systemDark);
@@ -42,6 +44,11 @@
   onMount(() => watchSystemTheme((dark) => {
     systemDark = dark;
   }));
+
+  function acknowledgeWebBanner() {
+    writeWebBannerAck();
+    webBannerVisible = false;
+  }
 
   function updateSettings(next: AppSettings) {
     settings = saveSettings(next);
@@ -153,13 +160,14 @@
     </aside>
 
     <main id="main-content" bind:this={mainContent} tabindex="-1" onwheel={relayMainWheel}>
-      {#if isWebRuntime()}
+      {#if webBannerVisible}
         <div class="notice warning-notice web-preview-notice" role="status">
           <span class="material-symbols-rounded" aria-hidden="true">language</span>
-          <div>
+          <div class="web-banner-copy">
             <strong>{t('web.bannerTitle')}</strong>
             <p>{t('web.bannerBody')}</p>
           </div>
+          <md-outlined-button type="button" onclick={acknowledgeWebBanner}>{t('web.bannerAck')}</md-outlined-button>
         </div>
       {/if}
       {#if activePage === 'excel'}
