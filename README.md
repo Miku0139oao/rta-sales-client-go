@@ -31,7 +31,7 @@ On Windows the installer is the recommended distribution. Windows 10 and Windows
 ## Install
 
 1. Download the latest files from [Releases](https://github.com/Miku0139oao/rta-sales-client-go/releases).
-2. Run **`RTA-Excel-Filler-setup.exe`** (or the `*-signed.exe` file if you want the Authenticode-signed copy). If Windows or Edge still says the file is uncommon, choose Keep / Run anyway.
+2. Run **`RTA-Excel-Filler-setup.exe`**. If Windows or Edge still says the file is uncommon, choose Keep / Run anyway.
 3. Open the Start menu, search for **RTA 銷售分析**, and launch the application.
 
 Only one window may run at a time. If a launch appears to do nothing, check the taskbar; the application may already be open.
@@ -46,14 +46,13 @@ A longer written guide (Traditional Chinese): [docs/tutorial.zh-TW.md](docs/tuto
 
 | File | When to use it |
 | --- | --- |
-| `RTA-Excel-Filler-setup.exe` | **Recommended on Windows.** Same as the signed installer when signing ran |
-| `RTA-Excel-Filler-windows-amd64-setup-signed.exe` | Extra Authenticode-signed Windows installer |
+| `RTA-Excel-Filler-setup.exe` | **Recommended on Windows** |
 | `RTA-Excel-Filler-portable.exe` | Runs without installation. If it does not start, install [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) or use the installer |
 | `RTA-Excel-Filler-linux-amd64` | Linux desktop binary |
 | `RTA-Excel-Filler-darwin-arm64` / `darwin-amd64` | macOS desktop binaries |
 | `SHA256SUMS.txt` | Used by IT to verify that a file has not been altered. Everyday users may ignore it |
 
-A tagged release is built by [`.github/workflows/release.yml`](.github/workflows/release.yml). Push `v0.4.5` (or run the workflow and pass that tag) to publish. Windows always gets unsigned portable and setup files; when the Azure Artifact Signing secrets are set, the same files are also uploaded with a `-signed` suffix. Do not put the signer’s personal name in release notes.
+A tagged release is built by [`.github/workflows/release.yml`](.github/workflows/release.yml). Push `v0.4.5` (or run the workflow and pass that tag) to publish unsigned Windows, Linux, and macOS files. Sign the Windows installer on this machine with `pwsh ./scripts/build-desktop.ps1 -RequireSign`, then `gh release upload <tag> release/RTA-Excel-Filler-setup.exe release/RTA-Excel-Filler-portable.exe --clobber`. Do not put the signer’s personal name in release notes.
 
 ---
 

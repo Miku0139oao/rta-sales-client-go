@@ -31,7 +31,7 @@ Windows 一般使用請安裝「安裝檔」。Windows 10／11 通常已隨 Micr
 ## 怎麼安裝
 
 1. 至 [Releases](https://github.com/Miku0139oao/rta-sales-client-go/releases) 下載最新版本。
-2. 在壓縮檔或資料夾中找到 **`RTA-Excel-Filler-setup.exe`**（或 `*-signed.exe` 簽名版），雙擊安裝。若 Windows 或 Edge 仍提示「不常下載」，選保留／仍要執行即可。
+2. 在壓縮檔或資料夾中找到 **`RTA-Excel-Filler-setup.exe`**，雙擊安裝。若 Windows 或 Edge 仍提示「不常下載」，選保留／仍要執行即可。
 3. 安裝完成後，按鍵盤上的 **Windows 鍵**，搜尋 **RTA 銷售分析**，即可開啟。
 
 同一時間僅能開啟一個視窗。若啟動後沒有反應，請先檢查工作列是否已在執行。
@@ -46,14 +46,13 @@ Windows 一般使用請安裝「安裝檔」。Windows 10／11 通常已隨 Micr
 
 | 檔案 | 用途 |
 | --- | --- |
-| `RTA-Excel-Filler-setup.exe` | **Windows 一般使用此檔**；有簽名時即為簽名安裝檔 |
-| `RTA-Excel-Filler-windows-amd64-setup-signed.exe` | 另外一份 Windows 簽名安裝檔 |
+| `RTA-Excel-Filler-setup.exe` | **Windows 一般使用此檔** |
 | `RTA-Excel-Filler-portable.exe` | 免安裝。若無法啟動，請安裝 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) 或改用安裝版 |
 | `RTA-Excel-Filler-linux-amd64` | Linux 桌面版 |
 | `RTA-Excel-Filler-darwin-arm64` / `darwin-amd64` | macOS 桌面版 |
 | `SHA256SUMS.txt` | 供資訊人員核對檔案是否遭竄改；一般使用可略過 |
 
-打 `v*` 標籤會由 [`.github/workflows/release.yml`](.github/workflows/release.yml) 建置並發佈。Windows 一定有未簽名的 portable／安裝檔；若已設定 Azure Artifact Signing 的 secrets，會再多上傳 `-signed` 檔。發行說明不要寫簽署人的個人姓名。
+打 `v*` 標籤會由 [`.github/workflows/release.yml`](.github/workflows/release.yml) 建置並發佈未簽名的 Windows／Linux／macOS 檔。Windows 簽名版在本機執行 `pwsh ./scripts/build-desktop.ps1 -RequireSign`，再 `gh release upload <tag> release/RTA-Excel-Filler-setup.exe release/RTA-Excel-Filler-portable.exe --clobber`。發行說明不要寫簽署人的個人姓名。
 
 ---
 

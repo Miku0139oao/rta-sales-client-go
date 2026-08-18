@@ -1,10 +1,9 @@
 name: release
 
 # Publishes a GitHub Release for tag v*.
-# Windows extras (Authenticode) need repo secrets:
-#   AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET,
-#   ARTIFACT_SIGNING_ENDPOINT, ARTIFACT_SIGNING_ACCOUNT, ARTIFACT_SIGNING_PROFILE
-# If those are missing, unsigned Windows files are still published.
+# Windows binaries from CI are unsigned. Sign locally with
+#   pwsh ./scripts/build-desktop.ps1 -RequireSign
+# then: gh release upload <tag> release/RTA-Excel-Filler-setup.exe release/RTA-Excel-Filler-portable.exe --clobber
 
 on:
   push:
@@ -53,10 +52,6 @@ jobs:
     needs: test
     runs-on: windows-latest
     timeout-minutes: 30
-    permissions:
-      contents: read
-    outputs:
-      signed: ${{ steps.sign.outcome == 'success' && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -87,38 +82,6 @@ jobs:
           Copy-Item release/RTA-Excel-Filler-setup.exe dist/windows/RTA-Excel-Filler-windows-amd64-setup.exe
           Copy-Item release/RTA-Excel-Filler-portable.exe dist/windows/RTA-Excel-Filler-portable.exe
           Copy-Item release/RTA-Excel-Filler-setup.exe dist/windows/RTA-Excel-Filler-setup.exe
-      - name: Copy binaries for Authenticode
-        id: prepare-sign
-        if: ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_CLIENT_SECRET != '' && secrets.ARTIFACT_SIGNING_ENDPOINT != '' && secrets.ARTIFACT_SIGNING_ACCOUNT != '' && secrets.ARTIFACT_SIGNING_PROFILE != '' }}
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist/windows-signed | Out-Null
-          Copy-Item dist/windows/RTA-Excel-Filler-windows-amd64-portable.exe dist/windows-signed/RTA-Excel-Filler-windows-amd64-portable-signed.exe
-          Copy-Item dist/windows/RTA-Excel-Filler-windows-amd64-setup.exe dist/windows-signed/RTA-Excel-Filler-windows-amd64-setup-signed.exe
-          "ready=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-      - name: Sign Windows binaries
-        id: sign
-        if: steps.prepare-sign.outputs.ready == 'true'
-        uses: azure/artifact-signing-action@c41ab607157e82e3ed79e291b56f9e7425818b04
-        with:
-          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-          endpoint: ${{ secrets.ARTIFACT_SIGNING_ENDPOINT }}
-          trusted-signing-account-name: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ secrets.ARTIFACT_SIGNING_PROFILE }}
-          files-folder: ${{ github.workspace }}\dist\windows-signed
-          files-folder-filter: exe
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-      - name: Prefer signed files under the legacy names
-        if: steps.sign.outcome == 'success'
-        shell: pwsh
-        run: |
-          Copy-Item dist/windows-signed/RTA-Excel-Filler-windows-amd64-portable-signed.exe dist/windows/RTA-Excel-Filler-portable.exe -Force
-          Copy-Item dist/windows-signed/RTA-Excel-Filler-windows-amd64-setup-signed.exe dist/windows/RTA-Excel-Filler-setup.exe -Force
-          Copy-Item dist/windows-signed/*.exe dist/windows/ -Force
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: desktop-windows
