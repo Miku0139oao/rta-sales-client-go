@@ -1,4 +1,5 @@
-# Build the live web edition and deploy UI + rta-web to rtasales.com.
+# Build the live web edition and deploy UI + rta-web to rtasales.com
+# (Cloudflare orange-cloud + Caddy origin).
 # Usage (from repo root): .\scripts\deploy-web-preview.ps1
 
 $ErrorActionPreference = 'Stop'
