@@ -537,6 +537,26 @@ func newWebApp(clients clientFactory, events eventSink) (*App, error) {
 	return app, nil
 }
 
+func (session *webSession) discard() {
+	if session == nil {
+		return
+	}
+	if session.hub != nil {
+		session.hub.Close()
+		session.hub = nil
+	}
+	if session.app != nil {
+		if store, ok := session.app.credentials.(*securestore.MemoryCredentialStore); ok {
+			store.Clear()
+		}
+		session.app = nil
+	}
+	if session.dir != "" {
+		_ = os.RemoveAll(session.dir)
+		session.dir = ""
+	}
+}
+
 func (s *WebServer) reapLoop() {
 	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
@@ -552,9 +572,7 @@ func (s *WebServer) touchReap() {
 	for id, session := range s.byID {
 		if session.lastUsed.Before(cutoff) {
 			delete(s.byID, id)
-			if session.dir != "" {
-				_ = os.RemoveAll(session.dir)
-			}
+			session.discard()
 		}
 	}
 }

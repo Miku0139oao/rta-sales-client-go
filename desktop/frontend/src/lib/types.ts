@@ -297,9 +297,12 @@ export interface SalesAnalysisPackedRow {
 }
 
 export interface SalesAnalysisPackedItems {
-  periodKey: string;
-  dict: string[];
-  rows: SalesAnalysisPackedRow[];
+  periodKey?: string;
+  k?: string;
+  dict?: string[];
+  d?: string[];
+  rows?: Array<SalesAnalysisPackedRow | number[]>;
+  r?: number[][];
 }
 
 export interface SalesAnalysisReportMemoRequest {

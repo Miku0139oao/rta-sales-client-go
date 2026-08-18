@@ -48,6 +48,8 @@ describe('sales analysis item batches', () => {
       returnAmount: 0, netQuantity: 2, netSalesAmount: 10,
     }];
     const packed = packSalesAnalysisItems('current', items, stores);
+    expect(packed.r?.[0]).toBeDefined();
+    expect(JSON.stringify(packed)).not.toContain('"ac":');
     expect(unpackSalesAnalysisItems(packed, stores)).toEqual([expect.objectContaining({
       storeId: '107', articleCode: '552646', articleName: 'Mask', netSalesAmount: 10,
     })]);

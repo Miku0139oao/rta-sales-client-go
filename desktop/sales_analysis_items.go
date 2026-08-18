@@ -1,6 +1,8 @@
 package desktop
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime/debug"
@@ -8,6 +10,112 @@ import (
 
 	rtasales "github.com/Miku0139oao/rta-sales-client-go/rtasales"
 )
+
+// Compact wire form for GetSalesAnalysisItems. Object rows repeat 19 JSON keys
+// per article; one store already exceeds 700KiB. Arrays keep the same numbers.
+func (p SalesAnalysisPackedItems) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		K string    `json:"k"`
+		D []string  `json:"d"`
+		R []json.RawMessage `json:"r"`
+	}
+	out := wire{K: p.PeriodKey, D: p.Dict, R: make([]json.RawMessage, 0, len(p.Rows))}
+	if out.D == nil {
+		out.D = []string{}
+	}
+	for _, row := range p.Rows {
+		raw, err := json.Marshal(compactPackedRow(row))
+		if err != nil {
+			return nil, err
+		}
+		out.R = append(out.R, raw)
+	}
+	return json.Marshal(out)
+}
+
+func (p *SalesAnalysisPackedItems) UnmarshalJSON(data []byte) error {
+	var compact struct {
+		K          string            `json:"k"`
+		D          []string          `json:"d"`
+		R          []json.RawMessage `json:"r"`
+		PeriodKey  string            `json:"periodKey"`
+		Dict       []string          `json:"dict"`
+		Rows       []json.RawMessage `json:"rows"`
+	}
+	if err := json.Unmarshal(data, &compact); err != nil {
+		return err
+	}
+	p.PeriodKey = firstNonEmpty(compact.K, compact.PeriodKey)
+	p.Dict = compact.D
+	if len(p.Dict) == 0 {
+		p.Dict = compact.Dict
+	}
+	rawRows := compact.R
+	if len(rawRows) == 0 {
+		rawRows = compact.Rows
+	}
+	p.Rows = make([]SalesAnalysisPackedRow, 0, len(rawRows))
+	for _, raw := range rawRows {
+		row, err := unmarshalPackedRow(raw)
+		if err != nil {
+			return err
+		}
+		p.Rows = append(p.Rows, row)
+	}
+	return nil
+}
+
+func compactPackedRow(row SalesAnalysisPackedRow) []float64 {
+	values := []float64{
+		float64(row.S), float64(row.Ac), float64(row.An), float64(row.Br),
+		float64(row.C1), float64(row.K1), float64(row.C2), float64(row.K2),
+		float64(row.C3), float64(row.K3), float64(row.C4), float64(row.K4),
+		float64(row.C5), float64(row.K5),
+		row.T, row.Sq, row.Sa, row.Rq, row.Rt, row.Ra, row.Nq, row.Ns,
+	}
+	end := len(values)
+	for end > 3 && values[end-1] == 0 {
+		end--
+	}
+	return values[:end]
+}
+
+func unmarshalPackedRow(raw json.RawMessage) (SalesAnalysisPackedRow, error) {
+	trim := bytes.TrimSpace(raw)
+	if len(trim) > 0 && trim[0] == '[' {
+		var values []float64
+		if err := json.Unmarshal(trim, &values); err != nil {
+			return SalesAnalysisPackedRow{}, err
+		}
+		at := func(i int) float64 {
+			if i >= 0 && i < len(values) {
+				return values[i]
+			}
+			return 0
+		}
+		return SalesAnalysisPackedRow{
+			S: int(at(0)), Ac: int(at(1)), An: int(at(2)), Br: int(at(3)),
+			C1: int(at(4)), K1: int(at(5)), C2: int(at(6)), K2: int(at(7)),
+			C3: int(at(8)), K3: int(at(9)), C4: int(at(10)), K4: int(at(11)),
+			C5: int(at(12)), K5: int(at(13)),
+			T: at(14), Sq: at(15), Sa: at(16), Rq: at(17), Rt: at(18), Ra: at(19), Nq: at(20), Ns: at(21),
+		}, nil
+	}
+	var row SalesAnalysisPackedRow
+	if err := json.Unmarshal(trim, &row); err != nil {
+		return SalesAnalysisPackedRow{}, err
+	}
+	return row, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
 
 // GetSalesAnalysisItems returns one period's article rows from the last
 // analysis kept in this process. RunSalesAnalysis omits those rows so the

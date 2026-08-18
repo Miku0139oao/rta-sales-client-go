@@ -23,6 +23,7 @@
   let itemcodesBusy = false;
   let mainContent: HTMLElement;
   let webBannerVisible = isWebRuntime() && !readWebBannerAck();
+  let analysisEpoch = 0;
 
   $: t = translator(settings.locale);
   $: resolvedTheme = resolveTheme(settings.theme, systemDark);
@@ -105,6 +106,7 @@
 
   async function navigateTo(page: Page) {
     if (navigationBusy && page !== activePage) return;
+    if (page === 'analysis' && activePage !== 'analysis') analysisEpoch += 1;
     activePage = page;
     await tick();
     if (mainContent) mainContent.scrollTop = 0;
@@ -166,6 +168,12 @@
           <div class="web-banner-copy">
             <strong>{t('web.bannerTitle')}</strong>
             <p>{t('web.bannerBody')}</p>
+            <ul class="web-notice-list">
+              <li>{t('web.noticeStore')}</li>
+              <li>{t('web.noticeRecord')}</li>
+              <li>{t('web.noticeSession')}</li>
+              <li>{t('web.noticeLog')}</li>
+            </ul>
           </div>
           <md-outlined-button type="button" onclick={acknowledgeWebBanner}>{t('web.bannerAck')}</md-outlined-button>
         </div>
@@ -178,12 +186,14 @@
           onGoToAccounts={() => { if (!excelBusy) void navigateTo('accounts'); }}
         />
       {:else if activePage === 'analysis'}
+        {#key analysisEpoch}
         <AnalysisPage
           {t}
           {settings}
           onBusyChange={(busy) => (analysisBusy = busy)}
           onGoToAccounts={() => { if (!analysisBusy) void navigateTo('accounts'); }}
         />
+        {/key}
       {:else if activePage === 'accounts'}
         <AccountsPage {t} locale={settings.locale} onBusyChange={(busy) => (accountsBusy = busy)} />
       {:else if activePage === 'itemcodes'}

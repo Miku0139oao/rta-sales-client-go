@@ -673,6 +673,15 @@ main:focus {
   min-width: 0;
 }
 
+.web-notice-list {
+  margin: 8px 0 0;
+  padding-left: 1.2em;
+}
+
+.web-notice-list li + li {
+  margin-top: 4px;
+}
+
 .web-preview-notice md-outlined-button {
   flex: 0 0 auto;
   --md-outlined-button-outline-color: var(--app-on-warning);

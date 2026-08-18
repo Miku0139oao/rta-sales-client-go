@@ -1,4 +1,5 @@
 import { collectManCodes } from './manCodes';
+import { unpackSalesAnalysisItems } from './salesAnalysisItems';
 import type {
   AnalysisProgress,
   AnalysisResult,
@@ -232,10 +233,9 @@ function rememberArticleNamesFromResult(result: SalesAnalysisResult): void {
 }
 
 function rememberArticleNamesFromPacked(packed: SalesAnalysisPackedItems): void {
-  const dict = packed.dict ?? [];
-  for (const row of packed.rows ?? []) {
-    const code = (row.ac === undefined ? '' : dict[row.ac] ?? '').trim();
-    const name = (row.an === undefined ? '' : dict[row.an] ?? '').trim();
+  for (const item of unpackSalesAnalysisItems(packed)) {
+    const code = item.articleCode.trim();
+    const name = item.articleName.trim();
     if (code && name) lastArticleNames[code] = name;
   }
 }

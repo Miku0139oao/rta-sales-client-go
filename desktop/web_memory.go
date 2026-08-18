@@ -116,6 +116,15 @@ func (h *sseHub) Emit(_ context.Context, name string, payload any) {
 	h.EmitEvent(name, payload)
 }
 
+func (h *sseHub) Close() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for ch := range h.subs {
+		delete(h.subs, ch)
+		close(ch)
+	}
+}
+
 func (h *sseHub) EmitEvent(name string, payload any) {
 	event := sseEvent{Name: name, Payload: payload}
 	h.mu.Lock()

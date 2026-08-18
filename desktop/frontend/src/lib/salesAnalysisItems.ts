@@ -63,39 +63,41 @@ export function packSalesAnalysisItems(
   };
   const storeIndex = new Map(stores.map((store, current) => [store.businessId, current]));
   return {
-    periodKey,
-    dict,
-    rows: items.map((item) => ({
-      s: storeIndex.get(item.storeId) ?? 0,
-      ac: intern(item.articleCode),
-      an: intern(item.articleName),
-      br: intern(item.brandName),
-      c1: intern(item.category1),
-      k1: intern(item.category1Code),
-      c2: intern(item.category2),
-      k2: intern(item.category2Code),
-      c3: intern(item.category3),
-      k3: intern(item.category3Code),
-      c4: intern(item.category4),
-      k4: intern(item.category4Code),
-      c5: intern(item.category5),
-      k5: intern(item.category5Code),
-      t: item.transactionCount,
-      sq: item.saleQuantity,
-      sa: item.saleAmount,
-      rq: item.returnQuantity,
-      rt: item.returnTransactionCount,
-      ra: item.returnAmount,
-      nq: item.netQuantity,
-      ns: item.netSalesAmount,
-    })),
+    k: periodKey,
+    d: dict,
+    r: items.map((item) => trimPackedValues([
+      storeIndex.get(item.storeId) ?? 0,
+      intern(item.articleCode),
+      intern(item.articleName),
+      intern(item.brandName),
+      intern(item.category1),
+      intern(item.category1Code),
+      intern(item.category2),
+      intern(item.category2Code),
+      intern(item.category3),
+      intern(item.category3Code),
+      intern(item.category4),
+      intern(item.category4Code),
+      intern(item.category5),
+      intern(item.category5Code),
+      item.transactionCount,
+      item.saleQuantity,
+      item.saleAmount,
+      item.returnQuantity,
+      item.returnTransactionCount,
+      item.returnAmount,
+      item.netQuantity,
+      item.netSalesAmount,
+    ])),
   };
 }
 
 export function unpackSalesAnalysisItems(batch: SalesAnalysisPackedItems, stores: SalesAnalysisStoreSummary[] = []): SalesAnalysisItem[] {
-  const dict = batch.dict ?? [];
+  const dict = batch.d ?? batch.dict ?? [];
   const storeList = stores ?? [];
-  return (batch.rows ?? []).map((row) => {
+  const rows = batch.r ?? batch.rows ?? [];
+  return rows.map((raw) => {
+    const row = packedRowFields(raw);
     const store = storeList[row.s];
     return {
       storeId: store?.businessId ?? '',
@@ -123,6 +125,24 @@ export function unpackSalesAnalysisItems(batch: SalesAnalysisPackedItems, stores
       netSalesAmount: row.ns ?? 0,
     };
   });
+}
+
+function packedRowFields(row: SalesAnalysisPackedRow | number[]): SalesAnalysisPackedRow {
+  if (!Array.isArray(row)) return row;
+  const at = (index: number) => row[index] ?? 0;
+  return {
+    s: at(0), ac: at(1), an: at(2), br: at(3),
+    c1: at(4), k1: at(5), c2: at(6), k2: at(7),
+    c3: at(8), k3: at(9), c4: at(10), k4: at(11),
+    c5: at(12), k5: at(13),
+    t: at(14), sq: at(15), sa: at(16), rq: at(17), rt: at(18), ra: at(19), nq: at(20), ns: at(21),
+  };
+}
+
+function trimPackedValues(values: number[]): number[] {
+  let end = values.length;
+  while (end > 3 && !values[end - 1]) end -= 1;
+  return values.slice(0, end);
 }
 
 function packedString(dict: string[], index: number | undefined): string {

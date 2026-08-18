@@ -46,6 +46,12 @@ func (s *MemoryCredentialStore) Delete(profileID string) error {
 	return nil
 }
 
+func (s *MemoryCredentialStore) Clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.values = make(map[string]Credential)
+}
+
 // MemoryCookieStore is an in-memory implementation of rtasales.CookieStore.
 type MemoryCookieStore struct {
 	mu   sync.RWMutex

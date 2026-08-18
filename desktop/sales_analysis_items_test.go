@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -35,6 +36,21 @@ func TestPackSalesAnalysisItemsInternsRepeatedText(t *testing.T) {
 	unpacked := unpackSalesAnalysisItems(packed, period.Stores)
 	if unpacked[0].StoreID != "107" || unpacked[1].StoreLabel != "108 - Harbour" || unpacked[0].ArticleName != "Mask" {
 		t.Fatalf("unpacked=%#v", unpacked)
+	}
+	raw, err := json.Marshal(packed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"ac":`) || strings.Contains(string(raw), `"periodKey"`) {
+		t.Fatalf("packed JSON still uses object rows: %s", raw)
+	}
+	var roundtrip SalesAnalysisPackedItems
+	if err := json.Unmarshal(raw, &roundtrip); err != nil {
+		t.Fatal(err)
+	}
+	again := unpackSalesAnalysisItems(roundtrip, period.Stores)
+	if again[0].ArticleName != "Mask" || again[1].NetSalesAmount != 8 {
+		t.Fatalf("roundtrip=%#v", again)
 	}
 }
 
