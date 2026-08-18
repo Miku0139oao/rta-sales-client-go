@@ -1,0 +1,37 @@
+# Live web edition for RTA 銷售分析.
+# Caddy terminates TLS and reverse-proxies to rta-web on 127.0.0.1:8787.
+# DNS: A/AAAA at the origin, DNS-only (grey cloud). Orange-cloud breaks
+# Let's Encrypt HTTP-01 on this host.
+
+rtasales.com, www.rtasales.com {
+	encode zstd gzip
+
+	reverse_proxy 127.0.0.1:8787
+
+	@versionedAssets path /assets/*
+	header @versionedAssets Cache-Control "public, max-age=31536000, immutable"
+
+	header {
+		Strict-Transport-Security "max-age=31536000;"
+		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+}
+
+# Keep the previous preview host working until bookmarks move over.
+pre-rtasales.on9.uk {
+	encode zstd gzip
+
+	reverse_proxy 127.0.0.1:8787
+
+	@versionedAssets path /assets/*
+	header @versionedAssets Cache-Control "public, max-age=31536000, immutable"
+
+	header {
+		Strict-Transport-Security "max-age=31536000;"
+		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+}

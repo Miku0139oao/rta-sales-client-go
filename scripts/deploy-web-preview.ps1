@@ -1,4 +1,4 @@
-# Build the live web edition and deploy UI + rta-web to pre-rtasales.on9.uk.
+# Build the live web edition and deploy UI + rta-web to rtasales.com.
 # Usage (from repo root): .\scripts\deploy-web-preview.ps1
 
 $ErrorActionPreference = 'Stop'
@@ -32,7 +32,8 @@ ssh $hostName "mkdir -p $remote /usr/local/lib/systemd/system"
 scp -r "$dist\*" "${hostName}:${remote}/"
 scp $binary "${hostName}:/usr/local/bin/rta-web"
 scp (Join-Path $root 'deploy\rta-web.service') "${hostName}:/etc/systemd/system/rta-web.service"
-scp (Join-Path $root 'deploy\pre-rtasales.caddy') "${hostName}:/tmp/pre-rtasales.caddy"
+scp (Join-Path $root 'deploy\rtasales.caddy') "${hostName}:/tmp/rtasales.caddy"
+scp (Join-Path $root 'deploy\apply-rtasales-caddy.py') "${hostName}:/tmp/apply-rtasales-caddy.py"
 ssh $hostName @"
 set -euo pipefail
 chmod 755 /usr/local/bin/rta-web
@@ -40,32 +41,11 @@ chown caddy:caddy /usr/local/bin/rta-web
 find $remote -type d -exec chmod 755 {} \;
 find $remote -type f -exec chmod 644 {} \;
 chown -R caddy:caddy $remote
-python3 - <<'PY'
-from pathlib import Path
-caddy = Path('/etc/caddy/Caddyfile')
-text = caddy.read_text()
-block = Path('/tmp/pre-rtasales.caddy').read_text().strip() + '\n'
-start = text.find('pre-rtasales.on9.uk {')
-if start >= 0:
-    depth = 0
-    end = start
-    for i, ch in enumerate(text[start:], start):
-        if ch == '{':
-            depth += 1
-        elif ch == '}':
-            depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
-    text = text[:start] + block + text[end:]
-else:
-    text = text.rstrip() + '\n\n' + block
-caddy.write_text(text)
-PY
+python3 /tmp/apply-rtasales-caddy.py
 systemctl daemon-reload
 systemctl enable --now rta-web
 systemctl restart rta-web
 caddy validate --config /etc/caddy/Caddyfile
 systemctl reload caddy
 "@
-Write-Host "Deployed live web edition to ${hostName}:$remote"
+Write-Host "Deployed live web edition to ${hostName}:$remote (rtasales.com)"
