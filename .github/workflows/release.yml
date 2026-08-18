@@ -1,0 +1,220 @@
+name: release
+
+# Publishes a GitHub Release for tag v*.
+# Windows extras (Authenticode) need repo secrets:
+#   AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET,
+#   ARTIFACT_SIGNING_ENDPOINT, ARTIFACT_SIGNING_ACCOUNT, ARTIFACT_SIGNING_PROFILE
+# If those are missing, unsigned Windows files are still published.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing or new tag to publish (e.g. v0.4.4). Leave empty to build artifacts only."
+        required: false
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.25.13"
+  BUN_VERSION: "1.3.14"
+  WAILS_VERSION: "v3.0.0-beta.8"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: go test -race ./...
+      - run: go vet ./...
+      - name: Verify Svelte frontend
+        working-directory: desktop/frontend
+        run: |
+          bun install --frozen-lockfile
+          bun run verify
+
+  desktop-windows:
+    needs: test
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      signed: ${{ steps.sign.outcome == 'success' && 'true' || 'false' }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install pinned Wails v3 CLI
+        shell: pwsh
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          choco install nsis --version 3.12.0 --no-progress --yes
+          "${env:ProgramFiles(x86)}\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Build unsigned portable exe and NSIS installer
+        shell: pwsh
+        env:
+          RTA_SIGN_SKIP: "1"
+        run: ./scripts/build-desktop.ps1
+      - name: Stage Windows artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/windows | Out-Null
+          Copy-Item release/RTA-Excel-Filler-portable.exe dist/windows/RTA-Excel-Filler-windows-amd64-portable.exe
+          Copy-Item release/RTA-Excel-Filler-setup.exe dist/windows/RTA-Excel-Filler-windows-amd64-setup.exe
+          Copy-Item release/RTA-Excel-Filler-portable.exe dist/windows/RTA-Excel-Filler-portable.exe
+          Copy-Item release/RTA-Excel-Filler-setup.exe dist/windows/RTA-Excel-Filler-setup.exe
+      - name: Copy binaries for Authenticode
+        id: prepare-sign
+        if: ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_CLIENT_SECRET != '' && secrets.ARTIFACT_SIGNING_ENDPOINT != '' && secrets.ARTIFACT_SIGNING_ACCOUNT != '' && secrets.ARTIFACT_SIGNING_PROFILE != '' }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/windows-signed | Out-Null
+          Copy-Item dist/windows/RTA-Excel-Filler-windows-amd64-portable.exe dist/windows-signed/RTA-Excel-Filler-windows-amd64-portable-signed.exe
+          Copy-Item dist/windows/RTA-Excel-Filler-windows-amd64-setup.exe dist/windows-signed/RTA-Excel-Filler-windows-amd64-setup-signed.exe
+          "ready=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+      - name: Sign Windows binaries
+        id: sign
+        if: steps.prepare-sign.outputs.ready == 'true'
+        uses: azure/artifact-signing-action@c41ab607157e82e3ed79e291b56f9e7425818b04
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.ARTIFACT_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.ARTIFACT_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist\windows-signed
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Prefer signed files under the legacy names
+        if: steps.sign.outcome == 'success'
+        shell: pwsh
+        run: |
+          Copy-Item dist/windows-signed/RTA-Excel-Filler-windows-amd64-portable-signed.exe dist/windows/RTA-Excel-Filler-portable.exe -Force
+          Copy-Item dist/windows-signed/RTA-Excel-Filler-windows-amd64-setup-signed.exe dist/windows/RTA-Excel-Filler-setup.exe -Force
+          Copy-Item dist/windows-signed/*.exe dist/windows/ -Force
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-windows
+          path: dist/windows/*
+          if-no-files-found: error
+
+  desktop-linux:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install WebKitGTK
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev
+      - name: Build Linux desktop
+        run: bash scripts/build-desktop.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-linux
+          path: release/RTA-Excel-Filler-linux-amd64
+          if-no-files-found: error
+
+  desktop-macos:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            goarch: arm64
+          - os: macos-13
+            goarch: amd64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Build macOS desktop
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: bash scripts/build-desktop.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-darwin-${{ matrix.goarch }}
+          path: release/RTA-Excel-Filler-darwin-${{ matrix.goarch }}
+          if-no-files-found: error
+
+  publish:
+    if: ${{ github.event_name == 'push' || inputs.tag != '' }}
+    needs: [desktop-windows, desktop-linux, desktop-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9] ]]; then
+            echo "Refusing to publish without a v* tag (got '$TAG')"
+            exit 1
+          fi
+          version="${TAG#v}"
+          mkdir -p upload
+          find artifacts -type f -exec cp -t upload {} +
+          (
+            cd upload
+            sha256sum * | sort > SHA256SUMS.txt
+          )
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Updating existing release $TAG"
+          else
+            gh release create "$TAG" --title "RTA 銷售分析 $version" --generate-notes --verify-tag
+          fi
+          gh release upload "$TAG" upload/* --clobber

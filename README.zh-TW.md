@@ -2,7 +2,7 @@
 
 [English](README.md) | 繁體中文
 
-**RTA 銷售分析**（英文名稱：**RTA Sales Analyzer**）是一套 Windows 桌面應用程式，用於檢視門店銷售、匯出 PDF 報告，以及將數字填入公司既有的 Excel 活頁簿。
+**RTA 銷售分析**（英文名稱：**RTA Sales Analyzer**）是一套桌面應用程式，用於檢視門店銷售、匯出 PDF 報告，以及將數字填入公司既有的 Excel 活頁簿。網頁版見 [rtasales.com](https://rtasales.com)。桌面版以 Windows 為主，Linux 與 macOS 也會一併發佈。
 
 安裝完成後，以滑鼠操作即可，無須撰寫程式或使用命令列。
 
@@ -20,18 +20,18 @@
 
 ## 電腦需要什麼
 
-- 64 位元的 **Windows 10 或 Windows 11**
+- **Windows 10 或 11（64 位元）** 的桌面版，或用瀏覽器開網頁版
 - 可連線至 RTA 的網路
 - 一組（或多組）具有所需門店權限的 **RTA 帳號密碼**
 
-一般使用請安裝「安裝檔」。Windows 10／11 通常已隨 Microsoft Edge 提供 WebView2；少數缺少 Runtime 的電腦，安裝程式會協助下載。
+Windows 一般使用請安裝「安裝檔」。Windows 10／11 通常已隨 Microsoft Edge 提供 WebView2；少數缺少 Runtime 的電腦，安裝程式會協助下載。
 
 ---
 
 ## 怎麼安裝
 
 1. 至 [Releases](https://github.com/Miku0139oao/rta-sales-client-go/releases) 下載最新版本。
-2. 在壓縮檔或資料夾中找到 **`RTA-Excel-Filler-setup.exe`**，雙擊安裝。安裝檔以 Microsoft Trusted Signing 簽署。若 Windows 或 Edge 仍提示「不常下載」，選保留／仍要執行即可。
+2. 在壓縮檔或資料夾中找到 **`RTA-Excel-Filler-setup.exe`**（或 `*-signed.exe` 簽名版），雙擊安裝。若 Windows 或 Edge 仍提示「不常下載」，選保留／仍要執行即可。
 3. 安裝完成後，按鍵盤上的 **Windows 鍵**，搜尋 **RTA 銷售分析**，即可開啟。
 
 同一時間僅能開啟一個視窗。若啟動後沒有反應，請先檢查工作列是否已在執行。
@@ -46,9 +46,14 @@
 
 | 檔案 | 用途 |
 | --- | --- |
-| `RTA-Excel-Filler-setup.exe` | **一般使用請選擇此檔** |
-| `RTA-Excel-Filler-portable.exe` | 免安裝，直接雙擊執行。Windows 10／11 通常已隨 Microsoft Edge 提供 WebView2；若無法啟動，請安裝 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) 或改用安裝版 |
+| `RTA-Excel-Filler-setup.exe` | **Windows 一般使用此檔**；有簽名時即為簽名安裝檔 |
+| `RTA-Excel-Filler-windows-amd64-setup-signed.exe` | 另外一份 Windows 簽名安裝檔 |
+| `RTA-Excel-Filler-portable.exe` | 免安裝。若無法啟動，請安裝 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) 或改用安裝版 |
+| `RTA-Excel-Filler-linux-amd64` | Linux 桌面版 |
+| `RTA-Excel-Filler-darwin-arm64` / `darwin-amd64` | macOS 桌面版 |
 | `SHA256SUMS.txt` | 供資訊人員核對檔案是否遭竄改；一般使用可略過 |
+
+打 `v*` 標籤會由 [`.github/workflows/release.yml`](.github/workflows/release.yml) 建置並發佈。Windows 一定有未簽名的 portable／安裝檔；若已設定 Azure Artifact Signing 的 secrets，會再多上傳 `-signed` 檔。發行說明不要寫簽署人的個人姓名。
 
 ---
 

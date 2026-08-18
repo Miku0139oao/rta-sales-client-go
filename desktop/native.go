@@ -4,7 +4,7 @@ import (
 	"github.com/Miku0139oao/rta-sales-client-go/securestore"
 )
 
-// NewNativeApp wires Windows Credential Manager, DPAPI cookie persistence,
+// NewNativeApp wires the OS secret store, cookie persistence,
 // native Wails dialogs/events, and the xlsxfill batch engine.
 func NewNativeApp() (*App, error) {
 	native, err := securestore.NewNative("")

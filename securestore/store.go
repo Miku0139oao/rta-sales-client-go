@@ -79,11 +79,11 @@ func NewNative(root string) (*Native, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, fmt.Errorf("create application data directory: %w", err)
 	}
-	credentials, err := newNativeCredentialStore()
+	credentials, err := newNativeCredentialStore(root)
 	if err != nil {
 		return nil, err
 	}
-	protector, err := newNativeProtector()
+	protector, err := newNativeProtector(root)
 	if err != nil {
 		return nil, err
 	}

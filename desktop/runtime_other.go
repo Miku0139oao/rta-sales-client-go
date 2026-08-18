@@ -6,7 +6,7 @@ type nativeRuntimeChecker struct{}
 
 func (nativeRuntimeChecker) Check() RuntimeStatus {
 	return RuntimeStatus{
-		Available: false,
-		Message:   "RTA Excel Filler is currently supported on Windows only. / RTA Excel Filler 目前僅支援 Windows。",
+		Available: true,
+		Message:   "WebKit is provided by the desktop shell / 桌面殼層已提供 WebKit",
 	}
 }

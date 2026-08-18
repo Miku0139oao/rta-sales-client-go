@@ -2,7 +2,7 @@
 
 English | [繁體中文](README.zh-TW.md)
 
-**RTA 銷售分析** (English name: **RTA Sales Analyzer**) is a Windows desktop application for reviewing store sales, exporting PDF reports, and writing figures into the company's Excel workbook.
+**RTA 銷售分析** (English name: **RTA Sales Analyzer**) is a desktop application for reviewing store sales, exporting PDF reports, and writing figures into the company's Excel workbook. A live web edition is at [rtasales.com](https://rtasales.com). Windows is the supported desktop; Linux and macOS desktop builds are also published.
 
 After installation, the application is operated with the mouse. Programming knowledge and command-line use are not required.
 
@@ -20,18 +20,18 @@ The installer file remains `RTA-Excel-Filler-setup.exe`. This is a legacy filena
 
 ## Requirements
 
-- **64-bit Windows 10 or 11**
+- **Windows 10 or 11 (64-bit)** for the supported desktop, or the web edition in a current browser
 - A network connection that can reach RTA
 - One or more RTA accounts with access to the stores you need to review
 
-The installer is the recommended distribution. Windows 10 and Windows 11 normally provide WebView2 with Microsoft Edge. On the few computers that do not have the runtime, the installer downloads it.
+On Windows the installer is the recommended distribution. Windows 10 and Windows 11 normally provide WebView2 with Microsoft Edge. On the few computers that do not have the runtime, the installer downloads it.
 
 ---
 
 ## Install
 
 1. Download the latest files from [Releases](https://github.com/Miku0139oao/rta-sales-client-go/releases).
-2. Run **`RTA-Excel-Filler-setup.exe`**. The installer is signed with Microsoft Trusted Signing. If Windows or Edge still says the file is uncommon, choose Keep / Run anyway.
+2. Run **`RTA-Excel-Filler-setup.exe`** (or the `*-signed.exe` file if you want the Authenticode-signed copy). If Windows or Edge still says the file is uncommon, choose Keep / Run anyway.
 3. Open the Start menu, search for **RTA 銷售分析**, and launch the application.
 
 Only one window may run at a time. If a launch appears to do nothing, check the taskbar; the application may already be open.
@@ -46,9 +46,14 @@ A longer written guide (Traditional Chinese): [docs/tutorial.zh-TW.md](docs/tuto
 
 | File | When to use it |
 | --- | --- |
-| `RTA-Excel-Filler-setup.exe` | **Recommended for most users** |
-| `RTA-Excel-Filler-portable.exe` | Runs without installation. Windows 10 and Windows 11 normally provide WebView2 with Microsoft Edge. If the portable build does not start, install [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) or use the installer |
+| `RTA-Excel-Filler-setup.exe` | **Recommended on Windows.** Same as the signed installer when signing ran |
+| `RTA-Excel-Filler-windows-amd64-setup-signed.exe` | Extra Authenticode-signed Windows installer |
+| `RTA-Excel-Filler-portable.exe` | Runs without installation. If it does not start, install [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) or use the installer |
+| `RTA-Excel-Filler-linux-amd64` | Linux desktop binary |
+| `RTA-Excel-Filler-darwin-arm64` / `darwin-amd64` | macOS desktop binaries |
 | `SHA256SUMS.txt` | Used by IT to verify that a file has not been altered. Everyday users may ignore it |
+
+A tagged release is built by [`.github/workflows/release.yml`](.github/workflows/release.yml). Push `v0.4.5` (or run the workflow and pass that tag) to publish. Windows always gets unsigned portable and setup files; when the Azure Artifact Signing secrets are set, the same files are also uploaded with a `-signed` suffix. Do not put the signer’s personal name in release notes.
 
 ---
 

@@ -14,7 +14,7 @@ type dpapiProtector struct{}
 
 var dpapiEntropy = []byte("RTA Excel Filler cookie store v1")
 
-func newNativeProtector() (DataProtector, error) {
+func newNativeProtector(string) (DataProtector, error) {
 	return dpapiProtector{}, nil
 }
 

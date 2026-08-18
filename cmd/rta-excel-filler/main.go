@@ -1,5 +1,3 @@
-//go:build windows
-
 package main
 
 import (
@@ -22,8 +20,8 @@ func main() {
 
 	var mainWindow *application.WebviewWindow
 	app := application.New(application.Options{
-		Name:        "RTA Excel Filler",
-		Description: "Windows desktop workbook filler",
+		Name:        "RTA 銷售分析",
+		Description: "Desktop sales analyzer",
 		Services: []application.Service{
 			application.NewService(desktopApp),
 		},

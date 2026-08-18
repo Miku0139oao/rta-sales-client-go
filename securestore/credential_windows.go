@@ -13,7 +13,7 @@ const credentialTargetPrefix = "RTA Excel Filler/profile/"
 
 type windowsCredentialStore struct{}
 
-func newNativeCredentialStore() (CredentialStore, error) {
+func newNativeCredentialStore(string) (CredentialStore, error) {
 	return windowsCredentialStore{}, nil
 }
 
