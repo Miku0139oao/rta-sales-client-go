@@ -20,10 +20,10 @@ import (
 )
 
 const (
-	webSessionCookie   = "rta_web_session"
-	webSessionTTL      = 2 * time.Hour
-	maximumWebRPCBody  = 8 << 20
-	maximumWebUpload   = 32 << 20
+	webSessionCookie  = "rta_web_session"
+	webSessionTTL     = 2 * time.Hour
+	maximumWebRPCBody = 8 << 20
+	maximumWebUpload  = 32 << 20
 )
 
 type webSession struct {
@@ -35,10 +35,10 @@ type webSession struct {
 }
 
 type WebServer struct {
-	Static     string
-	Clients    clientFactory
-	sessions   sync.Mutex
-	byID       map[string]*webSession
+	Static   string
+	Clients  clientFactory
+	sessions sync.Mutex
+	byID     map[string]*webSession
 }
 
 func NewWebServer() *WebServer {
@@ -614,4 +614,3 @@ func webErrorCode(err error) string {
 		return "backend_error"
 	}
 }
-

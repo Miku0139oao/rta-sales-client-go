@@ -39,6 +39,10 @@ cmd/rta-excel-filler/bin/
 # Local agent skill scratch (do not publish)
 .devin/
 
+# Production host, Caddy, and deploy scripts (keep on the machine only)
+deploy/
+scripts/deploy-web-preview.ps1
+
 # Editors and operating systems
 .idea/
 .vscode/

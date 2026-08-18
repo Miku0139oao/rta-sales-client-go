@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	rtasales "github.com/Miku0139oao/rta-sales-client-go"
+	rtasales "github.com/Miku0139oao/rta-sales-client-go/rtasales"
 	"github.com/Miku0139oao/rta-sales-client-go/securestore"
 )
 
@@ -57,8 +57,8 @@ func (r *memoryManCodeRepository) Replace(groups []ManCodeGroup) error {
 }
 
 type memoryProfileCookies struct {
-	mu     sync.Mutex
-	byID   map[string]*securestore.MemoryCookieStore
+	mu   sync.Mutex
+	byID map[string]*securestore.MemoryCookieStore
 }
 
 func newMemoryProfileCookies() *memoryProfileCookies {

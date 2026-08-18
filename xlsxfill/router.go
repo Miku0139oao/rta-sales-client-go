@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	rtasales "github.com/Miku0139oao/rta-sales-client-go"
+	rtasales "github.com/Miku0139oao/rta-sales-client-go/rtasales"
 )
 
 // ProviderRouter routes each workbook business store to its configured sales

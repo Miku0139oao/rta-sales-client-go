@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	rtasales "github.com/Miku0139oao/rta-sales-client-go"
+	rtasales "github.com/Miku0139oao/rta-sales-client-go/rtasales"
 	"github.com/xuri/excelize/v2"
 )
 

@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	rtasales "github.com/Miku0139oao/rta-sales-client-go"
+	rtasales "github.com/Miku0139oao/rta-sales-client-go/rtasales"
 )
 
 const (

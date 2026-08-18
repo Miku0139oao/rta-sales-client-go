@@ -6,7 +6,7 @@ import (
 	"runtime/debug"
 	"strings"
 
-	rtasales "github.com/Miku0139oao/rta-sales-client-go"
+	rtasales "github.com/Miku0139oao/rta-sales-client-go/rtasales"
 )
 
 // GetSalesAnalysisItems returns one period's article rows from the last

@@ -59,6 +59,8 @@ go get github.com/Miku0139oao/rta-sales-client-go@latest
 帳密用環境變數。一個 `Client` 對應一本帳號，第一次查詢時才會登入，cookie 過期會自己再登。
 
 ```go
+import rtasales "github.com/Miku0139oao/rta-sales-client-go/rtasales"
+
 client, err := rtasales.NewClient(rtasales.Config{
 	Account:    os.Getenv("RTA_ACCOUNT"),
 	Password:   os.Getenv("RTA_PASSWORD"),

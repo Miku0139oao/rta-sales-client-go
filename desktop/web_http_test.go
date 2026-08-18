@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"testing"
 
-	rtasales "github.com/Miku0139oao/rta-sales-client-go"
+	rtasales "github.com/Miku0139oao/rta-sales-client-go/rtasales"
 )
 
 func TestWebHTTPSyncAndLiveStoreList(t *testing.T) {

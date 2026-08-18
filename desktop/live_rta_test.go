@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	rtasales "github.com/Miku0139oao/rta-sales-client-go"
+	rtasales "github.com/Miku0139oao/rta-sales-client-go/rtasales"
 )
 
 func TestLiveOneAccountListsStoresAndQueriesOneStore(t *testing.T) {
@@ -224,9 +224,9 @@ func TestLiveSixteenStoreFivePeriodSimulation(t *testing.T) {
 			for item := range work {
 				period := periods[item.period]
 				_, queryErr := client.Sales(ctx, rtasales.SalesQuery{
-					BusinessStoreID: item.store,
-					StartDate:       period.from,
-					EndDate:         period.to,
+					BusinessStoreID:   item.store,
+					StartDate:         period.from,
+					EndDate:           period.to,
 					SkipTrend:         !period.trend,
 					SkipTrendLookback: item.period != 0,
 					Compact:           true,

@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	rtasales "github.com/Miku0139oao/rta-sales-client-go"
+	rtasales "github.com/Miku0139oao/rta-sales-client-go/rtasales"
 	"github.com/Miku0139oao/rta-sales-client-go/securestore"
 	"github.com/Miku0139oao/rta-sales-client-go/xlsxfill"
 )

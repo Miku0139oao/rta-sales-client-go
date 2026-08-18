@@ -2,12 +2,18 @@ package rtasales
 
 import (
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 func TestCIPinsPatchedGoInsteadOfGoModPatchZero(t *testing.T) {
-	raw, err := os.ReadFile(".github/workflows/ci.yml")
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate test file")
+	}
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "..", ".github", "workflows", "ci.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,7 +3,7 @@ package desktop
 import (
 	"context"
 
-	rtasales "github.com/Miku0139oao/rta-sales-client-go"
+	rtasales "github.com/Miku0139oao/rta-sales-client-go/rtasales"
 	"github.com/Miku0139oao/rta-sales-client-go/securestore"
 )
 
@@ -67,10 +67,10 @@ type rtaClientFactory struct{}
 
 func (rtaClientFactory) New(credential securestore.Credential, cookieStore rtasales.CookieStore) (accountClient, error) {
 	return rtasales.NewClient(rtasales.Config{
-		Account:        credential.Account,
-		Password:       credential.Password,
-		CaptchaSolvers: []rtasales.CaptchaSolver{rtasales.NewEmbeddedOCRSolver(rtasales.EmbeddedOCRConfig{})},
-		CookieStore:    cookieStore,
+		Account:         credential.Account,
+		Password:        credential.Password,
+		CaptchaSolvers:  []rtasales.CaptchaSolver{rtasales.NewEmbeddedOCRSolver(rtasales.EmbeddedOCRConfig{})},
+		CookieStore:     cookieStore,
 		LoginAttempts:   4,
 		PageConcurrency: 16,
 	})

@@ -59,6 +59,8 @@ go get github.com/Miku0139oao/rta-sales-client-go@latest
 Keep credentials in the environment. One `Client` is one account. It logs in on the first request and refreshes an expired session.
 
 ```go
+import rtasales "github.com/Miku0139oao/rta-sales-client-go/rtasales"
+
 client, err := rtasales.NewClient(rtasales.Config{
 	Account:    os.Getenv("RTA_ACCOUNT"),
 	Password:   os.Getenv("RTA_PASSWORD"),
