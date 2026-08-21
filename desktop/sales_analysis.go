@@ -22,8 +22,9 @@ const (
 	salesAnalysisUpdateEventName   = "rta:sales-analysis-update"
 	// maxAccountQuerySessions is how many independent RTA logins one profile
 	// may open. Each login keeps its own cookie; requests on one cookie stay
-	// serial. RTA does not appear to evict parallel sessions for one account.
-	maxAccountQuerySessions = 4
+	// serial. Live checks of 8 parallel sessions did not evict the first
+	// login or return HTTP 429 on a 16-store five-period query.
+	maxAccountQuerySessions = 8
 )
 
 var salesAnalysisRateLimitRetryDelays = [...]time.Duration{time.Second, 3 * time.Second}

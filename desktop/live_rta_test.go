@@ -5,13 +5,17 @@ package desktop
 import (
 	"bufio"
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	rtasales "github.com/Miku0139oao/rta-sales-client-go/rtasales"
+	"github.com/Miku0139oao/rta-sales-client-go/securestore"
 )
 
 func TestLiveOneAccountListsStoresAndQueriesOneStore(t *testing.T) {
@@ -257,6 +261,285 @@ func TestLiveSixteenStoreFivePeriodSimulation(t *testing.T) {
 	if ok == 0 {
 		t.Fatal("every simulated query failed")
 	}
+}
+
+func TestLiveTwoSessionsSameAccount(t *testing.T) {
+	account, password, _ := liveRTACredentials(t)
+	primaryHits := newLoginHitCounter()
+	extraHits := newLoginHitCounter()
+	primary, err := rtasales.NewClient(rtasales.Config{
+		Account:        account,
+		Password:       password,
+		CookieStore:    new(securestore.MemoryCookieStore),
+		CaptchaSolvers: []rtasales.CaptchaSolver{rtasales.NewEmbeddedOCRSolver(rtasales.EmbeddedOCRConfig{})},
+		HTTPClient:     &http.Client{Timeout: 60 * time.Second, Transport: primaryHits},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra, err := rtasales.NewClient(rtasales.Config{
+		Account:        account,
+		Password:       password,
+		CookieStore:    new(securestore.MemoryCookieStore),
+		CaptchaSolvers: []rtasales.CaptchaSolver{rtasales.NewEmbeddedOCRSolver(rtasales.EmbeddedOCRConfig{})},
+		HTTPClient:     &http.Client{Timeout: 60 * time.Second, Transport: extraHits},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+
+	stores, err := primary.Stores(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stores) == 0 {
+		t.Fatal("authorized store list was empty")
+	}
+	loginsAfterPrimary := primaryHits.logins.Load()
+	t.Logf("primary login done stores=%d logins=%d captchas=%d", len(stores), loginsAfterPrimary, primaryHits.captchas.Load())
+
+	extraStores, err := extra.Stores(ctx)
+	if err != nil {
+		t.Fatalf("second login failed: %v", err)
+	}
+	if len(extraStores) == 0 {
+		t.Fatal("second session store list was empty")
+	}
+	t.Logf("extra login done stores=%d logins=%d captchas=%d", len(extraStores), extraHits.logins.Load(), extraHits.captchas.Load())
+
+	refreshed, err := primary.RefreshStores(ctx)
+	if err != nil {
+		t.Fatalf("primary session failed after second login: %v", err)
+	}
+	if len(refreshed) == 0 {
+		t.Fatal("primary store list was empty after second login")
+	}
+	loginsAfterSecond := primaryHits.logins.Load()
+	kicked := loginsAfterSecond > loginsAfterPrimary
+	t.Logf("primary after extra login stores=%d logins=%d kicked=%t", len(refreshed), loginsAfterSecond, kicked)
+
+	day := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+	query := rtasales.SalesQuery{
+		BusinessStoreID: stores[0].BusinessID,
+		StartDate:       day,
+		EndDate:         day,
+		SkipTrend:       true,
+		Compact:         true,
+	}
+	type outcome struct {
+		name string
+		err  error
+	}
+	results := make(chan outcome, 2)
+	go func() {
+		_, queryErr := primary.Sales(ctx, query)
+		results <- outcome{name: "primary", err: queryErr}
+	}()
+	go func() {
+		_, queryErr := extra.Sales(ctx, query)
+		results <- outcome{name: "extra", err: queryErr}
+	}()
+	for range 2 {
+		item := <-results
+		if item.err != nil {
+			t.Fatalf("%s concurrent sales failed: %v", item.name, item.err)
+		}
+		t.Logf("%s concurrent sales ok", item.name)
+	}
+
+	if kicked {
+		t.Fatal("RTA invalidated the first session after the second login")
+	}
+}
+
+func TestLiveSixteenStoreExtraLogins(t *testing.T) {
+	account, password, _ := liveRTACredentials(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 14*time.Minute)
+	defer cancel()
+
+	const sessionCount = maxAccountQuerySessions
+	hits := make([]*loginHitCounter, sessionCount)
+	clients := make([]*rtasales.Client, sessionCount)
+	for index := range sessionCount {
+		hits[index] = newLoginHitCounter()
+		client, err := newLiveMemoryClient(account, password, hits[index])
+		if err != nil {
+			t.Fatal(err)
+		}
+		clients[index] = client
+	}
+
+	stores, err := clients[0].Stores(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stores) == 0 {
+		t.Fatal("authorized store list was empty")
+	}
+	primaryLogins := hits[0].logins.Load()
+	t.Logf("primary login done stores=%d logins=%d captchas=%d", len(stores), primaryLogins, hits[0].captchas.Load())
+
+	for index := 1; index < sessionCount; index++ {
+		extraStores, loginErr := clients[index].Stores(ctx)
+		if loginErr != nil {
+			t.Fatalf("session %d login failed: %v", index+1, loginErr)
+		}
+		if len(extraStores) == 0 {
+			t.Fatalf("session %d store list was empty", index+1)
+		}
+		t.Logf("session %d login done stores=%d logins=%d captchas=%d", index+1, len(extraStores), hits[index].logins.Load(), hits[index].captchas.Load())
+	}
+
+	if _, err := clients[0].RefreshStores(ctx); err != nil {
+		t.Fatalf("primary session failed after %d logins: %v", sessionCount, err)
+	}
+	kicked := hits[0].logins.Load() > primaryLogins
+	t.Logf("primary after %d logins kicked=%t logins=%d", sessionCount, kicked, hits[0].logins.Load())
+
+	simulated := expandSimulatedStores(stores, 16)
+	from := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
+	periods := []struct {
+		from, to time.Time
+		trend    bool
+	}{
+		{from, to, true},
+		{time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC), true},
+		{time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 6, 16, 0, 0, 0, 0, time.UTC), true},
+		{time.Date(2025, 8, 1, 0, 0, 0, 0, time.UTC), time.Date(2025, 8, 16, 0, 0, 0, 0, time.UTC), true},
+		{time.Date(2025, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2025, 9, 30, 0, 0, 0, 0, time.UTC), false},
+	}
+	before429 := loginHitTotal429(hits)
+	started := time.Now()
+	ok, limited, other := runSimulatedPeriodJobsAcrossSessions(ctx, clients, simulated, periods)
+	elapsed := time.Since(started)
+	http429 := loginHitTotal429(hits) - before429
+	t.Logf("five-period sessions=%d took %s success=%d/%d rateLimited=%d other=%d http429=%d", sessionCount, elapsed.Round(time.Millisecond), ok, len(simulated)*len(periods), limited, other, http429)
+	if ok == 0 {
+		t.Fatal("every simulated query failed")
+	}
+
+	if kicked {
+		t.Fatal("RTA invalidated the first session after extra logins")
+	}
+}
+
+func newLiveMemoryClient(account, password string, transport http.RoundTripper) (*rtasales.Client, error) {
+	return rtasales.NewClient(rtasales.Config{
+		Account:        account,
+		Password:       password,
+		CookieStore:    new(securestore.MemoryCookieStore),
+		CaptchaSolvers: []rtasales.CaptchaSolver{rtasales.NewEmbeddedOCRSolver(rtasales.EmbeddedOCRConfig{})},
+		HTTPClient:     &http.Client{Timeout: 60 * time.Second, Transport: transport},
+	})
+}
+
+type liveSessionJob struct {
+	store rtasales.Store
+	from  time.Time
+	to    time.Time
+	trend bool
+}
+
+func runSimulatedStoresAcrossSessions(ctx context.Context, clients []*rtasales.Client, stores []rtasales.Store, from, to time.Time, trend bool) (ok, limited, other int) {
+	jobs := make([]liveSessionJob, 0, len(stores))
+	for _, store := range stores {
+		jobs = append(jobs, liveSessionJob{store: store, from: from, to: to, trend: trend})
+	}
+	return runSessionJobs(ctx, clients, jobs)
+}
+
+func runSimulatedPeriodJobsAcrossSessions(ctx context.Context, clients []*rtasales.Client, stores []rtasales.Store, periods []struct {
+	from, to time.Time
+	trend    bool
+}) (ok, limited, other int) {
+	jobs := make([]liveSessionJob, 0, len(stores)*len(periods))
+	for _, period := range periods {
+		for _, store := range stores {
+			jobs = append(jobs, liveSessionJob{store: store, from: period.from, to: period.to, trend: period.trend})
+		}
+	}
+	return runSessionJobs(ctx, clients, jobs)
+}
+
+func runSessionJobs(ctx context.Context, clients []*rtasales.Client, jobs []liveSessionJob) (ok, limited, other int) {
+	type outcome struct{ err error }
+	lanes := make([][]liveSessionJob, len(clients))
+	for index, item := range jobs {
+		lanes[index%len(clients)] = append(lanes[index%len(clients)], item)
+	}
+	results := make(chan outcome, len(jobs))
+	var waitGroup sync.WaitGroup
+	for index, lane := range lanes {
+		if len(lane) == 0 {
+			continue
+		}
+		waitGroup.Add(1)
+		query := maybeSimulateClient(clients[index], 16)
+		go func(query accountClient, lane []liveSessionJob) {
+			defer waitGroup.Done()
+			for _, item := range lane {
+				_, queryErr := query.Sales(ctx, rtasales.SalesQuery{
+					BusinessStoreID: item.store.BusinessID,
+					StartDate:       item.from,
+					EndDate:         item.to,
+					SkipTrend:       !item.trend,
+					Compact:         true,
+				})
+				results <- outcome{err: queryErr}
+			}
+		}(query, lane)
+	}
+	go func() {
+		waitGroup.Wait()
+		close(results)
+	}()
+	for item := range results {
+		switch {
+		case item.err == nil:
+			ok++
+		case strings.Contains(item.err.Error(), "429"):
+			limited++
+		default:
+			other++
+		}
+	}
+	return ok, limited, other
+}
+
+func loginHitTotal429(hits []*loginHitCounter) int64 {
+	var total int64
+	for _, item := range hits {
+		total += item.status429.Load()
+	}
+	return total
+}
+
+type loginHitCounter struct {
+	logins    atomic.Int64
+	captchas  atomic.Int64
+	status429 atomic.Int64
+}
+
+func newLoginHitCounter() *loginHitCounter {
+	return &loginHitCounter{}
+}
+
+func (c *loginHitCounter) RoundTrip(request *http.Request) (*http.Response, error) {
+	switch {
+	case strings.Contains(request.URL.Path, "doLogin"):
+		c.logins.Add(1)
+	case strings.Contains(request.URL.Path, "getVerifyCodeImg"):
+		c.captchas.Add(1)
+	}
+	response, err := http.DefaultTransport.RoundTrip(request)
+	if err == nil && response != nil && response.StatusCode == http.StatusTooManyRequests {
+		c.status429.Add(1)
+	}
+	return response, err
 }
 
 func liveRTACredentials(t *testing.T) (account, password, cookieFile string) {
