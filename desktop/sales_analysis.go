@@ -20,6 +20,10 @@ import (
 const (
 	salesAnalysisProgressEventName = "rta:sales-analysis-progress"
 	salesAnalysisUpdateEventName   = "rta:sales-analysis-update"
+	// maxAccountQuerySessions is how many independent RTA logins one profile
+	// may open. Each login keeps its own cookie; requests on one cookie stay
+	// serial. RTA does not appear to evict parallel sessions for one account.
+	maxAccountQuerySessions = 4
 )
 
 var salesAnalysisRateLimitRetryDelays = [...]time.Duration{time.Second, 3 * time.Second}
@@ -97,6 +101,9 @@ func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResul
 
 	selected, err := a.selectSalesAnalysisStores(ctx, request.ProfileID, storeIDs, request.SimulateStoreCount)
 	if err != nil {
+		return SalesAnalysisResult{}, err
+	}
+	if err := a.spreadAccountQuerySessions(selected, concurrency, request.SimulateStoreCount); err != nil {
 		return SalesAnalysisResult{}, err
 	}
 	primaryIndex := primarySalesAnalysisPeriodIndex(periods)
@@ -225,9 +232,9 @@ func (a *App) runSalesAnalysisJobs(
 		outcomes[periodIndex] = make([]storeOutcome, len(selected))
 	}
 	trendOutcomes := make([]storeOutcome, len(periods))
-	// Schedule whole authenticated-account lanes. This keeps one login's store
-	// queries serial without occupying every worker with callers waiting on the
-	// same account, so other accounts can continue independently.
+	// Schedule cookie lanes. One login stays serial; extra logins for the same
+	// account are separate lanes so stores can run in parallel. Other accounts
+	// keep their own lanes.
 	jobsByLane := make(map[string][]analysisJob)
 	laneOrder := make([]string, 0)
 	for _, task := range tasks {
@@ -801,6 +808,78 @@ func (a *App) salesAnalysisAccountClient(profileID string) (accountSession, erro
 		return accountSession{}, err
 	}
 	return accountSession{client: client, lane: accountLane(credential.Account)}, nil
+}
+
+func accountQuerySessionCount(storeCount, concurrency int) int {
+	if storeCount < 1 {
+		return 1
+	}
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	n := concurrency
+	if n > maxAccountQuerySessions {
+		n = maxAccountQuerySessions
+	}
+	if n > storeCount {
+		n = storeCount
+	}
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
+func (a *App) extraAccountSessions(primary accountSession, profileID string, count int) ([]accountSession, error) {
+	if count < 1 {
+		count = 1
+	}
+	sessions := []accountSession{primary}
+	if count == 1 {
+		return sessions, nil
+	}
+	credential, err := a.credentials.Get(profileID)
+	if err != nil {
+		return nil, err
+	}
+	for index := 1; index < count; index++ {
+		client, err := a.clients.New(credential, new(securestore.MemoryCookieStore))
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, accountSession{
+			client: client,
+			lane:   fmt.Sprintf("%s:%d", primary.lane, index),
+		})
+	}
+	return sessions, nil
+}
+
+func (a *App) spreadAccountQuerySessions(selected []selectedStore, concurrency, simulateStoreCount int) error {
+	indexesByProfile := make(map[string][]int)
+	order := make([]string, 0)
+	for index, store := range selected {
+		profileID := store.route.profileID
+		if _, exists := indexesByProfile[profileID]; !exists {
+			order = append(order, profileID)
+		}
+		indexesByProfile[profileID] = append(indexesByProfile[profileID], index)
+	}
+	for _, profileID := range order {
+		indexes := indexesByProfile[profileID]
+		primary := selected[indexes[0]].route
+		sessions, err := a.extraAccountSessions(accountSession{client: primary.client, lane: primary.lane}, profileID, accountQuerySessionCount(len(indexes), concurrency))
+		if err != nil {
+			return err
+		}
+		for offset, index := range indexes {
+			session := sessions[offset%len(sessions)]
+			selected[index].route.client = session.client
+			selected[index].route.lane = session.lane
+			selected[index].query = maybeSimulateClient(session.client, simulateStoreCount)
+		}
+	}
+	return nil
 }
 
 func accountLane(account string) string {

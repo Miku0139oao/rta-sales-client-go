@@ -653,7 +653,7 @@ func TestAnalyzeDoesNotQueryASecondEnabledProfile(t *testing.T) {
 	if _, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{DisplayName: "Spare", Account: "account-two", Password: "password", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
-	router, allowed, _, overlap, _, err := app.buildRouter(context.Background(), "one-account", "")
+	router, allowed, _, overlap, _, err := app.buildRouter(context.Background(), "one-account", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -697,7 +697,7 @@ func TestDuplicateAccountProfilesDoNotExposeAccountInRoutes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	router, allowed, _, overlap, _, err := app.buildRouter(context.Background(), "test-operation", "")
+	router, allowed, _, overlap, _, err := app.buildRouter(context.Background(), "test-operation", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

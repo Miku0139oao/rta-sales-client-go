@@ -22,11 +22,12 @@ const (
 	// DefaultMaxJobs bounds a normal multi-day analysis while still allowing a
 	// full workbook month to be processed without per-run tuning.
 	DefaultMaxJobs = 2000
-	// DefaultConcurrency is the number of independent account sessions queried
-	// at once. Jobs that share one authenticated client run serially.
+	// DefaultConcurrency is the number of independent session lanes queried
+	// at once. Jobs that share one cookie still run serially; one account may
+	// open a few extra logins so its stores can proceed in parallel.
 	DefaultConcurrency = 160
 	// MaximumConcurrency is the user-selectable ceiling for independent
-	// account sessions. One authenticated client is not queried concurrently.
+	// session lanes across accounts.
 	MaximumConcurrency = 160
 )
 

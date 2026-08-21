@@ -707,9 +707,8 @@ func (state *batchPlanState) executeJobsLocked(ctx context.Context, indexes []in
 	}
 	state.executing = true
 	defer func() { state.executing = false }()
-	// RTA applies throttling to the authenticated session, not to an individual
-	// store. Keep jobs sharing one cookie in a serial lane, including their
-	// retry waits, while still allowing independent accounts to run together.
+	// RTA throttles a cookie, not a store. Jobs that share a cookie stay serial,
+	// including retry waits. Extra logins for the same account are other lanes.
 	jobsByLane := make(map[string][]int)
 	laneOrder := make([]string, 0)
 	for _, index := range indexes {

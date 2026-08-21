@@ -593,7 +593,7 @@ func (a *App) Analyze(request AnalyzeRequest) (AnalysisResult, error) {
 		return AnalysisResult{}, workErr
 	}
 	a.emit(operationID, "scan", 0, 1, "Preparing workbook plan / 正在準備活頁簿計畫")
-	router, allowedStores, ownership, overlapCount, warnings, err := a.buildRouter(ctx, operationID, request.ProfileID)
+	router, allowedStores, ownership, overlapCount, warnings, err := a.buildRouter(ctx, operationID, request.ProfileID, concurrency)
 	if err != nil {
 		return fail(err)
 	}
@@ -759,7 +759,7 @@ func (a *App) beginExistingWork(operationID string) (*operationState, context.Co
 	return state, ctx, finish, nil
 }
 
-func (a *App) buildRouter(ctx context.Context, operationID, profileID string) (*xlsxfill.ProviderRouter, []string, map[string]string, int, []string, error) {
+func (a *App) buildRouter(ctx context.Context, operationID, profileID string, queryConcurrency int) (*xlsxfill.ProviderRouter, []string, map[string]string, int, []string, error) {
 	profile, err := a.excelAnalysisProfile(profileID)
 	if err != nil {
 		return nil, nil, nil, 0, nil, err
@@ -778,15 +778,24 @@ func (a *App) buildRouter(ctx context.Context, operationID, profileID string) (*
 		return nil, nil, nil, 0, nil, err
 	}
 	a.emit(operationID, "login", 1, 1, "Account ready / 帳號已就緒")
-	routes := make(map[string]xlsxfill.ProviderRoute, len(stores))
-	ownership := make(map[string]string, len(stores))
+	storeIDs := make([]string, 0, len(stores))
 	for _, store := range stores {
 		storeID := strings.TrimSpace(store.BusinessID)
 		if storeID == "" {
 			continue
 		}
+		storeIDs = append(storeIDs, storeID)
+	}
+	sessions, err := a.extraAccountSessions(session, profile.ID, accountQuerySessionCount(len(storeIDs), queryConcurrency))
+	if err != nil {
+		return nil, nil, nil, 0, nil, err
+	}
+	routes := make(map[string]xlsxfill.ProviderRoute, len(storeIDs))
+	ownership := make(map[string]string, len(storeIDs))
+	for index, storeID := range storeIDs {
+		query := sessions[index%len(sessions)]
 		routes[storeID] = xlsxfill.ProviderRoute{
-			Provider: client, Profile: profile.DisplayName, Lane: session.lane,
+			Provider: query.client, Profile: profile.DisplayName, Lane: query.lane,
 		}
 		ownership[storeID] = profile.DisplayName
 	}

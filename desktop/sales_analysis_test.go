@@ -178,15 +178,12 @@ func TestSalesAnalysisSerializesOneProfileStoresAndPreservesCategories(t *testin
 		})
 		done <- response{result: result, err: runErr}
 	}()
-	select {
-	case <-client.started:
-	case <-time.After(time.Second):
-		t.Fatal("first store query did not start")
-	}
-	select {
-	case <-client.started:
-		t.Fatal("one account started a second store query before the first completed")
-	case <-time.After(50 * time.Millisecond):
+	for range 2 {
+		select {
+		case <-client.started:
+		case <-time.After(time.Second):
+			t.Fatal("expected both store queries to start on separate logins")
+		}
 	}
 	close(client.release)
 	answer := <-done
@@ -219,8 +216,8 @@ func TestSalesAnalysisSerializesOneProfileStoresAndPreservesCategories(t *testin
 	maxActive := client.maxActive
 	queries := append([]rtasales.SalesQuery(nil), client.queries...)
 	client.mu.Unlock()
-	if maxActive != 1 || len(queries) != 2 {
-		t.Fatalf("serialized queries max=%d queries=%d", maxActive, len(queries))
+	if maxActive != 2 || len(queries) != 2 {
+		t.Fatalf("two logins should query two stores in parallel: max=%d queries=%d", maxActive, len(queries))
 	}
 	for _, query := range queries {
 		if query.StartDate.Format("2006-01-02") != "2026-08-15" || query.EndDate.Format("2006-01-02") != "2026-08-15" {
@@ -289,14 +286,16 @@ func TestSalesAnalysisQueriesReportPeriodsInParallelAndIncludesTrend(t *testing.
 		})
 		done <- runErr
 	}()
-	select {
-	case <-client.started:
-	case <-time.After(time.Second):
-		t.Fatal("current-period article query did not start")
+	for range 2 {
+		select {
+		case <-client.started:
+		case <-time.After(time.Second):
+			t.Fatal("current-period article query did not start")
+		}
 	}
 	select {
 	case <-client.started:
-		t.Fatal("one account started concurrent current-period article queries")
+		t.Fatal("follow-on periods started before the current article wave finished")
 	case <-time.After(50 * time.Millisecond):
 	}
 	close(client.release)
@@ -355,6 +354,21 @@ func TestSalesAnalysisQueriesReportPeriodsInParallelAndIncludesTrend(t *testing.
 	}
 }
 
+func TestAccountQuerySessionCountCapsExtraLogins(t *testing.T) {
+	if got := accountQuerySessionCount(40, 160); got != maxAccountQuerySessions {
+		t.Fatalf("40 stores at 160 concurrency = %d, want %d", got, maxAccountQuerySessions)
+	}
+	if got := accountQuerySessionCount(2, 160); got != 2 {
+		t.Fatalf("two stores = %d, want 2", got)
+	}
+	if got := accountQuerySessionCount(16, 1); got != 1 {
+		t.Fatalf("concurrency 1 = %d, want 1", got)
+	}
+	if got := accountQuerySessionCount(0, 160); got != 1 {
+		t.Fatalf("no stores = %d, want 1", got)
+	}
+}
+
 func TestSalesAnalysisSerializesPerProfileAtDefaultAndMaximumConcurrency(t *testing.T) {
 	periods := []SalesAnalysisPeriodRequest{
 		{Key: "current", Label: "Current", From: "2026-08-15", To: "2026-08-15"},
@@ -368,8 +382,9 @@ func TestSalesAnalysisSerializesPerProfileAtDefaultAndMaximumConcurrency(t *test
 		storeCount  int
 		wantActive  int
 	}{
-		{name: "default queues one account", concurrency: 0, storeCount: 40, wantActive: 1},
-		{name: "maximum queues one account", concurrency: 160, storeCount: 40, wantActive: 1},
+		{name: "default opens a few extra logins", concurrency: 0, storeCount: 40, wantActive: maxAccountQuerySessions},
+		{name: "maximum still caps extra logins", concurrency: 160, storeCount: 40, wantActive: maxAccountQuerySessions},
+		{name: "one store stays on one login", concurrency: 160, storeCount: 1, wantActive: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			stores := make([]rtasales.Store, 0, test.storeCount)
@@ -409,7 +424,7 @@ func TestSalesAnalysisSerializesPerProfileAtDefaultAndMaximumConcurrency(t *test
 			}
 			select {
 			case <-client.started:
-				t.Fatal("one account exceeded its serial query lane")
+				t.Fatal("account opened more query sessions than the login cap")
 			case <-time.After(50 * time.Millisecond):
 			}
 			close(client.release)
@@ -732,7 +747,7 @@ func TestSalesAnalysisRateLimitPausesOnlyTheAffectedAccount(t *testing.T) {
 	clientA.mu.Lock()
 	queriesWhilePaused := len(clientA.queries)
 	clientA.mu.Unlock()
-	if queriesWhilePaused != 1 {
+	if queriesWhilePaused < 1 || queriesWhilePaused > 2 {
 		t.Fatalf("affected account ran %d queries before its pause was released", queriesWhilePaused)
 	}
 	close(resume)
@@ -746,7 +761,7 @@ func TestSalesAnalysisRateLimitPausesOnlyTheAffectedAccount(t *testing.T) {
 	clientA.mu.Lock()
 	queriesA, maxActiveA := len(clientA.queries), clientA.maxActive
 	clientA.mu.Unlock()
-	if queriesA != 3 || maxActiveA != 1 {
-		t.Fatalf("account A queries=%d maxActive=%d, want 3 attempts and one active query", queriesA, maxActiveA)
+	if queriesA < 3 || maxActiveA < 1 || maxActiveA > 2 {
+		t.Fatalf("account A queries=%d maxActive=%d, want retries with at most two logins", queriesA, maxActiveA)
 	}
 }
