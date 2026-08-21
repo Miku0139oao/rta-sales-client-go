@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1083,6 +1084,137 @@ func TestCancelPreservesPlanForRetryAndIncompleteCannotApply(t *testing.T) {
 	if !retried.Complete || !retried.CanApply || retried.ChangedCellCount != 2 {
 		t.Fatalf("retry did not complete pending work: %#v", retried)
 	}
+}
+
+type oneAccountManyStoresClient struct {
+	stores   []rtasales.Store
+	failID   string
+	failErr  error
+	mu       sync.Mutex
+	failures int
+	queries  []string
+}
+
+func (c *oneAccountManyStoresClient) Stores(context.Context) ([]rtasales.Store, error) {
+	return append([]rtasales.Store(nil), c.stores...), nil
+}
+
+func (c *oneAccountManyStoresClient) Sales(_ context.Context, query rtasales.SalesQuery) (*rtasales.SalesResult, error) {
+	c.mu.Lock()
+	c.queries = append(c.queries, query.BusinessStoreID)
+	if query.BusinessStoreID == c.failID && c.failures < 3 {
+		c.failures++
+		err := c.failErr
+		c.mu.Unlock()
+		return nil, err
+	}
+	c.mu.Unlock()
+	transactions := 4.0
+	return &rtasales.SalesResult{
+		TotalAmount: 40, TotalTransactionCount: &transactions,
+		Items: []rtasales.SaleItem{{Matnr: "ITEM"}},
+	}, nil
+}
+
+func TestAnalyzeOneProfileManyStoresKeepsRetryableFailureAsQueryFailed(t *testing.T) {
+	const storeCount = 16
+	failID := "S03"
+	stores := make([]rtasales.Store, storeCount)
+	date := time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local)
+	client := &oneAccountManyStoresClient{
+		failID:  failID,
+		failErr: &rtasales.UpstreamError{Operation: "sales", StatusCode: 429, Body: "too many requests"},
+	}
+	for index := 0; index < storeCount; index++ {
+		storeID := "S" + twoDigit(index+1)
+		stores[index] = rtasales.Store{BusinessID: storeID, Label: storeID}
+	}
+	client.stores = stores
+	app, _, _ := newTestApp(t, newXLSXEngine(), fakeClients{byAccount: map[string]accountClient{"account-one": client}})
+	if _, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{
+		DisplayName: "Primary", Account: "account-one", Password: "password-one", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	input := multiStoreWorkbook(t, stores, date)
+	result, err := app.Analyze(AnalyzeRequest{InputPath: input, Date: "2026-08-01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RetryableCount != 1 || result.FailedCount != 1 {
+		t.Fatalf("retryable/failed=%d/%d, want 1/1: %#v", result.RetryableCount, result.FailedCount, result)
+	}
+	failed := 0
+	succeeded := 0
+	for _, row := range result.Preview {
+		if permissionIssue(row.Message) {
+			t.Fatalf("listed store marked as permission: %#v", row)
+		}
+		if row.Status == "failed" {
+			if row.Message != "query_failed" || row.WorkbookStoreID != failID {
+				t.Fatalf("failed row was not retryable query_failed: %#v", row)
+			}
+			failed++
+			continue
+		}
+		if row.Status != "change" {
+			t.Fatalf("other listed store did not succeed: %#v", row)
+		}
+		succeeded++
+	}
+	if failed != 1 || succeeded != storeCount-1 {
+		t.Fatalf("failed=%d succeeded=%d", failed, succeeded)
+	}
+	for _, issue := range result.Issues {
+		if permissionIssue(issue.Message) {
+			t.Fatalf("listed store issue marked as permission: %#v", issue)
+		}
+		if issue.Message == "query_failed" && !issue.Retryable {
+			t.Fatal("query_failed must stay retryable")
+		}
+	}
+}
+
+func twoDigit(value int) string {
+	if value < 10 {
+		return "0" + strconv.Itoa(value)
+	}
+	return strconv.Itoa(value)
+}
+
+func permissionIssue(message string) bool {
+	switch message {
+	case "store_not_authorized", "no_authorized_store_match":
+		return true
+	}
+	lower := strings.ToLower(message)
+	return strings.Contains(lower, "not authorized") || strings.Contains(lower, "permission")
+}
+
+func multiStoreWorkbook(t *testing.T, stores []rtasales.Store, date time.Time) string {
+	t.Helper()
+	book := excelize.NewFile()
+	defer func() { _ = book.Close() }()
+	if err := book.SetSheetName("Sheet1", xlsxfill.DefaultSheetName); err != nil {
+		t.Fatal(err)
+	}
+	for index, store := range stores {
+		row := index + 2
+		for cell, value := range map[string]any{
+			"C" + strconv.Itoa(row): store.BusinessID,
+			"E" + strconv.Itoa(row): store.Label,
+			"F" + strconv.Itoa(row): date,
+		} {
+			if err := book.SetCellValue(xlsxfill.DefaultSheetName, cell, value); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	path := filepath.Join(t.TempDir(), "many-stores.xlsx")
+	if err := book.SaveAs(path); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func batchWorkbook(t *testing.T) string {

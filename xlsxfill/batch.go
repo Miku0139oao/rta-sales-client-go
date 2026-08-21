@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -47,7 +46,7 @@ type ProgressEvent struct {
 
 // BatchRequest configures an inclusive multi-day workbook analysis. From and
 // To are compared as calendar dates. MaxJobs defaults to 2000, and Concurrency
-// defaults to 160 query jobs with a hard maximum of 160.
+// defaults to 160 account sessions with a hard maximum of 160.
 type BatchRequest struct {
 	InputPath               string
 	SheetName               string
@@ -253,6 +252,7 @@ type batchJob struct {
 	date       time.Time
 	dateText   string
 	profile    string
+	lane       string
 	provider   SalesProvider
 	rowIndexes []int
 	status     batchJobStatus
@@ -660,7 +660,7 @@ func prepareBatchPlan(ctx context.Context, provider SalesProvider, request Batch
 			}
 		}
 		state.report.SelectedRows++
-		jobProvider, profile, ok := resolveBatchProvider(provider, businessStoreID)
+		jobProvider, profile, lane, ok := resolveBatchProvider(provider, businessStoreID)
 		if !ok {
 			row.status = RowStatusIssue
 			row.static = []string{"store_not_authorized"}
@@ -676,7 +676,7 @@ func prepareBatchPlan(ctx context.Context, provider SalesProvider, request Batch
 			jobsByKey[key] = jobIndex
 			state.jobs = append(state.jobs, batchJob{
 				storeID: businessStoreID, date: rowDate, dateText: row.date,
-				profile: profile, provider: jobProvider,
+				profile: profile, lane: lane, provider: jobProvider,
 			})
 		}
 		row.jobIndex = jobIndex
@@ -707,35 +707,49 @@ func (state *batchPlanState) executeJobsLocked(ctx context.Context, indexes []in
 	}
 	state.executing = true
 	defer func() { state.executing = false }()
-	workerCount := state.concurrency
-	if workerCount > len(indexes) {
-		workerCount = len(indexes)
+	// RTA applies throttling to the authenticated session, not to an individual
+	// store. Keep jobs sharing one cookie in a serial lane, including their
+	// retry waits, while still allowing independent accounts to run together.
+	jobsByLane := make(map[string][]int)
+	laneOrder := make([]string, 0)
+	for _, index := range indexes {
+		lane := state.jobs[index].lane
+		if _, exists := jobsByLane[lane]; !exists {
+			laneOrder = append(laneOrder, lane)
+		}
+		jobsByLane[lane] = append(jobsByLane[lane], index)
 	}
-	work := make(chan int)
+	workerCount := state.concurrency
+	if workerCount > len(laneOrder) {
+		workerCount = len(laneOrder)
+	}
+	work := make(chan []int)
 	results := make(chan batchJobResult, workerCount)
 	var workers sync.WaitGroup
 	for worker := 0; worker < workerCount; worker++ {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			for index := range work {
-				if ctx.Err() != nil {
-					return
-				}
-				result := executeBatchJob(ctx, state.jobs[index], state.backoff)
-				result.index = index
-				results <- result
-				if result.cancelled {
-					return
+			for lane := range work {
+				for _, index := range lane {
+					if ctx.Err() != nil {
+						return
+					}
+					result := executeBatchJob(ctx, state.jobs[index], state.backoff)
+					result.index = index
+					results <- result
+					if result.cancelled {
+						return
+					}
 				}
 			}
 		}()
 	}
 	go func() {
 		defer close(work)
-		for _, index := range indexes {
+		for _, lane := range laneOrder {
 			select {
-			case work <- index:
+			case work <- jobsByLane[lane]:
 			case <-ctx.Done():
 				return
 			}
@@ -1000,29 +1014,30 @@ func readCurrentValues(book *excelize.File, sheet string, row int) (CurrentValue
 	return values, nil
 }
 
-func resolveBatchProvider(provider SalesProvider, storeID string) (SalesProvider, string, bool) {
+func resolveBatchProvider(provider SalesProvider, storeID string) (SalesProvider, string, string, bool) {
 	if router, ok := provider.(interface {
 		ProviderForStore(string) (ProviderRoute, bool)
 	}); ok {
 		route, found := router.ProviderForStore(storeID)
 		if !found || nilSalesProvider(route.Provider) {
-			return nil, "", false
+			return nil, "", "", false
 		}
-		return route.Provider, strings.TrimSpace(route.Profile), true
+		lane := strings.TrimSpace(route.Lane)
+		if lane == "" {
+			lane = providerLane(route.Provider)
+		}
+		return route.Provider, strings.TrimSpace(route.Profile), lane, true
 	}
-	return provider, "", true
+	return provider, "", providerLane(provider), true
 }
 
 func isTemporaryQueryError(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false
-	}
-	var retryable interface{ Retryable() bool }
-	if errors.As(err, &retryable) {
-		return retryable.Retryable()
-	}
-	var networkError net.Error
-	return errors.As(err, &networkError) && (networkError.Timeout() || networkError.Temporary())
+	return rtasales.IsRetryable(err)
+}
+
+func isTransientProtocolError(err error) bool {
+	var protocolError *rtasales.ProtocolError
+	return errors.As(err, &protocolError) && protocolError.Retryable()
 }
 
 func waitForRetry(ctx context.Context, delay time.Duration) error {

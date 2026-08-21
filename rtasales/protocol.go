@@ -65,7 +65,11 @@ func decodeSuccessfulEnvelope(body []byte, operation string) (rtaEnvelope, error
 	}
 	code := string(envelope.Code)
 	if !successfulCode(code) {
-		return envelope, &ProtocolError{Operation: operation, Message: fmt.Sprintf("RTA code %s: %s", code, envelopeMessage(envelope))}
+		message := envelopeMessage(envelope)
+		if permissionDenied(code, message) {
+			return envelope, &AuthError{Code: code, Message: message}
+		}
+		return envelope, &ProtocolError{Operation: operation, Message: fmt.Sprintf("RTA code %s: %s", code, message)}
 	}
 	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
 		return envelope, &ProtocolError{Operation: operation, Message: "response data is empty"}

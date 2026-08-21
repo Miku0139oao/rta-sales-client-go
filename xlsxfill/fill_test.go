@@ -2,6 +2,7 @@ package xlsxfill
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"os"
@@ -25,6 +26,34 @@ func (provider *fakeSalesProvider) Sales(_ context.Context, query rtasales.Sales
 		return nil, err
 	}
 	return provider.results[query.BusinessStoreID], nil
+}
+
+func TestClassifyQueryErrorKeepsTransientFailuresRetryableNotPermission(t *testing.T) {
+	malformed := json.Unmarshal([]byte("<html>rate limited</html>"), new(any))
+	tests := []struct {
+		name      string
+		err       error
+		code      string
+		retryable bool
+	}{
+		{name: "429", err: &rtasales.UpstreamError{Operation: "sales", StatusCode: 429, Body: "too many requests"}, code: "query_failed", retryable: true},
+		{name: "timeout", err: &rtasales.UpstreamError{Operation: "sales", Err: context.DeadlineExceeded}, code: "query_failed", retryable: true},
+		{name: "empty body", err: &rtasales.ProtocolError{Operation: "sales", Message: "response data is empty"}, code: "upstream_error", retryable: true},
+		{name: "html", err: &rtasales.ProtocolError{Operation: "sales", Message: "response is not valid JSON", Err: malformed}, code: "upstream_error", retryable: true},
+		{name: "permission", err: &rtasales.StoreNotFoundError{BusinessStoreID: "S04"}, code: "store_not_authorized", retryable: false},
+		{name: "format", err: &rtasales.ProtocolError{Operation: "sales", Message: "invalid sales data"}, code: "query_failed", retryable: false},
+		{name: "http403", err: &rtasales.UpstreamError{Operation: "sales", StatusCode: 403}, code: "authentication_failed", retryable: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := classifyQueryError(test.err); got != test.code {
+				t.Fatalf("classifyQueryError()=%q, want %q", got, test.code)
+			}
+			if got := isTemporaryQueryError(test.err); got != test.retryable {
+				t.Fatalf("isTemporaryQueryError()=%t, want %t", got, test.retryable)
+			}
+		})
+	}
 }
 
 func TestFillWritesOnlyManualInputsAndPreservesFormulasAndStyles(t *testing.T) {
@@ -331,6 +360,32 @@ func TestFillAllowsSafePartialOutputWhenExplicitlyRequested(t *testing.T) {
 	}
 	if !report.WroteWorkbook || report.StagedCells != 2 || len(report.Issues) != 1 {
 		t.Fatalf("unexpected partial report: %+v", report)
+	}
+}
+
+func TestClassifyQueryErrorKeepsRetryableFailuresAsQueryFailed(t *testing.T) {
+	timeout := timeoutNetError{}
+	for name, testCase := range map[string]struct {
+		err  error
+		code string
+	}{
+		"429":               {err: &rtasales.UpstreamError{Operation: "sales", StatusCode: 429, Body: "too many requests"}, code: "query_failed"},
+		"timeout":           {err: &rtasales.UpstreamError{Operation: "sales", Err: timeout}, code: "query_failed"},
+		"bare timeout":      {err: timeout, code: "query_failed"},
+		"permission":        {err: &rtasales.StoreNotFoundError{BusinessStoreID: "S03"}, code: "store_not_authorized"},
+		"non-retryable 400": {err: &rtasales.UpstreamError{Operation: "sales", StatusCode: 400}, code: "upstream_error"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := classifyQueryError(testCase.err); got != testCase.code {
+				t.Fatalf("classifyQueryError()=%q, want %q", got, testCase.code)
+			}
+		})
+	}
+	if !isTemporaryQueryError(&rtasales.UpstreamError{Operation: "sales", StatusCode: 429}) {
+		t.Fatal("429 must stay retryable")
+	}
+	if !isTemporaryQueryError(&rtasales.UpstreamError{Operation: "sales", Err: timeout}) {
+		t.Fatal("timeout must stay retryable")
 	}
 }
 

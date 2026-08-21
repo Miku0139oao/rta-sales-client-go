@@ -1,6 +1,11 @@
 package rtasales
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+	"net"
+	"strings"
+)
 
 // InputError reports an invalid public API argument.
 type InputError struct {
@@ -60,8 +65,10 @@ func (e *UpstreamError) Error() string {
 
 func (e *UpstreamError) Unwrap() error { return e.Err }
 
-// Retryable indicates whether a bounded retry is generally safe. Authentication
-// errors use AuthError instead and are retried internally once.
+// Retryable indicates whether a bounded retry is generally safe. The Client
+// already retries these failures internally. Authentication errors use
+// AuthError instead and are retried internally once as a session refresh.
+// HTTP 401 and 403 are not retryable.
 func (e *UpstreamError) Retryable() bool {
 	return e.Err != nil || e.StatusCode == 408 || e.StatusCode == 429 || e.StatusCode >= 500
 }
@@ -81,6 +88,51 @@ func (e *ProtocolError) Error() string {
 }
 
 func (e *ProtocolError) Unwrap() error { return e.Err }
+
+// Retryable reports empty, non-JSON, and envelope-code failures that show up
+// when one account queries many stores at once. Malformed payloads are not
+// retried; those keep Message values such as "invalid sales data".
+func (e *ProtocolError) Retryable() bool {
+	if e == nil {
+		return false
+	}
+	if permissionDenied("", e.Message) {
+		return false
+	}
+	switch {
+	case strings.Contains(e.Message, "response is not valid JSON"):
+		return true
+	case strings.Contains(e.Message, "response data is empty"):
+		return true
+	case strings.HasPrefix(e.Message, "RTA code "):
+		return true
+	default:
+		return false
+	}
+}
+
+// IsRetryable reports whether a Sales or Stores error is generally safe to
+// retry. Typed Retryable methods win so a non-retryable ProtocolError is not
+// retried just because it wraps a timeout.
+func IsRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var auth *AuthError
+	if errors.As(err, &auth) {
+		return false
+	}
+	var notFound *StoreNotFoundError
+	if errors.As(err, &notFound) {
+		return false
+	}
+	var retryable interface{ Retryable() bool }
+	if errors.As(err, &retryable) {
+		return retryable.Retryable()
+	}
+	var networkError net.Error
+	return errors.As(err, &networkError) && (networkError.Timeout() || networkError.Temporary())
+}
 
 // CaptchaError reports that every configured captcha solver failed.
 type CaptchaError struct {

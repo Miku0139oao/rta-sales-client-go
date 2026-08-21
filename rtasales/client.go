@@ -77,6 +77,12 @@ type Client struct {
 	stores       []storeRecord
 	storesLoaded bool
 	storeLoadMu  sync.Mutex
+
+	// requestMu serializes in-flight HTTP (including Retry-After waits) for this
+	// account so concurrent store queries cannot stampede into 429s.
+	requestMu sync.Mutex
+	retryWait func(context.Context, time.Duration) error
+	now       func() time.Time
 }
 
 // NewClient creates an account-scoped client. It does not perform network I/O;
@@ -214,23 +220,58 @@ func (c *Client) doAuthenticated(ctx context.Context, operation string, build re
 }
 
 func (c *Client) do(ctx context.Context, operation string, build requestBuilder) ([]byte, int, error) {
+	c.requestMu.Lock()
+	defer c.requestMu.Unlock()
+
+	var lastBody []byte
+	var lastStatus int
+	var lastErr error
+	for attempt := 0; attempt < maxTransientAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, 0, &UpstreamError{Operation: operation, Err: err}
+		}
+		body, status, retryAfter, err := c.roundTrip(ctx, operation, build)
+		effectiveStatus := status
+		if err == nil && rateLimitedBody(body) {
+			effectiveStatus = http.StatusTooManyRequests
+		}
+		retryable, delay := shouldRetry(ctx, attempt, effectiveStatus, err, retryAfter)
+		if !retryable {
+			if err != nil {
+				return body, status, err
+			}
+			return body, effectiveStatus, nil
+		}
+		lastBody, lastStatus, lastErr = body, effectiveStatus, err
+		if err := c.wait(ctx, delay); err != nil {
+			return nil, 0, &UpstreamError{Operation: operation, Err: err}
+		}
+	}
+	if lastErr != nil {
+		return lastBody, lastStatus, lastErr
+	}
+	return lastBody, lastStatus, nil
+}
+
+func (c *Client) roundTrip(ctx context.Context, operation string, build requestBuilder) ([]byte, int, time.Duration, error) {
 	request, err := build(ctx)
 	if err != nil {
-		return nil, 0, fmt.Errorf("%s: create request: %w", operation, err)
+		return nil, 0, 0, fmt.Errorf("%s: create request: %w", operation, err)
 	}
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return nil, 0, &UpstreamError{Operation: operation, Err: err}
+		return nil, 0, 0, &UpstreamError{Operation: operation, Err: err}
 	}
 	defer func() { _ = response.Body.Close() }()
+	retryAfter := parseRetryAfter(response.Header.Get("Retry-After"), c.currentTime())
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil {
-		return nil, response.StatusCode, &UpstreamError{Operation: operation, StatusCode: response.StatusCode, Err: err}
+		return nil, response.StatusCode, retryAfter, &UpstreamError{Operation: operation, StatusCode: response.StatusCode, Err: err}
 	}
 	if len(body) > maxResponseBytes {
-		return nil, response.StatusCode, &ProtocolError{Operation: operation, Message: "response exceeded 64 MiB"}
+		return nil, response.StatusCode, retryAfter, &ProtocolError{Operation: operation, Message: "response exceeded 64 MiB"}
 	}
-	return body, response.StatusCode, nil
+	return body, response.StatusCode, retryAfter, nil
 }
 
 func checkedHTTPBody(operation string, status int, body []byte) ([]byte, error) {

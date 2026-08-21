@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -188,7 +189,7 @@ func updateAtomicMax(target *atomic.Int32, value int32) {
 	}
 }
 
-func TestAnalyzeRunsJobsConcurrentlyForOneAccount(t *testing.T) {
+func TestAnalyzeSerializesOneSessionAndRunsAccountsConcurrently(t *testing.T) {
 	input := filepath.Join(t.TempDir(), "accounts.xlsx")
 	date := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.Local)
 	createBatchWorkbook(t, input, []batchWorkbookRow{
@@ -215,14 +216,20 @@ func TestAnalyzeRunsJobsConcurrentlyForOneAccount(t *testing.T) {
 	var analyzeErr error
 	go func() {
 		plan, analyzeErr = Analyze(context.Background(), router, BatchRequest{
-			InputPath: input, From: date, To: date.AddDate(0, 0, 1), Concurrency: 2,
+			InputPath: input, From: date, To: date.AddDate(0, 0, 1), Concurrency: MaximumConcurrency,
 		})
 		close(done)
 	}()
 	first := waitStarted(t, started)
 	second := waitStarted(t, started)
-	if first != "A" || second != "A" {
-		t.Fatalf("first account did not run two jobs concurrently: %q and %q", first, second)
+	if first == second {
+		close(release)
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("analysis did not stop after releasing the session")
+		}
+		t.Fatalf("one authenticated session entered concurrently: %q and %q", first, second)
 	}
 	close(release)
 	select {
@@ -233,7 +240,7 @@ func TestAnalyzeRunsJobsConcurrentlyForOneAccount(t *testing.T) {
 	if analyzeErr != nil {
 		t.Fatal(analyzeErr)
 	}
-	if accountA.maxActive.Load() != 2 || globalMax.Load() != 2 {
+	if accountA.maxActive.Load() != 1 || accountB.maxActive.Load() != 1 || globalMax.Load() != 2 {
 		t.Fatalf("max active A=%d B=%d global=%d", accountA.maxActive.Load(), accountB.maxActive.Load(), globalMax.Load())
 	}
 	profiles := make(map[string]bool)
@@ -280,6 +287,83 @@ func TestAnalyzeRetriesOnlyTemporaryFailuresAndRetryFailedResumes(t *testing.T) 
 	if len(provider.Calls()) != 3 || len(delays) != 2 || delays[0] != time.Second || delays[1] != 3*time.Second || len(plan.Issues) != 0 {
 		t.Fatalf("calls=%d delays=%v plan=%+v", len(provider.Calls()), delays, plan.Report)
 	}
+	var malformedDocument any
+	malformedJSON := json.Unmarshal([]byte("<html>temporary login response</html>"), &malformedDocument)
+	if malformedJSON == nil {
+		t.Fatal("test fixture unexpectedly parsed as JSON")
+	}
+	malformed := &batchTestProvider{handler: func(_ context.Context, _ rtasales.SalesQuery, call int) (*rtasales.SalesResult, error) {
+		if call == 1 {
+			return nil, &rtasales.ProtocolError{Operation: "sales", Message: "response is not valid JSON", Err: malformedJSON}
+		}
+		return batchResult(31, 3), nil
+	}}
+	malformedWaits := make([]time.Duration, 0, 1)
+	malformedPlan, err := Analyze(context.Background(), malformed, BatchRequest{
+		InputPath: input, From: date, To: date,
+		Backoff: func(_ context.Context, delay time.Duration) error {
+			malformedWaits = append(malformedWaits, delay)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(malformed.Calls()) != 2 || len(malformedWaits) != 1 || malformedWaits[0] != time.Second || len(malformedPlan.Issues) != 0 {
+		t.Fatalf("malformed response was not recovered: calls=%d waits=%v plan=%+v", len(malformed.Calls()), malformedWaits, malformedPlan.Report)
+	}
+	if code := classifyQueryError(&rtasales.ProtocolError{Operation: "sales", Message: "response is not valid JSON", Err: malformedJSON}); code != "upstream_error" {
+		t.Fatalf("transient malformed response code=%q, want upstream_error", code)
+	}
+	emptyBody := &batchTestProvider{handler: func(_ context.Context, _ rtasales.SalesQuery, call int) (*rtasales.SalesResult, error) {
+		if call == 1 {
+			return nil, &rtasales.ProtocolError{Operation: "sales", Message: "response data is empty"}
+		}
+		return batchResult(31, 3), nil
+	}}
+	emptyWaits := make([]time.Duration, 0, 1)
+	emptyPlan, err := Analyze(context.Background(), emptyBody, BatchRequest{
+		InputPath: input, From: date, To: date,
+		Backoff: func(_ context.Context, delay time.Duration) error {
+			emptyWaits = append(emptyWaits, delay)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(emptyBody.Calls()) != 2 || len(emptyWaits) != 1 || len(emptyPlan.Issues) != 0 {
+		t.Fatalf("empty body was not recovered: calls=%d waits=%v plan=%+v", len(emptyBody.Calls()), emptyWaits, emptyPlan.Report)
+	}
+	if code := classifyQueryError(&rtasales.ProtocolError{Operation: "sales", Message: "response data is empty"}); code != "upstream_error" {
+		t.Fatalf("empty-body code=%q, want upstream_error", code)
+	}
+	timeout := &batchTestProvider{handler: func(_ context.Context, _ rtasales.SalesQuery, call int) (*rtasales.SalesResult, error) {
+		if call == 1 {
+			return nil, &rtasales.UpstreamError{Operation: "sales", Err: context.DeadlineExceeded}
+		}
+		return batchResult(32, 3), nil
+	}}
+	timeoutWaits := make([]time.Duration, 0, 1)
+	timeoutPlan, err := Analyze(context.Background(), timeout, BatchRequest{
+		InputPath: input, From: date, To: date,
+		Backoff: func(_ context.Context, delay time.Duration) error {
+			timeoutWaits = append(timeoutWaits, delay)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(timeout.Calls()) != 2 || len(timeoutWaits) != 1 || len(timeoutPlan.Issues) != 0 {
+		t.Fatalf("timeout was not recovered: calls=%d waits=%v plan=%+v", len(timeout.Calls()), timeoutWaits, timeoutPlan.Report)
+	}
+	if code := classifyQueryError(&rtasales.UpstreamError{Operation: "sales", Err: context.DeadlineExceeded}); code != "query_failed" {
+		t.Fatalf("timeout code=%q, want query_failed", code)
+	}
+	if code := classifyQueryError(&rtasales.UpstreamError{Operation: "sales", StatusCode: 429, Body: "too many requests"}); code != "query_failed" {
+		t.Fatalf("429 code=%q, want query_failed", code)
+	}
 	stopBackoff := errors.New("stop retry wait")
 	stopped := &batchTestProvider{handler: func(context.Context, rtasales.SalesQuery, int) (*rtasales.SalesResult, error) {
 		return nil, &rtasales.UpstreamError{Operation: "sales", StatusCode: 503}
@@ -305,26 +389,30 @@ func TestAnalyzeRetriesOnlyTemporaryFailuresAndRetryFailedResumes(t *testing.T) 
 	if len(noData.Calls()) != 1 || len(noDataPlan.Issues) != 1 || noDataPlan.Issues[0].Code != "no_data" {
 		t.Fatalf("unexpected no-data plan: %+v calls=%d", noDataPlan.Report, len(noData.Calls()))
 	}
-	for name, terminalError := range map[string]error{
-		"permission": &rtasales.AuthError{Code: "403", Message: "denied"},
-		"format":     &rtasales.ProtocolError{Operation: "sales", Message: "bad data"},
-		"store":      &rtasales.StoreNotFoundError{BusinessStoreID: "A"},
-		"http403":    &rtasales.UpstreamError{Operation: "sales", StatusCode: 403},
+	for name, testCase := range map[string]struct {
+		err  error
+		code string
+	}{
+		"authentication": {err: &rtasales.AuthError{Code: "403", Message: "denied"}, code: "authentication_failed"},
+		"format":         {err: &rtasales.ProtocolError{Operation: "sales", Message: "bad data"}, code: "query_failed"},
+		"permission":     {err: &rtasales.StoreNotFoundError{BusinessStoreID: "A"}, code: "store_not_authorized"},
+		"http401":        {err: &rtasales.UpstreamError{Operation: "sales", StatusCode: 401}, code: "authentication_failed"},
+		"http403":        {err: &rtasales.UpstreamError{Operation: "sales", StatusCode: 403}, code: "authentication_failed"},
 	} {
 		t.Run("does not retry "+name, func(t *testing.T) {
-			terminal := &batchTestProvider{handler: func(context.Context, rtasales.SalesQuery, int) (*rtasales.SalesResult, error) {
-				return nil, terminalError
+			terminalProvider := &batchTestProvider{handler: func(context.Context, rtasales.SalesQuery, int) (*rtasales.SalesResult, error) {
+				return nil, testCase.err
 			}}
 			var waits atomic.Int32
-			terminalPlan, err := Analyze(context.Background(), terminal, BatchRequest{
+			terminalPlan, err := Analyze(context.Background(), terminalProvider, BatchRequest{
 				InputPath: input, From: date, To: date,
 				Backoff: func(context.Context, time.Duration) error { waits.Add(1); return nil },
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(terminal.Calls()) != 1 || waits.Load() != 0 || len(terminalPlan.Issues) == 0 {
-				t.Fatalf("calls=%d waits=%d plan=%+v", len(terminal.Calls()), waits.Load(), terminalPlan.Report)
+			if len(terminalProvider.Calls()) != 1 || waits.Load() != 0 || len(terminalPlan.Issues) != 1 || terminalPlan.Issues[0].Code != testCase.code {
+				t.Fatalf("calls=%d waits=%d plan=%+v", len(terminalProvider.Calls()), waits.Load(), terminalPlan.Report)
 			}
 		})
 	}
@@ -353,6 +441,106 @@ func TestAnalyzeRetriesOnlyTemporaryFailuresAndRetryFailedResumes(t *testing.T) 
 	}
 	if !retried.Complete || retried.Report.FailedJobs != 0 || len(retried.Issues) != 0 || len(failing.Calls()) != 4 {
 		t.Fatalf("unexpected retried plan: %+v calls=%d", retried.Report, len(failing.Calls()))
+	}
+}
+
+func TestAnalyzeOneAccountManyStoresDoesNotMarkTransientAsPermission(t *testing.T) {
+	input := filepath.Join(t.TempDir(), "many-stores.xlsx")
+	date := time.Date(2026, time.August, 8, 0, 0, 0, 0, time.Local)
+	const storeCount = 16
+	rows := make([]batchWorkbookRow, 0, storeCount)
+	allowed := make([]string, 0, storeCount)
+	for index := 1; index <= storeCount; index++ {
+		id := fmt.Sprintf("S%02d", index)
+		rows = append(rows, batchWorkbookRow{store: id, label: id, date: date})
+		allowed = append(allowed, id)
+	}
+	createBatchWorkbook(t, input, rows)
+
+	const (
+		rateLimited = "S04"
+		emptyBody   = "S11"
+		permission  = "S16"
+	)
+	var recovered atomic.Bool
+	provider := &batchTestProvider{handler: func(_ context.Context, query rtasales.SalesQuery, _ int) (*rtasales.SalesResult, error) {
+		switch query.BusinessStoreID {
+		case rateLimited:
+			if !recovered.Load() {
+				return nil, &rtasales.UpstreamError{Operation: "sales", StatusCode: 429, Body: "too many requests"}
+			}
+		case emptyBody:
+			if !recovered.Load() {
+				return nil, &rtasales.ProtocolError{Operation: "sales", Message: "response data is empty"}
+			}
+		case permission:
+			return nil, &rtasales.StoreNotFoundError{BusinessStoreID: query.BusinessStoreID}
+		}
+		return batchResult(10, 1), nil
+	}}
+	plan, err := Analyze(context.Background(), provider, BatchRequest{
+		InputPath: input, From: date, To: date,
+		AllowedBusinessStoreIDs: allowed,
+		Concurrency:             8,
+		Backoff:                 func(context.Context, time.Duration) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Report.SelectedRows != storeCount || plan.Report.UniqueQueries != storeCount {
+		t.Fatalf("unexpected selection: %+v", plan.Report)
+	}
+	if plan.Report.FailedJobs != 2 {
+		t.Fatalf("FailedJobs=%d, want 2 retryable stores", plan.Report.FailedJobs)
+	}
+	byStore := make(map[string]RowPlan, len(plan.Rows))
+	for _, row := range plan.Rows {
+		byStore[row.WorkbookStoreID] = row
+		for _, issue := range row.Issues {
+			if issue == "store_not_authorized" && row.WorkbookStoreID != permission {
+				t.Fatalf("authorized store %s marked permission-denied: %v", row.WorkbookStoreID, row.Issues)
+			}
+		}
+	}
+	if got := byStore[rateLimited].Issues; len(got) != 1 || got[0] != "query_failed" || byStore[rateLimited].Status != RowStatusIssue {
+		t.Fatalf("429 store=%+v, want query_failed", byStore[rateLimited])
+	}
+	if got := byStore[emptyBody].Issues; len(got) != 1 || got[0] != "upstream_error" || byStore[emptyBody].Status != RowStatusIssue {
+		t.Fatalf("empty-body store=%+v, want upstream_error", byStore[emptyBody])
+	}
+	if got := byStore[permission].Issues; len(got) != 1 || got[0] != "store_not_authorized" {
+		t.Fatalf("permission store=%+v, want store_not_authorized", byStore[permission])
+	}
+	for _, id := range allowed {
+		if id == rateLimited || id == emptyBody || id == permission {
+			continue
+		}
+		row := byStore[id]
+		if row.Status != RowStatusReady || len(row.Issues) != 0 {
+			t.Fatalf("successful store %s was marked failed: %+v", id, row)
+		}
+	}
+
+	recovered.Store(true)
+	retried, err := RetryFailed(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried.Report.FailedJobs != 0 {
+		t.Fatalf("retry left FailedJobs=%d", retried.Report.FailedJobs)
+	}
+	if len(retried.Issues) != 1 || retried.Issues[0].Code != "store_not_authorized" {
+		t.Fatalf("retry issues=%+v, want only store_not_authorized", retried.Issues)
+	}
+	retriedByStore := make(map[string]RowPlan, len(retried.Rows))
+	for _, row := range retried.Rows {
+		retriedByStore[row.WorkbookStoreID] = row
+	}
+	if retriedByStore[rateLimited].Status != RowStatusReady || retriedByStore[emptyBody].Status != RowStatusReady {
+		t.Fatalf("retryable stores did not recover: 429=%+v empty=%+v", retriedByStore[rateLimited], retriedByStore[emptyBody])
+	}
+	if got := retriedByStore[permission].Issues; len(got) != 1 || got[0] != "store_not_authorized" {
+		t.Fatalf("permission failure was retried or reclassified: %+v", retriedByStore[permission])
 	}
 }
 
@@ -779,6 +967,105 @@ func TestAnalyzeOverwriteAndPlanJSONRedaction(t *testing.T) {
 	if overwritePlan.Rows[0].Status != RowStatusReady || overwritePlan.Rows[1].Status != RowStatusUnchanged || overwritePlan.Report.StagedCells != 2 || overwritePlan.Report.UnchangedCells != 2 || len(overwritePlan.Issues) != 0 {
 		t.Fatalf("unexpected overwrite=true plan: %+v rows=%+v", overwritePlan.Report, overwritePlan.Rows)
 	}
+}
+
+type timeoutNetError struct{}
+
+func (timeoutNetError) Error() string   { return "i/o timeout" }
+func (timeoutNetError) Timeout() bool   { return true }
+func (timeoutNetError) Temporary() bool { return true }
+
+func TestAnalyzeOneAccountManyStoresKeepsRetryableFailuresAsQueryFailed(t *testing.T) {
+	const storeCount = 16
+	failID := "S03"
+	date := time.Date(2026, time.August, 2, 0, 0, 0, 0, time.Local)
+	for _, testCase := range []struct {
+		name string
+		err  error
+	}{
+		{name: "429", err: &rtasales.UpstreamError{Operation: "sales", StatusCode: 429, Body: "too many requests"}},
+		{name: "timeout", err: &rtasales.UpstreamError{Operation: "sales", Err: timeoutNetError{}}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			rows := make([]batchWorkbookRow, storeCount)
+			storeIDs := make([]string, storeCount)
+			routes := make(map[string]ProviderRoute, storeCount)
+			var remainingFailures atomic.Int32
+			remainingFailures.Store(int32(len(defaultRetryDelays) + 1))
+			provider := &batchTestProvider{handler: func(_ context.Context, query rtasales.SalesQuery, _ int) (*rtasales.SalesResult, error) {
+				if query.BusinessStoreID == failID && remainingFailures.Add(-1) >= 0 {
+					return nil, testCase.err
+				}
+				return batchResult(40, 4), nil
+			}}
+			for index := 0; index < storeCount; index++ {
+				storeID := fmt.Sprintf("S%02d", index+1)
+				storeIDs[index] = storeID
+				rows[index] = batchWorkbookRow{store: storeID, label: storeID, date: date}
+				routes[storeID] = ProviderRoute{Provider: provider, Profile: "Primary"}
+			}
+			input := filepath.Join(t.TempDir(), "one-account-many-stores.xlsx")
+			createBatchWorkbook(t, input, rows)
+			router, err := NewProfiledProviderRouter(routes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, err := Analyze(context.Background(), router, BatchRequest{
+				InputPath: input, From: date, To: date,
+				AllowedBusinessStoreIDs: storeIDs,
+				Backoff:                 func(context.Context, time.Duration) error { return nil },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.Report.UniqueQueries != storeCount || plan.Report.FailedJobs != 1 || plan.Report.SelectedRows != storeCount {
+				t.Fatalf("unexpected report: %+v", plan.Report)
+			}
+			if len(plan.Issues) != 1 || plan.Issues[0].Code != "query_failed" || len(plan.Issues[0].Rows) != 1 {
+				t.Fatalf("retryable failure was not query_failed: %+v", plan.Issues)
+			}
+			failedRow := 0
+			succeeded := 0
+			for _, row := range plan.Rows {
+				for _, code := range row.Issues {
+					if code == "store_not_authorized" || code == "no_authorized_store_match" {
+						t.Fatalf("listed store marked as permission: %+v", row)
+					}
+				}
+				if containsIssue(row.Issues, "query_failed") {
+					if row.WorkbookStoreID != failID || row.Status != RowStatusIssue {
+						t.Fatalf("query_failed row=%+v", row)
+					}
+					failedRow++
+					continue
+				}
+				if row.Status != RowStatusReady {
+					t.Fatalf("other listed store did not succeed: %+v", row)
+				}
+				succeeded++
+			}
+			if failedRow != 1 || succeeded != storeCount-1 {
+				t.Fatalf("failed=%d succeeded=%d, want 1/%d", failedRow, succeeded, storeCount-1)
+			}
+
+			retried, err := RetryFailed(context.Background(), plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !retried.Complete || retried.Report.FailedJobs != 0 || len(retried.Issues) != 0 {
+				t.Fatalf("retry did not clear query_failed: %+v", retried.Report)
+			}
+		})
+	}
+}
+
+func containsIssue(issues []string, code string) bool {
+	for _, issue := range issues {
+		if issue == code {
+			return true
+		}
+	}
+	return false
 }
 
 func TestScanWorkbookReportsBoundsAndIntersectionWithoutNetwork(t *testing.T) {

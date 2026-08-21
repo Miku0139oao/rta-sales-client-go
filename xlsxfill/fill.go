@@ -22,10 +22,11 @@ const (
 	// DefaultMaxJobs bounds a normal multi-day analysis while still allowing a
 	// full workbook month to be processed without per-run tuning.
 	DefaultMaxJobs = 2000
-	// DefaultConcurrency is the number of date/store query jobs run at once.
+	// DefaultConcurrency is the number of independent account sessions queried
+	// at once. Jobs that share one authenticated client run serially.
 	DefaultConcurrency = 160
 	// MaximumConcurrency is the user-selectable ceiling for independent
-	// date/store jobs. A single authenticated client is safe for concurrent use.
+	// account sessions. One authenticated client is not queried concurrently.
 	MaximumConcurrency = 160
 )
 
@@ -266,7 +267,18 @@ func classifyQueryError(err error) string {
 		return "authentication_failed"
 	case errors.As(err, &captcha):
 		return "captcha_failed"
+	case isTransientProtocolError(err):
+		// A 200 response containing HTML or truncated JSON is an upstream/session
+		// disturbance, not a workbook mapping or permission failure.
+		return "upstream_error"
+	case isTemporaryQueryError(err):
+		// Rate limits and transport timeouts stay retryable query failures even
+		// when the same account already listed many authorized stores.
+		return "query_failed"
 	case errors.As(err, &upstream):
+		if upstream.StatusCode == 401 || upstream.StatusCode == 403 {
+			return "authentication_failed"
+		}
 		return "upstream_error"
 	default:
 		return "query_failed"

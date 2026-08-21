@@ -38,6 +38,13 @@ type rtaFixture struct {
 	transactionForms    []url.Values
 	failPage            int
 	expireNextSales     bool
+	salesFailRemaining  int
+	salesFailStatus     int
+	salesRetryAfter     string
+	salesFailBody       []byte
+	salesInFlight       int
+	salesMaxInFlight    int
+	salesHold           time.Duration
 }
 
 func newRTAFixture(t *testing.T) *rtaFixture {
@@ -74,6 +81,14 @@ func (f *rtaFixture) serveHTTP(response http.ResponseWriter, request *http.Reque
 		writeJSON(response, map[string]any{"code": "0000"})
 	case "/open/data/query":
 		f.salesRequests.Add(1)
+		f.enterSales()
+		defer f.leaveSales()
+		f.mu.Lock()
+		hold := f.salesHold
+		f.mu.Unlock()
+		if hold > 0 {
+			time.Sleep(hold)
+		}
 		if !hasCookie(request, "sid", "valid") {
 			writeJSON(response, map[string]any{"code": "9800", "msg": "用户未登录"})
 			return
@@ -84,6 +99,27 @@ func (f *rtaFixture) serveHTTP(response http.ResponseWriter, request *http.Reque
 			f.mu.Unlock()
 			http.SetCookie(response, &http.Cookie{Name: "sid", Value: "expired", Path: "/"})
 			writeJSON(response, map[string]any{"code": "9800", "msg": "用户未登录"})
+			return
+		}
+		if f.salesFailRemaining > 0 {
+			f.salesFailRemaining--
+			status := f.salesFailStatus
+			if status == 0 {
+				status = http.StatusTooManyRequests
+			}
+			retryAfter := f.salesRetryAfter
+			body := append([]byte(nil), f.salesFailBody...)
+			f.mu.Unlock()
+			if retryAfter != "" {
+				response.Header().Set("Retry-After", retryAfter)
+			}
+			if len(body) > 0 {
+				response.Header().Set("Content-Type", "application/json")
+				response.WriteHeader(status)
+				_, _ = response.Write(body)
+				return
+			}
+			http.Error(response, "temporary failure", status)
 			return
 		}
 		f.mu.Unlock()
@@ -236,7 +272,25 @@ func (f *rtaFixture) client(t *testing.T, cookieFile string) (*Client, *atomic.I
 		t.Fatal(err)
 	}
 	client.endpoints = endpoints{sso: f.server.URL, dsa: f.server.URL, cockpit: f.server.URL, authStores: f.server.URL}
+	client.retryWait = func(ctx context.Context, _ time.Duration) error {
+		return ctx.Err()
+	}
 	return client, &ocrCalls, &fallbackCalls
+}
+
+func (f *rtaFixture) enterSales() {
+	f.mu.Lock()
+	f.salesInFlight++
+	if f.salesInFlight > f.salesMaxInFlight {
+		f.salesMaxInFlight = f.salesInFlight
+	}
+	f.mu.Unlock()
+}
+
+func (f *rtaFixture) leaveSales() {
+	f.mu.Lock()
+	f.salesInFlight--
+	f.mu.Unlock()
 }
 
 func TestSalesResolvesStorePaginatesAndAggregates(t *testing.T) {
