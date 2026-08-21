@@ -1148,19 +1148,19 @@ describe('sales analysis page', () => {
     expect(requestedPeriod(runSalesAnalysis, 'previous')).not.toMatchObject({ from: '2026-12-29', to: '2026-12-31' });
   });
 
-  it('keeps the weekly tab on ISO-week vs last week even when 以星期比較 aligned the overview', async () => {
+  it('keeps the weekly tab on the queried weekdays when 以星期比較 aligned the overview', async () => {
     const aligned = {
       ...analysisResult,
-      from: '2026-08-17',
-      to: '2026-08-22',
+      from: '2026-08-21',
+      to: '2026-08-23',
       weeks: [{
         ...analysisResult.weeks![0]!,
-        from: '2026-08-17',
+        from: '2026-08-21',
         to: '2026-08-22',
       }],
       periods: [
-        { ...analysisResult.periods![0]!, from: '2026-08-17', to: '2026-08-22' },
-        { ...analysisResult.periods![1]!, from: '2026-08-10', to: '2026-08-15' },
+        { ...analysisResult.periods![0]!, from: '2026-08-21', to: '2026-08-23' },
+        { ...analysisResult.periods![1]!, from: '2026-08-14', to: '2026-08-16' },
         analysisResult.periods![2]!,
         analysisResult.periods![3]!,
         analysisResult.periods![4]!,
@@ -1179,9 +1179,11 @@ describe('sales analysis page', () => {
     await waitFor(() => expect(screen.getByRole('tab', { name: '每週變化' })).toBeInTheDocument());
     await fireEvent.click(screen.getByRole('tab', { name: '每週變化' }));
     const weekly = screen.getByRole('heading', { name: '每週銷售變化' }).closest('section');
-    expect(weekly).toHaveTextContent('2026-08-17 — 2026-08-22');
-    expect(weekly).toHaveTextContent('與上週同一段星期比較');
-    expect(weekly).not.toHaveTextContent('週末優先對上一段同週末，不是前幾個平日。');
+    expect(weekly).toHaveTextContent('2026-08-21 — 2026-08-22');
+    expect(weekly).toHaveTextContent('與上期同一段星期比較，不是整週一到週日');
+    expect(weekly).toHaveTextContent('本期');
+    expect(weekly).toHaveTextContent('上期');
+    expect(weekly).not.toHaveTextContent('本週');
   });
 
   it('still compares month mode with calendar months', async () => {
