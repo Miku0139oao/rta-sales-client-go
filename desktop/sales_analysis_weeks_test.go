@@ -24,6 +24,10 @@ func TestOverlappingISOWeeksForAugustMTD(t *testing.T) {
 }
 
 func TestFoldSalesAnalysisWeeksComparesFullWeekToPreviousWeek(t *testing.T) {
+	originalToday := analysisCalendarToday
+	analysisCalendarToday = func() time.Time { return time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC) }
+	t.Cleanup(func() { analysisCalendarToday = originalToday })
+
 	days := []rtasales.TrendDay{
 		{Date: "2026-07-20", GrossSaleAmount: 10, TransactionCount: 1}, // LW weekday
 		{Date: "2026-07-25", GrossSaleAmount: 20, TransactionCount: 2}, // LW Saturday
@@ -62,6 +66,10 @@ func TestFoldSalesAnalysisWeeksComparesFullWeekToPreviousWeek(t *testing.T) {
 }
 
 func TestFoldSalesAnalysisWeeksForPeriodsUsesQueriedWeekdaysWhenAligned(t *testing.T) {
+	originalToday := analysisCalendarToday
+	analysisCalendarToday = func() time.Time { return time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC) }
+	t.Cleanup(func() { analysisCalendarToday = originalToday })
+
 	currentDays := []rtasales.TrendDay{
 		{Date: "2026-07-27", GrossSaleAmount: 999, TransactionCount: 99}, // Monday outside Fri-Sun query
 		{Date: "2026-08-01", GrossSaleAmount: 80, TransactionCount: 8},   // current Saturday
@@ -142,6 +150,9 @@ func TestFoldSalesAnalysisWeeksForPeriodsClipsOpenWeekendToToday(t *testing.T) {
 		t.Fatalf("weeks=%d, want 1", len(result))
 	}
 	week := result[0]
+	if week.From == "2026-08-17" || week.To == "2026-08-23" {
+		t.Fatalf("week=%s to %s leaked the surrounding Monday–Sunday", week.From, week.To)
+	}
 	if week.From != "2026-08-21" || week.To != "2026-08-22" {
 		t.Fatalf("week=%s to %s, want Fri-Sat through today, not Mon-Sun", week.From, week.To)
 	}
@@ -149,8 +160,47 @@ func TestFoldSalesAnalysisWeeksForPeriodsClipsOpenWeekendToToday(t *testing.T) {
 	if row.SalesTW != 90 || row.SalesLW != 140 {
 		t.Fatalf("sales TW/LW=%v/%v, want 90/140 (Fri+Sat vs last Fri+Sat)", row.SalesTW, row.SalesLW)
 	}
+	if row.WeekdaySalesTW != 80 || row.WeekdaySalesLW != 90 {
+		t.Fatalf("weekday TW/LW=%v/%v, want 80/90 (this Friday vs last Friday)", row.WeekdaySalesTW, row.WeekdaySalesLW)
+	}
 	if row.WeekendSalesTW != 10 || row.WeekendSalesLW != 50 {
 		t.Fatalf("weekend TW/LW=%v/%v, want 10/50 (this Saturday vs last Saturday)", row.WeekendSalesTW, row.WeekendSalesLW)
+	}
+}
+
+func TestFoldSalesAnalysisWeeksForPeriodsKeepsMonthISOWeeksWhenNotAligned(t *testing.T) {
+	originalToday := analysisCalendarToday
+	analysisCalendarToday = func() time.Time { return time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC) }
+	t.Cleanup(func() { analysisCalendarToday = originalToday })
+
+	days := []rtasales.TrendDay{
+		{Date: "2026-07-20", GrossSaleAmount: 10, TransactionCount: 1},
+		{Date: "2026-07-25", GrossSaleAmount: 20, TransactionCount: 2},
+		{Date: "2026-07-27", GrossSaleAmount: 40, TransactionCount: 4},
+		{Date: "2026-08-01", GrossSaleAmount: 80, TransactionCount: 8},
+		{Date: "2026-08-03", GrossSaleAmount: 16, TransactionCount: 3},
+	}
+	periods := []normalizedSalesAnalysisPeriod{
+		{key: "current", from: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), to: time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)},
+		{key: "previous", from: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), to: time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC)},
+	}
+	result := foldSalesAnalysisWeeksForPeriods(
+		periods,
+		[][]storeOutcome{
+			{{}, {result: &rtasales.SalesResult{Store: rtasales.Store{BusinessID: "107", Label: "Tai Wai"}, TrendDays: days}}},
+		},
+		0,
+		1,
+	)
+	if len(result) != 3 {
+		t.Fatalf("weeks=%d, want 3 overlapping ISO weeks", len(result))
+	}
+	if result[0].From != "2026-07-27" || result[0].To != "2026-08-02" {
+		t.Fatalf("first week=%s to %s, want Monday–Sunday including days before month start", result[0].From, result[0].To)
+	}
+	row := result[0].Stores[0]
+	if row.SalesTW != 120 || row.SalesLW != 30 {
+		t.Fatalf("month ISO week TW/LW=%v/%v, want 120/30", row.SalesTW, row.SalesLW)
 	}
 }
 

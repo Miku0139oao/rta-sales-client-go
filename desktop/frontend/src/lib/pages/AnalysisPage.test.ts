@@ -1180,6 +1180,8 @@ describe('sales analysis page', () => {
     await fireEvent.click(screen.getByRole('tab', { name: '每週變化' }));
     const weekly = screen.getByRole('heading', { name: '每週銷售變化' }).closest('section');
     expect(weekly).toHaveTextContent('2026-08-21 — 2026-08-22');
+    expect(weekly).not.toHaveTextContent('2026-08-17 — 2026-08-23');
+    expect(weekly).not.toHaveTextContent('週一至週日');
     expect(weekly).toHaveTextContent('與上期同一段星期比較，不是整週一到週日');
     expect(weekly).toHaveTextContent('本期');
     expect(weekly).toHaveTextContent('上期');
