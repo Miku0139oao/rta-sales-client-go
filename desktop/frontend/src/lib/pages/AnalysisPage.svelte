@@ -23,6 +23,7 @@
     type SalesReportFilter,
   } from '../salesReportItems';
   import { weeklySegmentRows } from '../storeSegment';
+  import { alignRangeComparisonPeriods } from '../periodAlignment';
   import {
     bytesToBase64,
     generateSalesAnalysisPDF,
@@ -118,6 +119,7 @@
   let progress: SalesAnalysisProgress | undefined;
   let operationId = '';
   let periodMode: PeriodMode = 'month';
+  let weekCompare = false;
   let month = localISOMonth();
   let from = `${month}-01`;
   let to = localISODate();
@@ -153,6 +155,7 @@
   let focusGroups: FocusGroup[] = [];
   let focusPeriod: SalesAnalysisPeriodResult | undefined;
   let weeklyKey = '';
+  let weeklyUsesAlignedComparison = false;
   let page = 1;
   let pageCount = 1;
   let pageRows: SalesAnalysisItem[] = [];
@@ -164,7 +167,7 @@
     loadedSimulateCount = settings.simulateStoreCount;
     void loadStores();
   }
-  $: busy = loadingProfiles || loadingStores || running;
+  $: busy = loadingProfiles || loadingStores || running || Boolean(result?.pending);
   $: visibleStores = filterStores(stores, storeQuery);
   $: onBusyChange(busy);
   $: rangeInvalid = periodMode === 'range' && Boolean(from && to && from > to);
@@ -189,7 +192,11 @@
   $: previousTotals = totalsForPeriod(periodByKey(reportPeriods, 'previous'), selections, search, selectedGroupCodes, groupScopeActive);
   $: previous2Totals = totalsForPeriod(periodByKey(reportPeriods, 'previous2'), selections, search, selectedGroupCodes, groupScopeActive);
   $: yearAgoTotals = totalsForPeriod(periodByKey(reportPeriods, 'yearAgo'), selections, search, selectedGroupCodes, groupScopeActive);
-  $: performanceRows = buildPerformanceRows(currentTotals, previousTotals, yearAgoTotals);
+  $: performanceRows = buildPerformanceRows(
+    currentTotals,
+    periodByKey(reportPeriods, 'previous') ? previousTotals : undefined,
+    periodByKey(reportPeriods, 'yearAgo') ? yearAgoTotals : undefined,
+  );
   $: categoryRows = buildCategoryComparison(reportPeriods, groupLevel, selections, search, selectedGroupCodes, groupScopeActive);
   $: topSales = productScopeActive || (currentPeriod?.items?.length ?? 0) > 0
     ? buildTopItems(filteredItems, 'amount').slice(0, 15)
@@ -213,6 +220,7 @@
   $: pageRows = filteredItems.slice((page - 1) * pageSize, page * pageSize);
   $: weeklyPeriods = result?.weeks ?? [];
   $: weeklyWeek = weeklyPeriods.find((week) => `${week.from}:${week.to}` === weeklyKey) ?? weeklyPeriods[0];
+  $: weeklyUsesAlignedComparison = hasWeekAlignedComparison(reportPeriods);
   $: if (weeklyPeriods.length && !weeklyPeriods.some((week) => `${week.from}:${week.to}` === weeklyKey)) {
     weeklyKey = `${weeklyPeriods[0]!.from}:${weeklyPeriods[0]!.to}`;
   }
@@ -255,7 +263,11 @@
       loadedSimulateCount = settings.simulateStoreCount;
       if (isWebRuntime()) {
         const saved = loadWebAnalysisSnapshot();
-        if (saved) result = saved;
+        if (saved?.pending) {
+          await backend.clearSalesAnalysis(saved.operationId).catch(() => undefined);
+        } else if (saved) {
+          result = saved;
+        }
       }
       if (profileId) await loadStores({ keepResult: Boolean(result) });
     } catch (caught) {
@@ -271,6 +283,7 @@
     loadingStores = true;
     error = '';
     if (!options.keepResult) void discardResult();
+    storeQuery = '';
     stores = [];
     selectedStoreIds = new Set<string>();
     try {
@@ -441,8 +454,15 @@
     cancelling = true;
     try {
       await backend.cancelSalesAnalysis(id);
+      if (result?.operationId === id) {
+        await discardResult();
+        progress = undefined;
+        operationId = '';
+        activeView = 'overview';
+      }
     } catch (caught) {
       error = errorMessage(settings.locale, caught);
+    } finally {
       cancelling = false;
     }
   }
@@ -803,12 +823,23 @@
       ];
     }
     if (!from || !to || from > to) return [];
+    const yearAgoNextMonth = shiftMonth(from.slice(0, 7), -11);
+    if (weekCompare) {
+      const aligned = alignRangeComparisonPeriods(from, to);
+      if (!aligned) return [];
+      return [
+        periodRequest('current', t('analysis.currentPeriod'), from, to),
+        periodRequest('previous', t('analysis.previousPeriod'), aligned.previous.from, aligned.previous.to),
+        periodRequest('previous2', t('analysis.previous2Period'), aligned.previous2.from, aligned.previous2.to),
+        periodRequest('yearAgo', t('analysis.yearAgoPeriod'), aligned.yearAgo.from, aligned.yearAgo.to),
+        periodRequest('yearAgoNext', t('analysis.yearAgoNextPeriod'), `${yearAgoNextMonth}-01`, endOfMonth(yearAgoNextMonth), false),
+      ];
+    }
     const days = daysBetween(from, to) + 1;
     const previousTo = addDays(from, -1);
     const previousFrom = addDays(previousTo, -(days - 1));
     const previous2To = addDays(previousFrom, -1);
     const previous2From = addDays(previous2To, -(days - 1));
-    const yearAgoNextMonth = shiftMonth(from.slice(0, 7), -11);
     return [
       periodRequest('current', t('analysis.currentPeriod'), from, to),
       periodRequest('previous', t('analysis.previousPeriod'), previousFrom, previousTo),
@@ -1045,14 +1076,18 @@
     return totals;
   }
 
-  function buildPerformanceRows(current: FilteredTotals, previous: FilteredTotals, yearAgo: FilteredTotals): PerformanceRow[] {
+  function buildPerformanceRows(
+    current: FilteredTotals,
+    previous: FilteredTotals | undefined,
+    yearAgo: FilteredTotals | undefined,
+  ): PerformanceRow[] {
     return [
-      { label: t('analysis.grossSales'), current: current.saleAmount, previous: previous.saleAmount, yearAgo: yearAgo.saleAmount, format: 'money' },
-      { label: t('analysis.returns'), current: current.returnAmount, previous: previous.returnAmount, yearAgo: yearAgo.returnAmount, format: 'money' },
-      { label: t('analysis.netSales'), current: current.netSalesAmount, previous: previous.netSalesAmount, yearAgo: yearAgo.netSalesAmount, format: 'money' },
-      { label: t('analysis.netQuantity'), current: current.netQuantity, previous: previous.netQuantity, yearAgo: yearAgo.netQuantity, format: 'number' },
-      { label: t('analysis.transactions'), current: current.transactionCount, previous: previous.transactionCount, yearAgo: yearAgo.transactionCount, format: 'number' },
-      { label: t('analysis.basket'), current: current.basketValue, previous: previous.basketValue, yearAgo: yearAgo.basketValue, format: 'money' },
+      { label: t('analysis.grossSales'), current: current.saleAmount, previous: previous?.saleAmount, yearAgo: yearAgo?.saleAmount, format: 'money' },
+      { label: t('analysis.returns'), current: current.returnAmount, previous: previous?.returnAmount, yearAgo: yearAgo?.returnAmount, format: 'money' },
+      { label: t('analysis.netSales'), current: current.netSalesAmount, previous: previous?.netSalesAmount, yearAgo: yearAgo?.netSalesAmount, format: 'money' },
+      { label: t('analysis.netQuantity'), current: current.netQuantity, previous: previous?.netQuantity, yearAgo: yearAgo?.netQuantity, format: 'number' },
+      { label: t('analysis.transactions'), current: current.transactionCount, previous: previous?.transactionCount, yearAgo: yearAgo?.transactionCount, format: 'number' },
+      { label: t('analysis.basket'), current: current.basketValue, previous: previous?.basketValue, yearAgo: yearAgo?.basketValue, format: 'money' },
     ];
   }
 
@@ -1152,6 +1187,17 @@
     ];
   }
 
+  function hasWeekAlignedComparison(periods: SalesAnalysisPeriodResult[]): boolean {
+    const current = periodByKey(periods, 'current');
+    const previous = periodByKey(periods, 'previous');
+    if (!current || !previous) return false;
+    const stride = daysBetween(previous.from, current.from);
+    return stride > 0
+      && stride % 7 === 0
+      && daysBetween(current.from, current.to) === daysBetween(previous.from, previous.to)
+      && addDays(previous.to, stride) === current.to;
+  }
+
   function buildStoreRows(
     periods: SalesAnalysisPeriodResult[],
     current: FacetSelections,
@@ -1233,6 +1279,10 @@
 
   function formatMoney(value: number): string {
     return new Intl.NumberFormat(settings.locale, { style: 'currency', currency: 'HKD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
+  }
+
+  function formatPeriodMoney(value: number, periodKey: string): string {
+    return periodByKey(reportPeriods, periodKey) ? formatMoney(value) : '—';
   }
 
   function formatNumber(value: number): string {
@@ -1379,6 +1429,15 @@
         {:else}
           <div class="field-group"><label for="analysis-from">{t('excel.from')}</label><input id="analysis-from" type="date" bind:value={from} aria-invalid={rangeInvalid} disabled={running} /></div>
           <div class="field-group"><label for="analysis-to">{t('excel.to')}</label><input id="analysis-to" type="date" bind:value={to} aria-invalid={rangeInvalid} disabled={running} /></div>
+          {#if periodMode === 'range'}
+            <div class="field-group week-compare-field">
+              <label class="week-compare-toggle" for="analysis-week-compare">
+                <input id="analysis-week-compare" type="checkbox" bind:checked={weekCompare} disabled={running} />
+                <span>{t('analysis.weekMode')}</span>
+              </label>
+              <small>{t('analysis.weekModeHint')}</small>
+            </div>
+          {/if}
         {/if}
       </div>
 
@@ -1547,9 +1606,9 @@
             {/if}
           </div>
           {#if !weeklyWeek}
-            <div class="ranking-empty">{t('analysis.weeklyMissing')}</div>
+            <div class="ranking-empty">{result.pending ? t('common.loading') : t('analysis.weeklyMissing')}</div>
           {:else}
-            <p class="focus-note">{t('analysis.weeklyHint')}</p>
+            <p class="focus-note">{t(weeklyUsesAlignedComparison ? 'analysis.weekModeHint' : 'analysis.weeklyHint')}</p>
             <div class="table-scroll store-table">
               <table>
                 <thead>
@@ -1599,10 +1658,12 @@
             </div>
           </div>
           {#if !focusPeriod}
-            <div class="ranking-empty">{t('analysis.focusMissing')}</div>
+            <div class="ranking-empty">{result.pending ? t('common.loading') : t('analysis.focusMissing')}</div>
           {:else}
             <p class="focus-note">{t('analysis.focusHint')}</p>
-            <div class="focus-grid">
+            {#if periodNeedsItemHydration(focusPeriod)}
+              <div class="ranking-empty">{t('common.loading')}</div>
+            {:else}<div class="focus-grid">
               {#each focusGroups as group (group.id)}
                 <article class="focus-group">
                   <header><strong>{focusGroupLabel(group)}</strong>{#if group.prefix}<span>{group.prefix}</span>{/if}</header>
@@ -1635,6 +1696,7 @@
                 </article>
               {:else}<div class="ranking-empty">{t('analysis.noResults')}</div>{/each}
             </div>
+            {/if}
           {/if}
         </section>
       {:else if activeView === 'categories'}
@@ -1642,7 +1704,7 @@
           <div class="comparison-heading"><h2 id="category-title">{t('analysis.rolling')}</h2><div class="group-tabs" role="radiogroup" aria-label={t('analysis.groupBy')}>{#each facets as facet}<button type="button" class:active={groupLevel === facet.key} role="radio" aria-checked={groupLevel === facet.key} onclick={() => { groupLevel = facet.key; }}>{t(facet.label)}</button>{/each}</div></div>
           <div class="category-table"><table>
             <thead><tr><th>{t('analysis.category')}</th><th class="numeric">{t('analysis.currentPeriod')}</th><th class="numeric">{t('analysis.previousPeriod')}</th><th class="numeric">{t('analysis.previous2Period')}</th><th class="numeric">{t('analysis.yearAgoPeriod')}</th><th class="numeric">{t('analysis.vsPrevious')}</th><th class="numeric">{t('analysis.vsYearAgo')}</th></tr></thead>
-            <tbody>{#each categoryRows as row}<tr><th><strong>{row.name}</strong>{#if row.code}<span>{row.code}</span>{/if}</th><td class="numeric emphasis">{formatMoney(row.current)}</td><td class="numeric">{formatMoney(row.previous)}</td><td class="numeric">{formatMoney(row.previous2)}</td><td class="numeric">{formatMoney(row.yearAgo)}</td><td class={`numeric ${deltaClass(delta(row.current, row.previous))}`}>{formatPercent(delta(row.current, row.previous))}</td><td class={`numeric ${deltaClass(delta(row.current, row.yearAgo))}`}>{formatPercent(delta(row.current, row.yearAgo))}</td></tr>{:else}<tr><td colspan="7" class="empty-table">{t('analysis.noResults')}</td></tr>{/each}</tbody>
+            <tbody>{#each categoryRows as row}<tr><th><strong>{row.name}</strong>{#if row.code}<span>{row.code}</span>{/if}</th><td class="numeric emphasis">{formatMoney(row.current)}</td><td class="numeric">{formatPeriodMoney(row.previous, 'previous')}</td><td class="numeric">{formatPeriodMoney(row.previous2, 'previous2')}</td><td class="numeric">{formatPeriodMoney(row.yearAgo, 'yearAgo')}</td><td class={`numeric ${deltaClass(delta(row.current, row.previous))}`}>{formatPercent(delta(row.current, row.previous))}</td><td class={`numeric ${deltaClass(delta(row.current, row.yearAgo))}`}>{formatPercent(delta(row.current, row.yearAgo))}</td></tr>{:else}<tr><td colspan="7" class="empty-table">{t('analysis.noResults')}</td></tr>{/each}</tbody>
           </table></div>
         </section>
 
@@ -1879,6 +1941,25 @@
   .analysis-loading md-circular-progress, .inline-loading md-circular-progress { width: 24px; height: 24px; }
   .analysis-query { padding: 24px; }
   .analysis-query-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; }
+  .week-compare-toggle { display: flex; min-height: 48px; align-items: center; gap: 10px; cursor: pointer; }
+  .week-compare-field input[type="checkbox"] {
+    width: 18px;
+    min-width: 18px;
+    height: 18px;
+    min-height: 18px;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    box-shadow: none;
+    accent-color: var(--md-sys-color-primary);
+    background: transparent;
+  }
+  .week-compare-field input[type="checkbox"]:hover,
+  .week-compare-field input[type="checkbox"]:focus {
+    padding: 0;
+    border: 0;
+    box-shadow: 0 0 0 3px var(--app-field-ring);
+  }
   .store-selection { margin-top: 22px; }
   .selection-heading, .analysis-query-actions, .analysis-progress-heading, .analysis-progress-footer, .comparison-heading, .analysis-table-heading, .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
   .selection-heading > div, .facet-actions { display: flex; gap: 8px; }

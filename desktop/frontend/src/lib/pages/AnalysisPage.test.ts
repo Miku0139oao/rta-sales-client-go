@@ -42,6 +42,34 @@ async function confirmExport(files: 'combined' | 'all' = 'combined') {
   await fireEvent.click(confirm);
 }
 
+function requestedPeriod(runSalesAnalysis: ReturnType<typeof vi.fn>, key: string) {
+  const periods = (runSalesAnalysis.mock.calls[0]![0] as SalesAnalysisRequest).periods ?? [];
+  const period = periods.find((candidate) => candidate.key === key);
+  expect(period, `missing period ${key}`).toBeDefined();
+  return period!;
+}
+
+function isoMonth(year: number, monthIndex: number): string {
+  const date = new Date(year, monthIndex, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function endOfCalendarMonth(month: string): string {
+  const [year, monthValue] = month.split('-').map(Number);
+  const lastDay = new Date(year!, monthValue!, 0).getDate();
+  return `${month}-${String(lastDay).padStart(2, '0')}`;
+}
+
+async function chooseRangeAndWeekCompare() {
+  const mode = screen.getByLabelText('分析期間') as HTMLSelectElement;
+  const weekOption = [...mode.options].find((option) => option.textContent?.includes('以星期比較'));
+  if (weekOption) await fireEvent.change(mode, { target: { value: weekOption.value } });
+  else await fireEvent.change(mode, { target: { value: 'range' } });
+  await waitFor(() => expect(screen.getByLabelText('開始日期')).toBeInTheDocument());
+  const toggle = screen.queryByRole('checkbox', { name: '以星期比較' }) as HTMLInputElement | null;
+  if (toggle && !toggle.checked) await fireEvent.click(toggle);
+}
+
 const analysisResult: SalesAnalysisResult = {
   operationId: 'sales-analysis-1',
   from: '2026-08-01',
@@ -904,6 +932,38 @@ describe('sales analysis page', () => {
     expect(periods[4]!.to).toBe(`${nextMonthLastYearEnd.getFullYear()}-${String(nextMonthLastYearEnd.getMonth() + 1).padStart(2, '0')}-${String(nextMonthLastYearEnd.getDate()).padStart(2, '0')}`);
   });
 
+  it('aligns range comparison periods by weekday when 以星期比較 is enabled', async () => {
+    const runSalesAnalysis = vi.fn(async (..._args: unknown[]) => analysisResult);
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [{
+        id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
+      }]),
+      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      RunSalesAnalysis: runSalesAnalysis,
+    } });
+    render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
+    await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
+    expect(screen.queryByLabelText('以星期比較')).not.toBeInTheDocument();
+
+    await fireEvent.change(screen.getByLabelText('分析期間'), { target: { value: 'range' } });
+    await waitFor(() => expect(screen.getByLabelText('以星期比較')).toBeInTheDocument());
+    await fireEvent.input(screen.getByLabelText('開始日期'), { target: { value: '2026-08-01' } });
+    await fireEvent.input(screen.getByLabelText('結束日期'), { target: { value: '2026-08-03' } });
+    await fireEvent.click(screen.getByLabelText('以星期比較'));
+    await fireEvent.click(screen.getByText('開始分析'));
+    await waitFor(() => expect(runSalesAnalysis).toHaveBeenCalledOnce());
+
+    expect(runSalesAnalysis).toHaveBeenCalledWith(expect.objectContaining({
+      periods: [
+        { key: 'current', label: '本期', from: '2026-08-01', to: '2026-08-03', includeTrend: true },
+        { key: 'previous', label: '上期', from: '2026-07-25', to: '2026-07-27', includeTrend: true },
+        { key: 'previous2', label: '前期', from: '2026-07-18', to: '2026-07-20', includeTrend: true },
+        { key: 'yearAgo', label: '去年同期', from: '2025-08-02', to: '2025-08-04', includeTrend: true },
+        { key: 'yearAgoNext', label: '去年下月', from: '2025-09-01', to: '2025-09-30', includeTrend: false },
+      ],
+    }));
+  });
+
   it('hydrates slim comparison periods before showing promoter-group totals', async () => {
     const periodStores = [
       { businessId: '107', label: '107 - Central', totals: analysisResult.totals },
@@ -1042,5 +1102,80 @@ describe('sales analysis page', () => {
     expect(screen.getByText('Mask')).toBeInTheDocument();
     expect(screen.queryByText('Wipes')).not.toBeInTheDocument();
     expect(productScope).toHaveValue('g-skin');
+  });
+
+  it('compares a Fri-Sun 以星期比較 range with the previous weekend, not the weekdays immediately before', async () => {
+    const runSalesAnalysis = vi.fn(async (..._args: unknown[]) => analysisResult);
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [{
+        id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
+      }]),
+      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      RunSalesAnalysis: runSalesAnalysis,
+    } });
+    render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
+    await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
+    await chooseRangeAndWeekCompare();
+    await fireEvent.input(screen.getByLabelText('開始日期'), { target: { value: '2026-08-07' } });
+    await fireEvent.input(screen.getByLabelText('結束日期'), { target: { value: '2026-08-09' } });
+    await fireEvent.click(screen.getByText('開始分析'));
+    await waitFor(() => expect(runSalesAnalysis).toHaveBeenCalledOnce());
+
+    expect(requestedPeriod(runSalesAnalysis, 'current')).toMatchObject({ from: '2026-08-07', to: '2026-08-09' });
+    expect(requestedPeriod(runSalesAnalysis, 'previous')).toMatchObject({ from: '2026-07-31', to: '2026-08-02' });
+    expect(requestedPeriod(runSalesAnalysis, 'previous')).not.toMatchObject({ from: '2026-08-04', to: '2026-08-06' });
+    expect(requestedPeriod(runSalesAnalysis, 'previous2')).toMatchObject({ from: '2026-07-24', to: '2026-07-26' });
+  });
+
+  it('compares a 1-3 weekend 以星期比較 range with the previous weekend', async () => {
+    const runSalesAnalysis = vi.fn(async (..._args: unknown[]) => analysisResult);
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [{
+        id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
+      }]),
+      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      RunSalesAnalysis: runSalesAnalysis,
+    } });
+    render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
+    await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
+    await chooseRangeAndWeekCompare();
+    await fireEvent.input(screen.getByLabelText('開始日期'), { target: { value: '2027-01-01' } });
+    await fireEvent.input(screen.getByLabelText('結束日期'), { target: { value: '2027-01-03' } });
+    await fireEvent.click(screen.getByText('開始分析'));
+    await waitFor(() => expect(runSalesAnalysis).toHaveBeenCalledOnce());
+
+    expect(requestedPeriod(runSalesAnalysis, 'previous')).toMatchObject({ from: '2026-12-25', to: '2026-12-27' });
+    expect(requestedPeriod(runSalesAnalysis, 'previous')).not.toMatchObject({ from: '2026-12-29', to: '2026-12-31' });
+  });
+
+  it('still compares month mode with calendar months', async () => {
+    const runSalesAnalysis = vi.fn(async (..._args: unknown[]) => analysisResult);
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [{
+        id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
+      }]),
+      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      RunSalesAnalysis: runSalesAnalysis,
+    } });
+    render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
+    await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
+
+    const now = new Date();
+    const selected = isoMonth(now.getFullYear(), now.getMonth() - 2);
+    const previous = isoMonth(now.getFullYear(), now.getMonth() - 3);
+    const previous2 = isoMonth(now.getFullYear(), now.getMonth() - 4);
+    await fireEvent.input(screen.getByLabelText('月份'), { target: { value: selected } });
+    await fireEvent.click(screen.getByText('開始分析'));
+    await waitFor(() => expect(runSalesAnalysis).toHaveBeenCalledOnce());
+
+    expect(requestedPeriod(runSalesAnalysis, 'current')).toMatchObject({
+      from: `${selected}-01`, to: endOfCalendarMonth(selected),
+    });
+    expect(requestedPeriod(runSalesAnalysis, 'previous')).toMatchObject({
+      from: `${previous}-01`, to: endOfCalendarMonth(previous),
+    });
+    expect(requestedPeriod(runSalesAnalysis, 'previous2')).toMatchObject({
+      from: `${previous2}-01`, to: endOfCalendarMonth(previous2),
+    });
   });
 });

@@ -93,6 +93,7 @@ Use this page to review a month, compare it with the previous year, and export P
 4. Choose a period:
    - **Month comparison** (the usual choice): select one month
    - **Date range**: set your own start and end dates
+   - **Week comparison**: set a date range and compare matching weekdays; useful for weekend or fixed-weekday activity
 5. Click **Run analysis** and wait for the query to finish.
 
 ![Sales analysis overview](docs/images/sales-analysis-overview.png)

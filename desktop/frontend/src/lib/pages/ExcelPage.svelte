@@ -22,6 +22,7 @@
 
   const stages: AnalysisProgress['stage'][] = ['scan', 'login', 'stores', 'query', 'preview'];
   const filters: PreviewFilter[] = ['all', 'change', 'unchanged', 'issue'];
+  const permissionIssueCodes = new Set(['no_authorized_store_match', 'store_not_authorized']);
 
   let inputPath = '';
   let scan: WorkbookScan | undefined;
@@ -421,7 +422,8 @@
     return issueCount;
   }
 
-  function statusLabel(status: PreviewRow['status']): string {
+  function statusLabel(status: PreviewRow['status'], message?: string): string {
+    if (message && permissionIssueCodes.has(message)) return t('excel.status.permission');
     return t(`excel.status.${status}`);
   }
 
@@ -720,7 +722,7 @@
                     <td>{row.date}</td><td>{row.row}</td><td>{row.storeLabel}</td><td>{row.profileLabel}</td>
                     <td class="numeric value-current">{row.currentL || '—'}</td><td class="numeric proposed-column">{row.proposedL || '—'}</td>
                     <td class="numeric value-current">{row.currentAB || '—'}</td><td class="numeric proposed-column">{row.proposedAB || '—'}</td>
-                    <td><span class="status-chip status-{row.status}">{statusLabel(row.status)}</span>{#if row.message}<small class="row-message">{issueLabel(row.message)}</small>{/if}</td>
+                    <td><span class="status-chip status-{row.status}">{statusLabel(row.status, row.message)}</span>{#if row.message}<small class="row-message">{issueLabel(row.message)}</small>{/if}</td>
                   </tr>
                 {:else}
                   <tr><td colspan="9" class="empty-table">{t('excel.noRows')}</td></tr>

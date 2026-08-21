@@ -41,6 +41,15 @@ describe('web localStorage snapshot', () => {
     expect(reloaded.articleNames).toEqual({ '123456': '維他命' });
   });
 
+  it('drops a malformed saved analysis instead of reopening a broken result screen', () => {
+    localStorage.setItem(WEB_STORAGE_KEY, JSON.stringify({
+      profiles: [],
+      analysis: { operationId: 'truncated-result' },
+    }));
+
+    expect(loadWebSnapshot().analysis).toBeNull();
+  });
+
   it('clears the stored snapshot', () => {
     saveWebSnapshot({
       profiles: [{ id: 'p', displayName: 'A', enabled: false, priority: 1, hasCredentials: false }],

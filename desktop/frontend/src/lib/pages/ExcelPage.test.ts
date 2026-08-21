@@ -314,6 +314,49 @@ describe('Excel safety workflow', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: '檢查分析結果', level: 2 })).toBeInTheDocument());
   });
 
+  it('labels retryable query failures separately from permission issues', async () => {
+    configureBackend({
+      methods: {
+        OpenWorkbook: vi.fn(async () => 'D:\\sales.xlsx'),
+        ScanWorkbook: vi.fn(async () => scan),
+        Analyze: vi.fn(async () => result({
+          problemCount: 2,
+          issueCount: 1,
+          failedCount: 2,
+          retryableCount: 2,
+          canApply: false,
+          preview: [
+            {
+              id: 'row-permission', date: '2026-08-01', row: 4, storeLabel: 'Store 1', profileLabel: 'Primary',
+              currentL: '', currentAB: '', proposedL: '', proposedAB: '', status: 'issue', message: 'store_not_authorized',
+            },
+            {
+              id: 'row-failed', date: '2026-08-02', row: 5, storeLabel: 'Store 2', profileLabel: 'Primary',
+              currentL: '', currentAB: '', proposedL: '', proposedAB: '', status: 'failed', message: 'upstream_error',
+            },
+            {
+              id: 'row-query-failed', date: '2026-08-03', row: 6, storeLabel: 'Store 3', profileLabel: 'Primary',
+              currentL: '', currentAB: '', proposedL: '', proposedAB: '', status: 'failed', message: 'query_failed',
+            },
+          ],
+        })),
+      },
+    });
+    const { container } = render(ExcelPage, {
+      props: { t: translator('zh-TW'), settings: defaultSettings, onGoToAccounts: vi.fn() },
+    });
+    await openAndScan(container);
+    await fireEvent.click(button(container, '開始分析'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: '檢查分析結果' })).toBeInTheDocument());
+
+    expect(container.textContent).toContain('查詢失敗（可重試）');
+    expect(container.textContent).toContain('RTA 服務暫時無法回應，請稍後重試。');
+    expect(container.textContent).toContain('資料查詢失敗，請稍後重試。');
+    expect(container.textContent).toContain('權限問題');
+    expect(container.textContent).toContain('此帳號沒有這間門市的權限。');
+    expect(translator('zh-TW')('excel.failedCount', { count: 2 })).toBe('2 個查詢失敗（可重試）');
+  });
+
   it('opens or reveals the saved workbook from the success card', async () => {
     const openSavedWorkbook = vi.fn(async () => undefined);
     const revealSavedWorkbook = vi.fn(async () => undefined);

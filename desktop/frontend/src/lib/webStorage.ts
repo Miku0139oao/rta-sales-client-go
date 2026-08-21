@@ -43,6 +43,10 @@ function asNumber(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
 function normalizeProfile(value: unknown): Profile | undefined {
   if (!isRecord(value) || !asString(value.id) || !asString(value.displayName)) return undefined;
   const lastTestStatus = value.lastTestStatus;
@@ -87,6 +91,19 @@ function normalizeArticleNames(value: unknown): Record<string, string> {
   return names;
 }
 
+function normalizeAnalysis(value: unknown): SalesAnalysisResult | null {
+  if (!isRecord(value)) return null;
+  if (!asString(value.operationId) || !asString(value.from) || !asString(value.to)) return null;
+  const totals = value.totals;
+  if (typeof value.complete !== 'boolean' || !isRecord(totals) || !Array.isArray(value.stores)) return null;
+  if (!isFiniteNumber(value.selectedStores) || !isFiniteNumber(value.successfulStores) || !isFiniteNumber(value.queryDurationMs)) return null;
+  const requiredTotals = ['saleQuantity', 'saleAmount', 'returnQuantity', 'returnAmount', 'netQuantity', 'netSalesAmount'];
+  if (!requiredTotals.every((key) => isFiniteNumber(totals[key]))) return null;
+  if (value.periods !== undefined && !Array.isArray(value.periods)) return null;
+  if (value.weeks !== undefined && !Array.isArray(value.weeks)) return null;
+  return value as unknown as SalesAnalysisResult;
+}
+
 function normalizeSnapshot(value: unknown): WebSnapshot {
   const raw = isRecord(value) ? value : {};
   const profiles = Array.isArray(raw.profiles)
@@ -105,9 +122,7 @@ function normalizeSnapshot(value: unknown): WebSnapshot {
     profiles,
     secrets: normalizeSecrets(raw.secrets),
     manCodeGroups,
-    analysis: isRecord(raw.analysis) && typeof raw.analysis.operationId === 'string'
-      ? raw.analysis as unknown as SalesAnalysisResult
-      : null,
+    analysis: normalizeAnalysis(raw.analysis),
     articleNames: normalizeArticleNames(raw.articleNames),
   };
 }
