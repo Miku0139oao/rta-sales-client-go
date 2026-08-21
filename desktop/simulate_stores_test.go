@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	rtasales "github.com/Miku0139oao/rta-sales-client-go/rtasales"
 )
@@ -128,7 +129,7 @@ func TestSalesAnalysisSimulatesSixteenStoresFromOneAuthorizedStore(t *testing.T)
 	}
 }
 
-func TestOneAccountSixteenStoresFivePeriodsHitsAPIAndKeeps429OnThatAccount(t *testing.T) {
+func TestOneAccountSixteenStoresFivePeriodsQueuesAndRecovers429(t *testing.T) {
 	transactions := 20.0
 	client := &salesAnalysisFakeClient{
 		stores: []rtasales.Store{{BusinessID: "107", Label: "107 - Central"}},
@@ -150,6 +151,7 @@ func TestOneAccountSixteenStoresFivePeriodsHitsAPIAndKeeps429OnThatAccount(t *te
 		},
 	}
 	app, _, _ := newTestApp(t, new(fakeEngine), fakeClients{byAccount: map[string]accountClient{"analysis-account": client}})
+	app.salesAnalysisBackoff = func(context.Context, time.Duration) error { return nil }
 	profile, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{
 		DisplayName: "Production", Account: "analysis-account", Password: "password", Enabled: true,
 	})
@@ -183,8 +185,8 @@ func TestOneAccountSixteenStoresFivePeriodsHitsAPIAndKeeps429OnThatAccount(t *te
 	if result.SelectedStores != 16 {
 		t.Fatalf("selected=%d, want 16", result.SelectedStores)
 	}
-	if len(client.queries) != 84 {
-		t.Fatalf("inner queries=%d, want 80 store reports plus 4 all-store trends", len(client.queries))
+	if len(client.queries) != 93 {
+		t.Fatalf("inner queries=%d, want 84 successful queries plus 9 rate-limit retries", len(client.queries))
 	}
 	for _, query := range client.queries {
 		if query.AllStores {
@@ -197,16 +199,13 @@ func TestOneAccountSixteenStoresFivePeriodsHitsAPIAndKeeps429OnThatAccount(t *te
 			t.Fatalf("query used %q, want the single authorized store", query.BusinessStoreID)
 		}
 	}
-	if len(result.Issues) != 8 {
-		t.Fatalf("issues=%d, want 8 rate-limit failures", len(result.Issues))
+	if len(result.Issues) != 0 || !result.Complete {
+		t.Fatalf("intermittent 429s should recover: complete=%t issues=%#v", result.Complete, result.Issues)
 	}
 	for _, issue := range result.Issues {
-		if !strings.Contains(issue.Message, "429") {
-			t.Fatalf("issue did not keep the 429: %s", issue.Message)
+		if permissionIssue(issue.Message) {
+			t.Fatalf("429 classified as permission: %s", issue.Message)
 		}
-	}
-	if result.Complete {
-		t.Fatal("429 should leave the overall run incomplete")
 	}
 	incompletePeriods := 0
 	for _, period := range result.Periods {
@@ -214,8 +213,8 @@ func TestOneAccountSixteenStoresFivePeriodsHitsAPIAndKeeps429OnThatAccount(t *te
 			incompletePeriods++
 		}
 	}
-	if incompletePeriods == 0 {
-		t.Fatalf("429 did not mark any period incomplete: %#v", result.Periods)
+	if incompletePeriods != 0 {
+		t.Fatalf("recovered 429 left incomplete periods: %#v", result.Periods)
 	}
 
 	memo, err := app.GetSalesAnalysisReportMemo(SalesAnalysisReportMemoRequest{

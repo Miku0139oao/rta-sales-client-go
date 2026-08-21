@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -117,7 +118,7 @@ func waitSalesAnalysisSettled(t *testing.T, app *App, operationID string) SalesA
 	return SalesAnalysisResult{}
 }
 
-func TestSalesAnalysisUsesOneProfileForParallelStoresAndPreservesCategories(t *testing.T) {
+func TestSalesAnalysisSerializesOneProfileStoresAndPreservesCategories(t *testing.T) {
 	transactions107, transactions108 := 10.0, 12.0
 	client := &salesAnalysisFakeClient{
 		stores: []rtasales.Store{
@@ -177,12 +178,15 @@ func TestSalesAnalysisUsesOneProfileForParallelStoresAndPreservesCategories(t *t
 		})
 		done <- response{result: result, err: runErr}
 	}()
-	for range 2 {
-		select {
-		case <-client.started:
-		case <-time.After(time.Second):
-			t.Fatal("store queries did not start in parallel")
-		}
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("first store query did not start")
+	}
+	select {
+	case <-client.started:
+		t.Fatal("one account started a second store query before the first completed")
+	case <-time.After(50 * time.Millisecond):
 	}
 	close(client.release)
 	answer := <-done
@@ -215,8 +219,8 @@ func TestSalesAnalysisUsesOneProfileForParallelStoresAndPreservesCategories(t *t
 	maxActive := client.maxActive
 	queries := append([]rtasales.SalesQuery(nil), client.queries...)
 	client.mu.Unlock()
-	if maxActive != 2 || len(queries) != 2 {
-		t.Fatalf("parallel queries max=%d queries=%d", maxActive, len(queries))
+	if maxActive != 1 || len(queries) != 2 {
+		t.Fatalf("serialized queries max=%d queries=%d", maxActive, len(queries))
 	}
 	for _, query := range queries {
 		if query.StartDate.Format("2006-01-02") != "2026-08-15" || query.EndDate.Format("2006-01-02") != "2026-08-15" {
@@ -262,7 +266,7 @@ func TestSalesAnalysisQueriesReportPeriodsInParallelAndIncludesTrend(t *testing.
 				},
 			},
 		},
-		started: make(chan struct{}, 4),
+		started: make(chan struct{}, 8),
 		release: make(chan struct{}),
 	}
 	app, _, events := newTestApp(t, new(fakeEngine), fakeClients{byAccount: map[string]accountClient{"analysis-account": client}})
@@ -285,12 +289,15 @@ func TestSalesAnalysisQueriesReportPeriodsInParallelAndIncludesTrend(t *testing.
 		})
 		done <- runErr
 	}()
-	for range 2 {
-		select {
-		case <-client.started:
-		case <-time.After(time.Second):
-			t.Fatal("current-period article queries did not start")
-		}
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("current-period article query did not start")
+	}
+	select {
+	case <-client.started:
+		t.Fatal("one account started concurrent current-period article queries")
+	case <-time.After(50 * time.Millisecond):
 	}
 	close(client.release)
 	if err := <-done; err != nil {
@@ -348,7 +355,7 @@ func TestSalesAnalysisQueriesReportPeriodsInParallelAndIncludesTrend(t *testing.
 	}
 }
 
-func TestSalesAnalysisSupportsDefaultAndMaximum160ParallelTasksPerProfile(t *testing.T) {
+func TestSalesAnalysisSerializesPerProfileAtDefaultAndMaximumConcurrency(t *testing.T) {
 	periods := []SalesAnalysisPeriodRequest{
 		{Key: "current", Label: "Current", From: "2026-08-15", To: "2026-08-15"},
 		{Key: "previous", Label: "Previous", From: "2026-07-15", To: "2026-07-15"},
@@ -361,8 +368,8 @@ func TestSalesAnalysisSupportsDefaultAndMaximum160ParallelTasksPerProfile(t *tes
 		storeCount  int
 		wantActive  int
 	}{
-		{name: "default first wave is current articles", concurrency: 0, storeCount: 40, wantActive: 40},
-		{name: "maximum first wave is current articles", concurrency: 160, storeCount: 40, wantActive: 40},
+		{name: "default queues one account", concurrency: 0, storeCount: 40, wantActive: 1},
+		{name: "maximum queues one account", concurrency: 160, storeCount: 40, wantActive: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			stores := make([]rtasales.Store, 0, test.storeCount)
@@ -400,6 +407,11 @@ func TestSalesAnalysisSupportsDefaultAndMaximum160ParallelTasksPerProfile(t *tes
 					t.Fatalf("only part of the expected %d concurrent tasks started", test.wantActive)
 				}
 			}
+			select {
+			case <-client.started:
+				t.Fatal("one account exceeded its serial query lane")
+			case <-time.After(50 * time.Millisecond):
+			}
 			close(client.release)
 			if err := <-errs; err != nil {
 				t.Fatal(err)
@@ -413,8 +425,8 @@ func TestSalesAnalysisSupportsDefaultAndMaximum160ParallelTasksPerProfile(t *tes
 			maxActive := client.maxActive
 			queryCount := len(client.queries)
 			client.mu.Unlock()
-			if maxActive < test.wantActive {
-				t.Fatalf("maxActive=%d, want at least %d", maxActive, test.wantActive)
+			if maxActive != test.wantActive {
+				t.Fatalf("maxActive=%d, want %d", maxActive, test.wantActive)
 			}
 			trendJobs := 0
 			for _, period := range periods {
@@ -427,6 +439,73 @@ func TestSalesAnalysisSupportsDefaultAndMaximum160ParallelTasksPerProfile(t *tes
 				t.Fatalf("queries=%d, want %d articles plus %d all-store trends", queryCount, test.storeCount*len(periods), trendJobs)
 			}
 		})
+	}
+}
+
+func TestSalesAnalysisOneAccountManyStores429IsNotPermission(t *testing.T) {
+	const storeCount = 16
+	failID := "S03"
+	stores := make([]rtasales.Store, storeCount)
+	results := make(map[string]*rtasales.SalesResult, storeCount)
+	storeIDs := make([]string, storeCount)
+	transactions := 4.0
+	for index := 0; index < storeCount; index++ {
+		storeID := "S" + twoDigit(index+1)
+		stores[index] = rtasales.Store{BusinessID: storeID, Label: storeID + " - Store"}
+		storeIDs[index] = storeID
+		results[storeID] = &rtasales.SalesResult{
+			TotalTransactionCount: &transactions,
+			Items: []rtasales.SaleItem{{
+				Matnr: "ITEM", ArticleName: "Item", TPSaleQuantity: 1, TPSaleAmount: 10,
+				TPGrossSaleQuantity: 1, TPGrossSaleAmount: 10,
+			}},
+		}
+	}
+	client := &salesAnalysisFakeClient{
+		stores:  stores,
+		results: results,
+		failOn: func(_ int, query rtasales.SalesQuery) error {
+			if query.BusinessStoreID == failID {
+				return &rtasales.UpstreamError{Operation: "sales", StatusCode: 429, Body: "too many requests"}
+			}
+			return nil
+		},
+	}
+	app, _, _ := newTestApp(t, new(fakeEngine), fakeClients{byAccount: map[string]accountClient{"analysis-account": client}})
+	app.salesAnalysisBackoff = func(context.Context, time.Duration) error { return nil }
+	profile, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{
+		DisplayName: "Analysis", Account: "analysis-account", Password: "password", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := app.ListSalesAnalysisStores(ProfileIDRequest{ProfileID: profile.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != storeCount {
+		t.Fatalf("listed stores=%d, want %d", len(listed), storeCount)
+	}
+	result, err := app.RunSalesAnalysis(SalesAnalysisRequest{
+		ProfileID: profile.ID, StoreIDs: storeIDs, From: "2026-08-15", To: "2026-08-15",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SelectedStores != storeCount || result.SuccessfulStores != storeCount-1 {
+		t.Fatalf("selected=%d successful=%d, want %d/%d", result.SelectedStores, result.SuccessfulStores, storeCount, storeCount-1)
+	}
+	if len(result.Issues) != 1 {
+		t.Fatalf("issues=%d, want 1: %#v", len(result.Issues), result.Issues)
+	}
+	if !strings.Contains(result.Issues[0].Message, "429") {
+		t.Fatalf("issue did not keep the 429: %s", result.Issues[0].Message)
+	}
+	if permissionIssue(result.Issues[0].Message) {
+		t.Fatalf("429 classified as permission: %s", result.Issues[0].Message)
+	}
+	if result.Complete {
+		t.Fatal("429 should leave the run incomplete")
 	}
 }
 
@@ -577,5 +656,97 @@ func TestSalesAnalysisQueriesTwoProfilesAtTheSameTime(t *testing.T) {
 	}
 	if len(clientB.queries) != 1 || clientB.queries[0].BusinessStoreID != "108" {
 		t.Fatalf("account B queries=%#v", clientB.queries)
+	}
+}
+
+func TestSalesAnalysisRateLimitPausesOnlyTheAffectedAccount(t *testing.T) {
+	clientA := &salesAnalysisFakeClient{
+		stores: []rtasales.Store{{BusinessID: "A1", Label: "A1"}, {BusinessID: "A2", Label: "A2"}},
+		results: map[string]*rtasales.SalesResult{
+			"A1": {Items: []rtasales.SaleItem{{Matnr: "A1", TPGrossSaleAmount: 10}}},
+			"A2": {Items: []rtasales.SaleItem{{Matnr: "A2", TPGrossSaleAmount: 20}}},
+		},
+		failOn: func(call int, _ rtasales.SalesQuery) error {
+			if call == 1 {
+				return &rtasales.UpstreamError{Operation: "sales", StatusCode: 429, Body: "too many requests"}
+			}
+			return nil
+		},
+	}
+	clientB := &salesAnalysisFakeClient{
+		stores:  []rtasales.Store{{BusinessID: "B1", Label: "B1"}},
+		results: map[string]*rtasales.SalesResult{"B1": {Items: []rtasales.SaleItem{{Matnr: "B1", TPGrossSaleAmount: 30}}}},
+		started: make(chan struct{}, 1),
+	}
+	app, _, _ := newTestApp(t, new(fakeEngine), fakeClients{byAccount: map[string]accountClient{
+		"account-a": clientA,
+		"account-b": clientB,
+	}})
+	if _, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{
+		DisplayName: "North", Account: "account-a", Password: "password", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{
+		DisplayName: "South", Account: "account-b", Password: "password", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	paused := make(chan time.Duration, 1)
+	resume := make(chan struct{})
+	app.salesAnalysisBackoff = func(ctx context.Context, delay time.Duration) error {
+		paused <- delay
+		select {
+		case <-resume:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	type response struct {
+		result SalesAnalysisResult
+		err    error
+	}
+	done := make(chan response, 1)
+	go func() {
+		result, runErr := app.RunSalesAnalysis(SalesAnalysisRequest{
+			StoreIDs: []string{"A1", "A2", "B1"}, From: "2026-08-15", To: "2026-08-15", Concurrency: 160,
+		})
+		done <- response{result: result, err: runErr}
+	}()
+
+	select {
+	case delay := <-paused:
+		if delay != time.Second {
+			t.Fatalf("first rate-limit pause=%s, want 1s", delay)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("rate-limited account did not enter backoff")
+	}
+	select {
+	case <-clientB.started:
+	case <-time.After(time.Second):
+		t.Fatal("second account did not continue while the first account was paused")
+	}
+	clientA.mu.Lock()
+	queriesWhilePaused := len(clientA.queries)
+	clientA.mu.Unlock()
+	if queriesWhilePaused != 1 {
+		t.Fatalf("affected account ran %d queries before its pause was released", queriesWhilePaused)
+	}
+	close(resume)
+	answer := <-done
+	if answer.err != nil {
+		t.Fatal(answer.err)
+	}
+	if !answer.result.Complete || answer.result.SuccessfulStores != 3 {
+		t.Fatalf("rate-limit retry did not recover: %#v", answer.result)
+	}
+	clientA.mu.Lock()
+	queriesA, maxActiveA := len(clientA.queries), clientA.maxActive
+	clientA.mu.Unlock()
+	if queriesA != 3 || maxActiveA != 1 {
+		t.Fatalf("account A queries=%d maxActive=%d, want 3 attempts and one active query", queriesA, maxActiveA)
 	}
 }

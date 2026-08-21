@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
@@ -20,6 +21,8 @@ const (
 	salesAnalysisProgressEventName = "rta:sales-analysis-progress"
 	salesAnalysisUpdateEventName   = "rta:sales-analysis-update"
 )
+
+var salesAnalysisRateLimitRetryDelays = [...]time.Duration{time.Second, 3 * time.Second}
 
 // ListSalesAnalysisStores loads authorized stores from one profile, or from
 // every enabled profile when ProfileID is empty. Overlapping stores keep the
@@ -222,8 +225,20 @@ func (a *App) runSalesAnalysisJobs(
 		outcomes[periodIndex] = make([]storeOutcome, len(selected))
 	}
 	trendOutcomes := make([]storeOutcome, len(periods))
-	jobs := make(chan analysisJob)
-	workerCount := min(concurrency, len(tasks))
+	// Schedule whole authenticated-account lanes. This keeps one login's store
+	// queries serial without occupying every worker with callers waiting on the
+	// same account, so other accounts can continue independently.
+	jobsByLane := make(map[string][]analysisJob)
+	laneOrder := make([]string, 0)
+	for _, task := range tasks {
+		lane := salesAnalysisJobLane(task, selected)
+		if _, exists := jobsByLane[lane]; !exists {
+			laneOrder = append(laneOrder, lane)
+		}
+		jobsByLane[lane] = append(jobsByLane[lane], task)
+	}
+	jobs := make(chan []analysisJob)
+	workerCount := min(concurrency, len(laneOrder))
 	var waitGroup sync.WaitGroup
 	var completed atomic.Int64
 	completed.Store(int64(progressOffset))
@@ -231,50 +246,52 @@ func (a *App) runSalesAnalysisJobs(
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
-			for task := range jobs {
-				period := periods[task.periodIndex]
-				query := rtasales.SalesQuery{
-					StartDate:         period.from,
-					EndDate:           period.to,
-					Category:          "全部商品",
-					SkipTrendLookback: period.key != "current",
-					Compact:           true,
+			for lane := range jobs {
+				for _, task := range lane {
+					period := periods[task.periodIndex]
+					query := rtasales.SalesQuery{
+						StartDate:         period.from,
+						EndDate:           period.to,
+						Category:          "全部商品",
+						SkipTrendLookback: period.key != "current",
+						Compact:           true,
+					}
+					storeID, storeLabel := "", "全部"
+					var result *rtasales.SalesResult
+					var queryErr error
+					if task.kind == "trend" {
+						query.SkipArticle = true
+						query.AllStores = true
+						result, queryErr = a.querySalesAnalysisWithRateLimitRetry(ctx, selected[0].query, query)
+						trendOutcomes[task.periodIndex] = storeOutcome{result: result, err: queryErr}
+					} else {
+						selectedStore := selected[task.storeIndex]
+						store := selectedStore.route.store
+						storeID = store.BusinessID
+						storeLabel = store.Label
+						query.BusinessStoreID = store.BusinessID
+						query.SkipTrend = true
+						result, queryErr = a.querySalesAnalysisWithRateLimitRetry(ctx, selectedStore.query, query)
+						outcomes[task.periodIndex][task.storeIndex] = storeOutcome{result: result, err: queryErr}
+					}
+					current := int(completed.Add(1))
+					status := "success"
+					if queryErr != nil {
+						status = "failed"
+					}
+					a.events.Emit(a.appContext(), salesAnalysisProgressEventName, SalesAnalysisProgress{
+						OperationID: operationID, Current: current, Total: totalTasks,
+						StoreID: storeID, StoreLabel: storeLabel,
+						PeriodKey: period.key, PeriodLabel: period.label, Status: status,
+					})
 				}
-				storeID, storeLabel := "", "全部"
-				var result *rtasales.SalesResult
-				var queryErr error
-				if task.kind == "trend" {
-					query.SkipArticle = true
-					query.AllStores = true
-					result, queryErr = selected[0].query.Sales(ctx, query)
-					trendOutcomes[task.periodIndex] = storeOutcome{result: result, err: queryErr}
-				} else {
-					selectedStore := selected[task.storeIndex]
-					store := selectedStore.route.store
-					storeID = store.BusinessID
-					storeLabel = store.Label
-					query.BusinessStoreID = store.BusinessID
-					query.SkipTrend = true
-					result, queryErr = selectedStore.query.Sales(ctx, query)
-					outcomes[task.periodIndex][task.storeIndex] = storeOutcome{result: result, err: queryErr}
-				}
-				current := int(completed.Add(1))
-				status := "success"
-				if queryErr != nil {
-					status = "failed"
-				}
-				a.events.Emit(a.appContext(), salesAnalysisProgressEventName, SalesAnalysisProgress{
-					OperationID: operationID, Current: current, Total: totalTasks,
-					StoreID: storeID, StoreLabel: storeLabel,
-					PeriodKey: period.key, PeriodLabel: period.label, Status: status,
-				})
 			}
 		}()
 	}
 	sendCancelled := false
-	for _, task := range tasks {
+	for _, lane := range laneOrder {
 		select {
-		case jobs <- task:
+		case jobs <- jobsByLane[lane]:
 		case <-ctx.Done():
 			sendCancelled = true
 		}
@@ -299,6 +316,56 @@ func (a *App) runSalesAnalysisJobs(
 		_ = outcome
 	}
 	return attachTrendOutcomes(outcomes, trendOutcomes), int(completed.Load()), nil
+}
+
+func salesAnalysisJobLane(task analysisJob, selected []selectedStore) string {
+	route := selected[0].route
+	if task.kind != "trend" {
+		route = selected[task.storeIndex].route
+	}
+	if route.lane != "" {
+		return route.lane
+	}
+	if route.profileID != "" {
+		return "profile:" + route.profileID
+	}
+	return "default"
+}
+
+func (a *App) querySalesAnalysisWithRateLimitRetry(
+	ctx context.Context,
+	client accountClient,
+	query rtasales.SalesQuery,
+) (*rtasales.SalesResult, error) {
+	backoff := a.salesAnalysisBackoff
+	if backoff == nil {
+		backoff = waitForSalesAnalysisRetry
+	}
+	for attempt := 0; ; attempt++ {
+		result, err := client.Sales(ctx, query)
+		if err == nil || !isRateLimitError(err) || attempt >= len(salesAnalysisRateLimitRetryDelays) {
+			return result, err
+		}
+		if waitErr := backoff(ctx, salesAnalysisRateLimitRetryDelays[attempt]); waitErr != nil {
+			return nil, waitErr
+		}
+	}
+}
+
+func isRateLimitError(err error) bool {
+	var upstream *rtasales.UpstreamError
+	return errors.As(err, &upstream) && upstream.StatusCode == 429
+}
+
+func waitForSalesAnalysisRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func attachTrendOutcomes(article [][]storeOutcome, trends []storeOutcome) [][]storeOutcome {
@@ -465,10 +532,7 @@ func (a *App) mergeSalesAnalysisSupplement(
 		period.Complete = len(period.Issues) == 0
 		current.Periods[byKey[periods[primaryIndex].key]] = period
 		if periods[primaryIndex].key == "current" && trend.err == nil && trend.result != nil {
-			current.Weeks = foldSalesAnalysisWeeks(periods[primaryIndex].from, periods[primaryIndex].to, []storeTrendSeries{{
-				store: rtasales.Store{Label: "全部"},
-				days:  trend.result.TrendDays,
-			}})
+			current.Weeks = foldSalesAnalysisWeeksForPeriods(periods, outcomes, primaryIndex, len(selected))
 		}
 	}
 	for periodIndex, period := range periods {
@@ -607,6 +671,7 @@ func (a *App) beginSalesAnalysisOperation(operationID string) (context.Context, 
 type analysisStoreRoute struct {
 	store     rtasales.Store
 	client    accountClient
+	lane      string
 	profileID string
 	profile   string
 }
@@ -622,13 +687,14 @@ func (a *App) salesAnalysisRoutes(ctx context.Context, profileID string, simulat
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		client, err := a.salesAnalysisAccountClient(profile.ID)
+		session, err := a.salesAnalysisAccountClient(profile.ID)
 		if err != nil {
 			if strings.TrimSpace(profileID) == "" && errors.Is(err, securestore.ErrNotFound) {
 				continue
 			}
 			return nil, err
 		}
+		client := session.client
 		stores, err := client.Stores(ctx)
 		if err != nil {
 			return nil, err
@@ -645,7 +711,7 @@ func (a *App) salesAnalysisRoutes(ctx context.Context, profileID string, simulat
 			store.BusinessID = storeID
 			store.Label = strings.TrimSpace(store.Label)
 			routes = append(routes, analysisStoreRoute{
-				store: store, client: client, profileID: profile.ID, profile: profile.DisplayName,
+				store: store, client: client, lane: session.lane, profileID: profile.ID, profile: profile.DisplayName,
 			})
 		}
 	}
@@ -674,7 +740,7 @@ func expandAnalysisStoreRoutes(routes []analysisStoreRoute, simulateStoreCount i
 			continue
 		}
 		result = append(result, analysisStoreRoute{
-			store: store, client: source.client, profileID: source.profileID, profile: source.profile,
+			store: store, client: source.client, lane: source.lane, profileID: source.profileID, profile: source.profile,
 		})
 	}
 	return result
@@ -713,19 +779,33 @@ func (a *App) salesAnalysisProfiles(profileID string) ([]profileRecord, error) {
 	return enabled, nil
 }
 
-func (a *App) salesAnalysisAccountClient(profileID string) (accountClient, error) {
+type accountSession struct {
+	client accountClient
+	lane   string
+}
+
+func (a *App) salesAnalysisAccountClient(profileID string) (accountSession, error) {
 	credential, err := a.credentials.Get(profileID)
 	if errors.Is(err, securestore.ErrNotFound) {
-		return nil, fmt.Errorf("profile has no saved credentials: %w", err)
+		return accountSession{}, fmt.Errorf("profile has no saved credentials: %w", err)
 	}
 	if err != nil {
-		return nil, err
+		return accountSession{}, err
 	}
 	cookies, err := a.cookies.CookieStore(profileID)
 	if err != nil {
-		return nil, err
+		return accountSession{}, err
 	}
-	return a.clients.New(credential, cookies)
+	client, err := a.clients.New(credential, cookies)
+	if err != nil {
+		return accountSession{}, err
+	}
+	return accountSession{client: client, lane: accountLane(credential.Account)}, nil
+}
+
+func accountLane(account string) string {
+	digest := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(account))))
+	return fmt.Sprintf("account:%x", digest[:])
 }
 
 func normalizeSalesAnalysisStoreIDs(values []string) []string {

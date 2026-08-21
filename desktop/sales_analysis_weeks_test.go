@@ -60,3 +60,50 @@ func TestFoldSalesAnalysisWeeksComparesFullWeekToPreviousWeek(t *testing.T) {
 		t.Fatalf("totals or second week unexpected: %+v %+v", first.Totals, weeks[1].Stores[0])
 	}
 }
+
+func TestFoldSalesAnalysisWeeksForPeriodsUsesWeekAlignedPreviousRange(t *testing.T) {
+	currentDays := []rtasales.TrendDay{
+		{Date: "2026-07-27", GrossSaleAmount: 999, TransactionCount: 99}, // lookback only; outside current
+		{Date: "2026-08-01", GrossSaleAmount: 80, TransactionCount: 8},   // current Saturday
+		{Date: "2026-08-02", GrossSaleAmount: 70, TransactionCount: 7},   // current Sunday
+		{Date: "2026-08-03", GrossSaleAmount: 30, TransactionCount: 3},   // current Monday
+	}
+	previousDays := []rtasales.TrendDay{
+		{Date: "2026-07-24", GrossSaleAmount: 500, TransactionCount: 50}, // outside previous
+		{Date: "2026-07-25", GrossSaleAmount: 40, TransactionCount: 4},   // previous Saturday
+		{Date: "2026-07-26", GrossSaleAmount: 20, TransactionCount: 2},   // previous Sunday
+		{Date: "2026-07-27", GrossSaleAmount: 10, TransactionCount: 1},   // previous Monday
+	}
+	periods := []normalizedSalesAnalysisPeriod{
+		{key: "current", from: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), to: time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)},
+		{key: "previous", from: time.Date(2026, 7, 25, 0, 0, 0, 0, time.UTC), to: time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC)},
+	}
+	result := foldSalesAnalysisWeeksForPeriods(
+		periods,
+		[][]storeOutcome{
+			{{}, {result: &rtasales.SalesResult{Store: rtasales.Store{Label: "全部"}, TrendDays: currentDays}}},
+			{{}, {result: &rtasales.SalesResult{Store: rtasales.Store{Label: "全部"}, TrendDays: previousDays}}},
+		},
+		0,
+		1,
+	)
+	if len(result) != 2 {
+		t.Fatalf("weeks=%d, want 2", len(result))
+	}
+	first, second := result[0].Totals, result[1].Totals
+	if first.SalesTW != 150 || first.SalesLW != 60 || first.WeekendSalesTW != 150 || first.WeekendSalesLW != 60 {
+		t.Fatalf("weekend totals=%+v, want TW/LW 150/60", first)
+	}
+	if first.WeekdaySalesTW != 0 || first.WeekdaySalesLW != 0 {
+		t.Fatalf("first week weekday totals=%+v, want zero", first)
+	}
+	if second.SalesTW != 30 || second.SalesLW != 10 || second.WeekdaySalesTW != 30 || second.WeekdaySalesLW != 10 {
+		t.Fatalf("weekday totals=%+v, want TW/LW 30/10", second)
+	}
+	if second.WeekendSalesTW != 0 || second.WeekendSalesLW != 0 {
+		t.Fatalf("second week weekend totals=%+v, want zero", second)
+	}
+	if first.SalesTW+second.SalesTW != 180 || first.SalesLW+second.SalesLW != 70 {
+		t.Fatalf("range totals=%v/%v, want 180/70", first.SalesTW+second.SalesTW, first.SalesLW+second.SalesLW)
+	}
+}

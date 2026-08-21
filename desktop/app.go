@@ -61,6 +61,7 @@ type App struct {
 	salesResultMu          sync.Mutex
 	salesResult            *SalesAnalysisResult
 	salesPacked            map[string]SalesAnalysisPackedItems
+	salesAnalysisBackoff   func(context.Context, time.Duration) error
 }
 
 type operationState struct {
@@ -83,16 +84,17 @@ func newApp(dependencies appDependencies) (*App, error) {
 		return nil, errors.New("desktop backend dependencies are incomplete")
 	}
 	return &App{
-		profiles:    dependencies.profiles,
-		mancodes:    dependencies.mancodes,
-		credentials: dependencies.credentials,
-		cookies:     dependencies.cookies,
-		clients:     dependencies.clients,
-		engine:      dependencies.engine,
-		dialogs:     dependencies.dialogs,
-		events:      dependencies.events,
-		runtime:     dependencies.runtime,
-		ctx:         context.Background(),
+		profiles:             dependencies.profiles,
+		mancodes:             dependencies.mancodes,
+		credentials:          dependencies.credentials,
+		cookies:              dependencies.cookies,
+		clients:              dependencies.clients,
+		engine:               dependencies.engine,
+		dialogs:              dependencies.dialogs,
+		events:               dependencies.events,
+		runtime:              dependencies.runtime,
+		ctx:                  context.Background(),
+		salesAnalysisBackoff: waitForSalesAnalysisRetry,
 	}, nil
 }
 
@@ -763,13 +765,14 @@ func (a *App) buildRouter(ctx context.Context, operationID, profileID string) (*
 		return nil, nil, nil, 0, nil, err
 	}
 	a.emit(operationID, "login", 0, 1, "Signing in to account / 正在登入帳號")
-	client, err := a.salesAnalysisAccountClient(profile.ID)
+	session, err := a.salesAnalysisAccountClient(profile.ID)
 	if err != nil {
 		if errors.Is(err, securestore.ErrNotFound) {
 			return nil, nil, nil, 0, nil, fmt.Errorf("enabled profile %q has no saved credentials", profile.DisplayName)
 		}
 		return nil, nil, nil, 0, nil, err
 	}
+	client := session.client
 	stores, err := client.Stores(ctx)
 	if err != nil {
 		return nil, nil, nil, 0, nil, err
@@ -783,7 +786,7 @@ func (a *App) buildRouter(ctx context.Context, operationID, profileID string) (*
 			continue
 		}
 		routes[storeID] = xlsxfill.ProviderRoute{
-			Provider: client, Profile: profile.DisplayName,
+			Provider: client, Profile: profile.DisplayName, Lane: session.lane,
 		}
 		ownership[storeID] = profile.DisplayName
 	}
