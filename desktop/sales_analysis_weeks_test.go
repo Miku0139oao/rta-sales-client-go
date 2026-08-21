@@ -61,18 +61,19 @@ func TestFoldSalesAnalysisWeeksComparesFullWeekToPreviousWeek(t *testing.T) {
 	}
 }
 
-func TestFoldSalesAnalysisWeeksForPeriodsUsesWeekAlignedPreviousRange(t *testing.T) {
+func TestFoldSalesAnalysisWeeksForPeriodsKeepsMonthStyleISOWeeksWhenPeriodsAreAligned(t *testing.T) {
 	currentDays := []rtasales.TrendDay{
-		{Date: "2026-07-27", GrossSaleAmount: 999, TransactionCount: 99}, // lookback only; outside current
-		{Date: "2026-08-01", GrossSaleAmount: 80, TransactionCount: 8},   // current Saturday
-		{Date: "2026-08-02", GrossSaleAmount: 70, TransactionCount: 7},   // current Sunday
-		{Date: "2026-08-03", GrossSaleAmount: 30, TransactionCount: 3},   // current Monday
+		{Date: "2026-07-25", GrossSaleAmount: 40, TransactionCount: 4}, // last Saturday
+		{Date: "2026-07-26", GrossSaleAmount: 20, TransactionCount: 2}, // last Sunday
+		{Date: "2026-07-27", GrossSaleAmount: 40, TransactionCount: 4}, // this Monday
+		{Date: "2026-08-01", GrossSaleAmount: 80, TransactionCount: 8}, // this Saturday
+		{Date: "2026-08-02", GrossSaleAmount: 70, TransactionCount: 7}, // this Sunday
+		{Date: "2026-08-03", GrossSaleAmount: 30, TransactionCount: 3}, // next Monday
 	}
 	previousDays := []rtasales.TrendDay{
-		{Date: "2026-07-24", GrossSaleAmount: 500, TransactionCount: 50}, // outside previous
-		{Date: "2026-07-25", GrossSaleAmount: 40, TransactionCount: 4},   // previous Saturday
-		{Date: "2026-07-26", GrossSaleAmount: 20, TransactionCount: 2},   // previous Sunday
-		{Date: "2026-07-27", GrossSaleAmount: 10, TransactionCount: 1},   // previous Monday
+		{Date: "2026-07-25", GrossSaleAmount: 4000, TransactionCount: 400},
+		{Date: "2026-07-26", GrossSaleAmount: 2000, TransactionCount: 200},
+		{Date: "2026-07-27", GrossSaleAmount: 1000, TransactionCount: 100},
 	}
 	periods := []normalizedSalesAnalysisPeriod{
 		{key: "current", from: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), to: time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)},
@@ -90,20 +91,51 @@ func TestFoldSalesAnalysisWeeksForPeriodsUsesWeekAlignedPreviousRange(t *testing
 	if len(result) != 2 {
 		t.Fatalf("weeks=%d, want 2", len(result))
 	}
-	first, second := result[0].Totals, result[1].Totals
-	if first.SalesTW != 150 || first.SalesLW != 60 || first.WeekendSalesTW != 150 || first.WeekendSalesLW != 60 {
-		t.Fatalf("weekend totals=%+v, want TW/LW 150/60", first)
+	if result[0].From != "2026-07-27" || result[0].To != "2026-08-02" {
+		t.Fatalf("first week=%s to %s, want 2026-07-27 to 2026-08-02", result[0].From, result[0].To)
 	}
-	if first.WeekdaySalesTW != 0 || first.WeekdaySalesLW != 0 {
-		t.Fatalf("first week weekday totals=%+v, want zero", first)
+	first := result[0].Totals
+	if first.SalesTW != 190 || first.SalesLW != 60 {
+		t.Fatalf("first week TW/LW=%v/%v, want 190/60 from current lookback, not previous period", first.SalesTW, first.SalesLW)
 	}
-	if second.SalesTW != 30 || second.SalesLW != 10 || second.WeekdaySalesTW != 30 || second.WeekdaySalesLW != 10 {
-		t.Fatalf("weekday totals=%+v, want TW/LW 30/10", second)
+	if first.WeekendSalesTW != 150 || first.WeekendSalesLW != 60 {
+		t.Fatalf("first week weekend=%v/%v, want 150/60", first.WeekendSalesTW, first.WeekendSalesLW)
 	}
-	if second.WeekendSalesTW != 0 || second.WeekendSalesLW != 0 {
-		t.Fatalf("second week weekend totals=%+v, want zero", second)
+	if result[1].From != "2026-08-03" || result[1].To != "2026-08-03" {
+		t.Fatalf("open week=%s to %s, want clipped to 2026-08-03", result[1].From, result[1].To)
 	}
-	if first.SalesTW+second.SalesTW != 180 || first.SalesLW+second.SalesLW != 70 {
-		t.Fatalf("range totals=%v/%v, want 180/70", first.SalesTW+second.SalesTW, first.SalesLW+second.SalesLW)
+	second := result[1].Totals
+	if second.SalesTW != 30 || second.SalesLW != 40 {
+		t.Fatalf("open week TW/LW=%v/%v, want 30/40", second.SalesTW, second.SalesLW)
+	}
+}
+
+func TestFoldSalesAnalysisWeeksStopsOpenWeekAtQueryEnd(t *testing.T) {
+	days := []rtasales.TrendDay{
+		{Date: "2026-08-10", GrossSaleAmount: 10, TransactionCount: 1},
+		{Date: "2026-08-15", GrossSaleAmount: 50, TransactionCount: 5},
+		{Date: "2026-08-16", GrossSaleAmount: 200, TransactionCount: 20},
+		{Date: "2026-08-17", GrossSaleAmount: 10, TransactionCount: 1},
+		{Date: "2026-08-22", GrossSaleAmount: 5, TransactionCount: 1},
+		{Date: "2026-08-23", GrossSaleAmount: 999, TransactionCount: 99},
+	}
+	weeks := foldSalesAnalysisWeeks(
+		time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC),
+		[]storeTrendSeries{{store: rtasales.Store{Label: "全部"}, days: days}},
+	)
+	if len(weeks) != 1 {
+		t.Fatalf("weeks=%d, want 1", len(weeks))
+	}
+	week := weeks[0]
+	if week.From != "2026-08-17" || week.To != "2026-08-22" {
+		t.Fatalf("week=%s to %s, want 2026-08-17 to 2026-08-22", week.From, week.To)
+	}
+	row := week.Totals
+	if row.SalesTW != 15 || row.SalesLW != 60 {
+		t.Fatalf("sales TW/LW=%v/%v, want 15/60 (exclude Sunday)", row.SalesTW, row.SalesLW)
+	}
+	if row.WeekendSalesTW != 5 || row.WeekendSalesLW != 50 {
+		t.Fatalf("weekend TW/LW=%v/%v, want 5/50 (this Saturday vs last Saturday)", row.WeekendSalesTW, row.WeekendSalesLW)
 	}
 }

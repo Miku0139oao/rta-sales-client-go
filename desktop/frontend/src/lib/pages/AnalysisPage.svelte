@@ -155,7 +155,6 @@
   let focusGroups: FocusGroup[] = [];
   let focusPeriod: SalesAnalysisPeriodResult | undefined;
   let weeklyKey = '';
-  let weeklyUsesAlignedComparison = false;
   let page = 1;
   let pageCount = 1;
   let pageRows: SalesAnalysisItem[] = [];
@@ -220,7 +219,6 @@
   $: pageRows = filteredItems.slice((page - 1) * pageSize, page * pageSize);
   $: weeklyPeriods = result?.weeks ?? [];
   $: weeklyWeek = weeklyPeriods.find((week) => `${week.from}:${week.to}` === weeklyKey) ?? weeklyPeriods[0];
-  $: weeklyUsesAlignedComparison = hasWeekAlignedComparison(reportPeriods);
   $: if (weeklyPeriods.length && !weeklyPeriods.some((week) => `${week.from}:${week.to}` === weeklyKey)) {
     weeklyKey = `${weeklyPeriods[0]!.from}:${weeklyPeriods[0]!.to}`;
   }
@@ -1187,17 +1185,6 @@
     ];
   }
 
-  function hasWeekAlignedComparison(periods: SalesAnalysisPeriodResult[]): boolean {
-    const current = periodByKey(periods, 'current');
-    const previous = periodByKey(periods, 'previous');
-    if (!current || !previous) return false;
-    const stride = daysBetween(previous.from, current.from);
-    return stride > 0
-      && stride % 7 === 0
-      && daysBetween(current.from, current.to) === daysBetween(previous.from, previous.to)
-      && addDays(previous.to, stride) === current.to;
-  }
-
   function buildStoreRows(
     periods: SalesAnalysisPeriodResult[],
     current: FacetSelections,
@@ -1608,7 +1595,7 @@
           {#if !weeklyWeek}
             <div class="ranking-empty">{result.pending ? t('common.loading') : t('analysis.weeklyMissing')}</div>
           {:else}
-            <p class="focus-note">{t(weeklyUsesAlignedComparison ? 'analysis.weekModeHint' : 'analysis.weeklyHint')}</p>
+            <p class="focus-note">{t('analysis.weeklyHint')}</p>
             <div class="table-scroll store-table">
               <table>
                 <thead>

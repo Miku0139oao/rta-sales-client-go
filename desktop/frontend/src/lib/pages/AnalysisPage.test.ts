@@ -1148,6 +1148,42 @@ describe('sales analysis page', () => {
     expect(requestedPeriod(runSalesAnalysis, 'previous')).not.toMatchObject({ from: '2026-12-29', to: '2026-12-31' });
   });
 
+  it('keeps the weekly tab on ISO-week vs last week even when 以星期比較 aligned the overview', async () => {
+    const aligned = {
+      ...analysisResult,
+      from: '2026-08-17',
+      to: '2026-08-22',
+      weeks: [{
+        ...analysisResult.weeks![0]!,
+        from: '2026-08-17',
+        to: '2026-08-22',
+      }],
+      periods: [
+        { ...analysisResult.periods![0]!, from: '2026-08-17', to: '2026-08-22' },
+        { ...analysisResult.periods![1]!, from: '2026-08-10', to: '2026-08-15' },
+        analysisResult.periods![2]!,
+        analysisResult.periods![3]!,
+        analysisResult.periods![4]!,
+      ],
+    };
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [{
+        id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
+      }]),
+      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      RunSalesAnalysis: vi.fn(async () => aligned),
+    } });
+    render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
+    await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
+    await fireEvent.click(screen.getByText('開始分析'));
+    await waitFor(() => expect(screen.getByRole('tab', { name: '每週變化' })).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole('tab', { name: '每週變化' }));
+    const weekly = screen.getByRole('heading', { name: '每週銷售變化' }).closest('section');
+    expect(weekly).toHaveTextContent('2026-08-17 — 2026-08-22');
+    expect(weekly).toHaveTextContent('與上週同一段星期比較');
+    expect(weekly).not.toHaveTextContent('週末優先對上一段同週末，不是前幾個平日。');
+  });
+
   it('still compares month mode with calendar months', async () => {
     const runSalesAnalysis = vi.fn(async (..._args: unknown[]) => analysisResult);
     configureBackend({ methods: {
