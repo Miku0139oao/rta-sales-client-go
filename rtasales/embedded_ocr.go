@@ -90,11 +90,22 @@ func preparedLearnedTemplates(alphabet string) (map[byte][]preparedGlyph, map[by
 	learnedTemplatesOnce.Do(func() {
 		stretched := decodedLearnedTemplates(defaultOCRAlphabet)
 		supplemental := decodedGlyphTemplates(supplementalGlyphTemplates, defaultOCRAlphabet)
+		trained := decodedGlyphTemplates(
+			mergeGlyphTable(trainedGlyphTemplates, defaultOCRAlphabet, learnedGlyphTemplates, supplementalGlyphTemplates),
+			defaultOCRAlphabet,
+		)
+		fitted := decodedGlyphTemplates(fittedGlyphTemplates, defaultOCRAlphabet)
+		trainedFitted := decodedGlyphTemplates(
+			mergeGlyphTable(trainedFittedGlyphTemplates, defaultOCRAlphabet, fittedGlyphTemplates),
+			defaultOCRAlphabet,
+		)
 		for _, character := range []byte(defaultOCRAlphabet) {
 			stretched[character] = append(stretched[character], supplemental[character]...)
+			stretched[character] = append(stretched[character], trained[character]...)
+			fitted[character] = append(fitted[character], trainedFitted[character]...)
 		}
 		learnedTemplates = prepareGlyphTemplates(stretched)
-		learnedFittedTemplates = prepareGlyphTemplates(decodedGlyphTemplates(fittedGlyphTemplates, defaultOCRAlphabet))
+		learnedFittedTemplates = prepareGlyphTemplates(fitted)
 	})
 	selected := make(map[byte][]preparedGlyph, len(alphabet))
 	selectedFitted := make(map[byte][]preparedGlyph, len(alphabet))
@@ -132,7 +143,7 @@ func (s *EmbeddedOCRSolver) Solve(ctx context.Context, encoded []byte) (string, 
 		if err != nil {
 			return "", fmt.Errorf("segment captcha character %d: %w", index+1, err)
 		}
-		if best > s.maximumDistance || margin < s.minimumScoreMargin {
+		if !s.acceptMatch(best, margin) {
 			return "", fmt.Errorf(
 				"captcha character %d is uncertain (distance %.3f, margin %.3f)",
 				index+1,
@@ -149,6 +160,21 @@ type glyphMatch struct {
 	character byte
 	distance  float64
 	margin    float64
+}
+
+func (s *EmbeddedOCRSolver) acceptMatch(distance, margin float64) bool {
+	if margin < 0 || math.IsInf(distance, 1) {
+		return false
+	}
+	if distance <= s.maximumDistance && margin >= s.minimumScoreMargin {
+		return true
+	}
+	// Farther template is safe only when the runner-up is clearly worse.
+	// A thin-margin close match is how 3/8 and 0/c get submitted incorrectly.
+	if distance <= s.maximumDistance+0.05 && margin >= s.minimumScoreMargin+0.05 {
+		return true
+	}
+	return false
 }
 
 func (s *EmbeddedOCRSolver) classifyCaptchaCharacter(source image.Image, index int) (byte, float64, float64, error) {
@@ -175,7 +201,7 @@ func (s *EmbeddedOCRSolver) classifyCaptchaCharacter(source image.Image, index i
 	}
 	distance := maxFloat(winner.bestDistance[0], winner.bestDistance[1])
 	margin := minFloat(winner.bestMargin[0], winner.bestMargin[1])
-	if distance > s.maximumDistance || margin < s.minimumScoreMargin {
+	if !s.acceptMatch(distance, margin) {
 		return baselineCharacter, baselineDistance, baselineMargin, nil
 	}
 	return winner.character, distance, margin, nil
@@ -220,14 +246,33 @@ func (s *EmbeddedOCRSolver) classifyCaptchaCharacterBaseline(source image.Image,
 	stretched := selectBestGlyphMatch(stretchedMatches)
 	fitted := selectBestGlyphMatch(fittedMatches)
 	if stretched.character != fitted.character {
-		// The two models deliberately preserve different shape information. A
-		// disagreement is safer to retry with a fresh challenge than to guess.
-		return stretched.character, maxFloat(stretched.distance, fitted.distance), -1, nil
+		resolved := s.resolveModelDisagreement(source, index, stretched, fitted)
+		return resolved.character, resolved.distance, resolved.margin, nil
 	}
 	return stretched.character,
 		maxFloat(stretched.distance, fitted.distance),
 		minFloat(stretched.margin, fitted.margin),
 		nil
+}
+
+func (s *EmbeddedOCRSolver) resolveModelDisagreement(_ image.Image, _ int, stretched, fitted glyphMatch) glyphMatch {
+	reject := glyphMatch{
+		character: stretched.character,
+		distance:  maxFloat(stretched.distance, fitted.distance),
+		margin:    -1,
+	}
+	// Only override a two-model disagreement when one side is both close and
+	// clearly closer. Topology voting is too eager to promote 8/0 lookalikes.
+	switch {
+	case stretched.distance+0.08 <= fitted.distance && stretched.distance <= 0.12:
+		stretched.margin = fitted.distance - stretched.distance
+		return stretched
+	case fitted.distance+0.08 <= stretched.distance && fitted.distance <= 0.12:
+		fitted.margin = stretched.distance - fitted.distance
+		return fitted
+	default:
+		return reject
+	}
 }
 
 type glyphVote struct {

@@ -765,3 +765,63 @@ func TestSalesAnalysisRateLimitPausesOnlyTheAffectedAccount(t *testing.T) {
 		t.Fatalf("account A queries=%d maxActive=%d, want retries with at most two logins", queriesA, maxActiveA)
 	}
 }
+
+func TestSalesAnalysisSubsetTrendDoesNotIncludeUnselectedStores(t *testing.T) {
+	transactions107, transactions108 := 10.0, 12.0
+	trend107, trend108 := 12.0, 22.0
+	client := &salesAnalysisFakeClient{
+		stores: []rtasales.Store{
+			{BusinessID: "107", Label: "107 - First"},
+			{BusinessID: "108", Label: "108 - Second"},
+		},
+		results: map[string]*rtasales.SalesResult{
+			"107": {
+				TrendGrossSaleAmount: &trend107, TotalTransactionCount: &transactions107,
+				Items: []rtasales.SaleItem{{Matnr: "1", TPGrossSaleAmount: 10}},
+				TrendDays: []rtasales.TrendDay{
+					{Date: "2026-08-15", GrossSaleAmount: 12, TransactionCount: 10},
+				},
+			},
+			"108": {
+				TrendGrossSaleAmount: &trend108, TotalTransactionCount: &transactions108,
+				Items: []rtasales.SaleItem{{Matnr: "2", TPGrossSaleAmount: 20}},
+				TrendDays: []rtasales.TrendDay{
+					{Date: "2026-08-15", GrossSaleAmount: 22, TransactionCount: 12},
+				},
+			},
+		},
+	}
+	app, _, _ := newTestApp(t, new(fakeEngine), fakeClients{byAccount: map[string]accountClient{"analysis-account": client}})
+	profile, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{
+		DisplayName: "Analysis", Account: "analysis-account", Password: "password", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := app.RunSalesAnalysis(SalesAnalysisRequest{
+		ProfileID: profile.ID, StoreIDs: []string{"107"}, Concurrency: 1,
+		Periods: []SalesAnalysisPeriodRequest{
+			{Key: "current", Label: "Current", From: "2026-08-15", To: "2026-08-15", IncludeTrend: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled := waitSalesAnalysisSettled(t, app, result.OperationID)
+	if settled.Periods[0].Totals.TrendNetSalesAmount == nil || *settled.Periods[0].Totals.TrendNetSalesAmount != trend107 {
+		t.Fatalf("subset trend sales=%v, want %v", settled.Periods[0].Totals.TrendNetSalesAmount, trend107)
+	}
+	if settled.Periods[0].Totals.TransactionCount == nil || *settled.Periods[0].Totals.TransactionCount != transactions107 {
+		t.Fatalf("subset trend tickets=%v, want %v", settled.Periods[0].Totals.TransactionCount, transactions107)
+	}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	for _, query := range client.queries {
+		if query.AllStores {
+			t.Fatalf("subset analysis used all-stores Trend View: %#v", query)
+		}
+		if query.SkipArticle && query.BusinessStoreID != "107" {
+			t.Fatalf("subset trend queried unselected store: %#v", query)
+		}
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path"
@@ -118,16 +119,21 @@ func (s *WebServer) handleSync(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, errors.New("web session credential store is unavailable"))
 		return
 	}
+	store.Clear()
+	keep := make(map[string]struct{}, len(records))
 	for _, record := range records {
+		keep[record.ID] = struct{}{}
 		secret := request.Secrets[record.ID]
 		if strings.TrimSpace(secret.Account) == "" || secret.Password == "" {
-			_ = store.Delete(record.ID)
 			continue
 		}
 		if err := store.Put(record.ID, securestore.Credential{Account: strings.TrimSpace(secret.Account), Password: secret.Password}); err != nil {
 			writeAPIError(w, http.StatusBadRequest, err)
 			return
 		}
+	}
+	if cookies, ok := session.app.cookies.(*memoryProfileCookies); ok {
+		cookies.dropMissing(keep)
 	}
 	if err := session.app.mancodes.Replace(request.Groups); err != nil {
 		writeAPIError(w, http.StatusBadRequest, err)
@@ -152,14 +158,9 @@ func (s *WebServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-	name := filepath.Base(header.Filename)
-	if name == "." || name == "" {
-		writeAPIError(w, http.StatusBadRequest, errors.New("file name is required"))
-		return
-	}
-	ext := strings.ToLower(filepath.Ext(name))
-	if ext != ".xlsx" && ext != ".json" && ext != ".csv" {
-		writeAPIError(w, http.StatusBadRequest, errors.New("only .xlsx, .json, or .csv uploads are allowed"))
+	name, err := sanitizeWebUploadName(header.Filename)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err)
 		return
 	}
 	dest := filepath.Join(session.dir, name)
@@ -172,9 +173,21 @@ func (s *WebServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, err)
 		return
 	}
-	defer out.Close()
-	if _, err := io.Copy(out, io.LimitReader(file, maximumWebUpload+1)); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, err)
+	written, copyErr := io.Copy(out, io.LimitReader(file, maximumWebUpload+1))
+	closeErr := out.Close()
+	if copyErr != nil {
+		_ = os.Remove(dest)
+		writeAPIError(w, http.StatusInternalServerError, copyErr)
+		return
+	}
+	if closeErr != nil {
+		_ = os.Remove(dest)
+		writeAPIError(w, http.StatusInternalServerError, closeErr)
+		return
+	}
+	if written > maximumWebUpload {
+		_ = os.Remove(dest)
+		writeAPIError(w, http.StatusRequestEntityTooLarge, errors.New("file exceeds 32 MiB"))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"path": dest, "fileName": name})
@@ -196,7 +209,7 @@ func (s *WebServer) handleDownload(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusNotFound, errors.New("file is not available"))
 		return
 	}
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filepath.Base(target)))
+	w.Header().Set("Content-Disposition", attachmentDisposition(target))
 	http.ServeFile(w, r, target)
 }
 
@@ -388,7 +401,12 @@ func (s *WebServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *WebServer) handleStatic(w http.ResponseWriter, r *http.Request) {
-	if s.Static == "" {
+	if strings.TrimSpace(s.Static) == "" {
+		http.NotFound(w, r)
+		return
+	}
+	root, err := filepath.Abs(s.Static)
+	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
@@ -396,14 +414,15 @@ func (s *WebServer) handleStatic(w http.ResponseWriter, r *http.Request) {
 	if cleaned == "/" {
 		cleaned = "/index.html"
 	}
-	full := path.Join(s.Static, cleaned)
-	if !strings.HasPrefix(full, path.Clean(s.Static)+"/") && full != path.Clean(s.Static)+"/index.html" && full != path.Join(s.Static, "index.html") {
+	full := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(cleaned, "/")))
+	rel, err := filepath.Rel(root, full)
+	if err != nil || !filepath.IsLocal(rel) {
 		http.NotFound(w, r)
 		return
 	}
 	info, err := os.Stat(full)
 	if err != nil || info.IsDir() {
-		http.ServeFile(w, r, path.Join(s.Static, "index.html"))
+		http.ServeFile(w, r, filepath.Join(root, "index.html"))
 		return
 	}
 	http.ServeFile(w, r, full)
@@ -459,6 +478,36 @@ func (s *WebServer) newSession() (*webSession, error) {
 	return session, nil
 }
 
+func sanitizeWebUploadName(name string) (string, error) {
+	name = filepath.Base(strings.TrimSpace(name))
+	name = strings.Trim(name, " .")
+	if name == "" || name == "." || name == ".." {
+		return "", errors.New("file name is required")
+	}
+	var builder strings.Builder
+	for _, character := range name {
+		switch {
+		case character >= 'a' && character <= 'z', character >= 'A' && character <= 'Z', character >= '0' && character <= '9', character == '.', character == '-', character == '_':
+			builder.WriteRune(character)
+		default:
+			builder.WriteByte('_')
+		}
+	}
+	name = strings.Trim(builder.String(), ".")
+	if name == "" {
+		return "", errors.New("file name is required")
+	}
+	ext := strings.ToLower(filepath.Ext(name))
+	if ext != ".xlsx" && ext != ".json" && ext != ".csv" {
+		return "", errors.New("only .xlsx, .json, or .csv uploads are allowed")
+	}
+	return name, nil
+}
+
+func attachmentDisposition(filename string) string {
+	return mime.FormatMediaType("attachment", map[string]string{"filename": filepath.Base(filename)})
+}
+
 func (session *webSession) confinePath(value *string) error {
 	if value == nil || strings.TrimSpace(*value) == "" {
 		return nil
@@ -484,7 +533,7 @@ func (session *webSession) ensureInside(target string) error {
 		return err
 	}
 	rel, err := filepath.Rel(root, absolute)
-	if err != nil || strings.HasPrefix(rel, "..") {
+	if err != nil || rel == ".." || (rel != "." && !filepath.IsLocal(rel)) {
 		return errors.New("path is outside the web session")
 	}
 	return nil

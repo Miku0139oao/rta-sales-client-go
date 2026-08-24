@@ -101,6 +101,19 @@ report, err := xlsxfill.Apply(ctx, plan, xlsxfill.ApplyRequest{
 
 驗證碼預設用內建 OCR，一般 CPU 就好，不用裝 Tesseract。看不懂的圖它不會硬送，會換一張或交給你串的下一個 solver（例如 `NewTwoCaptchaSolver`）。錯誤用 `errors.As` 看 `AuthError`、`CaptchaError`、`UpstreamError` 那些。任何一分頁失敗，整次查詢就失敗。
 
+內建 OCR 是模板比對。要再訓練：
+
+```
+go run ./cmd/rta-ocr-train capture -dir samples -count 60
+go run ./cmd/rta-ocr-train propose -dir samples
+# 檔名就是答案，看圖改錯的；看不懂的 unnamed-*.bin 也要手標
+go run ./cmd/rta-ocr-train gen -dir samples
+go run ./cmd/rta-ocr-train eval -dir samples
+go test ./rtasales/
+```
+
+`gen` 會覆寫 `rtasales/embedded_ocr_trained.go`。樣本目錄不要提交。
+
 ## 開發環境
 
 改桌面版請用 Windows。library 測試在 Linux CI 也能跑。

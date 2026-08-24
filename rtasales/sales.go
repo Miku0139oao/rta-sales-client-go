@@ -310,31 +310,6 @@ func (c *Client) fetchSalesWindows(ctx context.Context, query SalesQuery, store 
 	return items, fetched.trend, nil
 }
 
-func (c *Client) fetchSalesViews(ctx context.Context, query SalesQuery, payload salesQueryPayload, store storeRecord) ([]SaleItem, trendTotals, error) {
-	if query.SkipTrend {
-		items, err := c.fetchArticleItems(ctx, payload, query.Compact)
-		return items, trendTotals{}, err
-	}
-	type articleFetch struct {
-		items []SaleItem
-		err   error
-	}
-	articles := make(chan articleFetch, 1)
-	go func() {
-		items, err := c.fetchArticleItems(ctx, payload, query.Compact)
-		articles <- articleFetch{items: items, err: err}
-	}()
-	trend, trendErr := c.fetchTrendTotals(ctx, query, store)
-	article := <-articles
-	if article.err != nil {
-		return nil, trendTotals{}, article.err
-	}
-	if trendErr != nil {
-		return nil, trendTotals{}, trendErr
-	}
-	return article.items, trend, nil
-}
-
 func (c *Client) fetchArticleItems(ctx context.Context, payload salesQueryPayload, compact bool) ([]SaleItem, error) {
 	firstItems, totalPages, err := c.fetchSalesPage(ctx, payload, 1, compact)
 	if err != nil {

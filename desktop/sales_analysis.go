@@ -268,9 +268,7 @@ func (a *App) runSalesAnalysisJobs(
 					var result *rtasales.SalesResult
 					var queryErr error
 					if task.kind == "trend" {
-						query.SkipArticle = true
-						query.AllStores = true
-						result, queryErr = a.querySalesAnalysisWithRateLimitRetry(ctx, selected[0].query, query)
+						result, queryErr = a.querySelectedStoresTrend(ctx, selected, period)
 						trendOutcomes[task.periodIndex] = storeOutcome{result: result, err: queryErr}
 					} else {
 						selectedStore := selected[task.storeIndex]
@@ -338,6 +336,125 @@ func salesAnalysisJobLane(task analysisJob, selected []selectedStore) string {
 		return "profile:" + route.profileID
 	}
 	return "default"
+}
+
+func (a *App) querySelectedStoresTrend(ctx context.Context, selected []selectedStore, period normalizedSalesAnalysisPeriod) (*rtasales.SalesResult, error) {
+	if len(selected) == 0 {
+		return nil, errors.New("at least one store is required")
+	}
+	base := rtasales.SalesQuery{
+		StartDate:         period.from,
+		EndDate:           period.to,
+		Category:          "全部商品",
+		SkipArticle:       true,
+		SkipTrendLookback: period.key != "current",
+		Compact:           true,
+	}
+	var results []*rtasales.SalesResult
+	for _, group := range groupSelectedStoresByProfile(selected) {
+		covers, err := selectionCoversAccount(ctx, group)
+		if err != nil {
+			return nil, err
+		}
+		if covers {
+			query := base
+			query.AllStores = true
+			result, queryErr := a.querySalesAnalysisWithRateLimitRetry(ctx, group[0].query, query)
+			if queryErr != nil {
+				return nil, queryErr
+			}
+			results = append(results, result)
+			continue
+		}
+		for _, store := range group {
+			query := base
+			query.BusinessStoreID = store.route.store.BusinessID
+			result, queryErr := a.querySalesAnalysisWithRateLimitRetry(ctx, store.query, query)
+			if queryErr != nil {
+				return nil, queryErr
+			}
+			results = append(results, result)
+		}
+	}
+	return mergeSelectedTrendResults(results), nil
+}
+
+func groupSelectedStoresByProfile(selected []selectedStore) [][]selectedStore {
+	indexes := make(map[string]int, len(selected))
+	groups := make([][]selectedStore, 0)
+	for _, store := range selected {
+		key := store.route.profileID
+		if key == "" {
+			key = "default"
+		}
+		if index, ok := indexes[key]; ok {
+			groups[index] = append(groups[index], store)
+			continue
+		}
+		indexes[key] = len(groups)
+		groups = append(groups, []selectedStore{store})
+	}
+	return groups
+}
+
+func selectionCoversAccount(ctx context.Context, group []selectedStore) (bool, error) {
+	if len(group) == 0 {
+		return false, nil
+	}
+	authorized, err := group[0].query.Stores(ctx)
+	if err != nil {
+		return false, err
+	}
+	selected := make(map[string]struct{}, len(group))
+	for _, store := range group {
+		id := strings.TrimSpace(store.route.store.BusinessID)
+		if id != "" {
+			selected[id] = struct{}{}
+		}
+	}
+	if len(authorized) == 0 || len(selected) == 0 {
+		return false, nil
+	}
+	for _, store := range authorized {
+		id := strings.TrimSpace(store.BusinessID)
+		if id == "" {
+			continue
+		}
+		if _, ok := selected[id]; !ok {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func mergeSelectedTrendResults(results []*rtasales.SalesResult) *rtasales.SalesResult {
+	merged := &rtasales.SalesResult{Store: rtasales.Store{Label: "全部"}}
+	if len(results) == 0 {
+		return merged
+	}
+	var sales, tickets float64
+	hasSales, hasTickets := false, false
+	for _, result := range results {
+		if result == nil {
+			continue
+		}
+		if result.TrendGrossSaleAmount != nil {
+			sales += *result.TrendGrossSaleAmount
+			hasSales = true
+		}
+		if result.TotalTransactionCount != nil {
+			tickets += *result.TotalTransactionCount
+			hasTickets = true
+		}
+		merged.TrendDays = append(merged.TrendDays, result.TrendDays...)
+	}
+	if hasSales {
+		merged.TrendGrossSaleAmount = &sales
+	}
+	if hasTickets {
+		merged.TotalTransactionCount = &tickets
+	}
+	return merged
 }
 
 func (a *App) querySalesAnalysisWithRateLimitRetry(
@@ -535,12 +652,14 @@ func (a *App) mergeSalesAnalysisSupplement(
 		byKey[period.Key] = index
 	}
 	if trend, ok := periodTrendOutcome(outcomes[primaryIndex], len(selected)); ok {
-		period := current.Periods[byKey[periods[primaryIndex].key]]
-		applyAllStoresTrend(&period, trend)
-		period.Complete = len(period.Issues) == 0
-		current.Periods[byKey[periods[primaryIndex].key]] = period
-		if periods[primaryIndex].key == "current" && trend.err == nil && trend.result != nil {
-			current.Weeks = foldSalesAnalysisWeeksForPeriods(periods, outcomes, primaryIndex, len(selected))
+		if index, exists := byKey[periods[primaryIndex].key]; exists {
+			period := current.Periods[index]
+			applyAllStoresTrend(&period, trend)
+			period.Complete = len(period.Issues) == 0
+			current.Periods[index] = period
+			if periods[primaryIndex].key == "current" && trend.err == nil && trend.result != nil {
+				current.Weeks = foldSalesAnalysisWeeksForPeriods(periods, outcomes, primaryIndex, len(selected))
+			}
 		}
 	}
 	for periodIndex, period := range periods {

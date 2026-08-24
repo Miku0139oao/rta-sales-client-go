@@ -13,10 +13,8 @@ concurrency:
 permissions:
   contents: read
 
-# setup-go's go-version-file reads `go 1.25.0` from go.mod and installs that
-# exact patch. 1.25.0 is affected by multiple stdlib CVEs already fixed in
-# 1.25.13, which made govulncheck fail every main push. Pin the patched
-# toolchain here; do not reintroduce go-version-file until go.mod requires it.
+# Keep this pin in lockstep with the go directive in go.mod. 1.25.0 has
+# stdlib CVEs already fixed in 1.25.13; do not drop back to an unpatched patch.
 env:
   GO_VERSION: "1.25.13"
 

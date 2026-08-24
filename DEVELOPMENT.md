@@ -101,6 +101,19 @@ report, err := xlsxfill.Apply(ctx, plan, xlsxfill.ApplyRequest{
 
 The embedded OCR is CPU-only. Uncertain glyphs are not submitted; the client asks for a new captcha or the next solver (`NewTwoCaptchaSolver` if you want a remote fallback). Typed errors work with `errors.As`. A failed page fails the whole sales call.
 
+The solver is template matching. To train more glyphs:
+
+```
+go run ./cmd/rta-ocr-train capture -dir samples -count 60
+go run ./cmd/rta-ocr-train propose -dir samples
+# The file name is the label. Fix wrong names and label leftover unnamed-*.bin files.
+go run ./cmd/rta-ocr-train gen -dir samples
+go run ./cmd/rta-ocr-train eval -dir samples
+go test ./rtasales/
+```
+
+`gen` overwrites `rtasales/embedded_ocr_trained.go`. Do not commit the sample directories.
+
 ## Development setup
 
 Desktop work is Windows-only. Library tests also run on the Linux CI runners.

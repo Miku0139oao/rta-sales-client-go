@@ -19,7 +19,6 @@ import { loadWebSnapshot, saveWebSnapshot, type StoredProfileSecret, type WebSna
 const WEB_DOWNLOADS = 'downloads';
 
 let snapshot = loadWebSnapshot();
-let salesCancelled = false;
 const listeners = new Map<string, Set<(payload: unknown) => void>>();
 
 function emit(name: string, payload: unknown): void {
@@ -349,7 +348,6 @@ export function installWebBackend(): void {
       },
 
       CancelSalesAnalysis: async (value: unknown) => {
-        salesCancelled = true;
         try { await liveRPC('CancelSalesAnalysis', value ?? {}); } catch { /* local cancel still applies */ }
       },
 

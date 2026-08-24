@@ -83,6 +83,16 @@ func (s *memoryProfileCookies) DeleteCookie(profileID string) error {
 	return nil
 }
 
+func (s *memoryProfileCookies) dropMissing(keep map[string]struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for profileID := range s.byID {
+		if _, ok := keep[profileID]; !ok {
+			delete(s.byID, profileID)
+		}
+	}
+}
+
 type sseEvent struct {
 	Name    string
 	Payload any

@@ -62,6 +62,20 @@ func TestEmbeddedOCRSolverRejectsUncertainAnswer(t *testing.T) {
 	}
 }
 
+func TestAcceptMatchKeepsConfiguredMinimum(t *testing.T) {
+	solver := NewEmbeddedOCRSolver(EmbeddedOCRConfig{MaximumDistance: 2, MinimumScoreMargin: 2})
+	if solver.acceptMatch(0.10, 0.05) {
+		t.Fatal("strict configured margin must still reject a typical match")
+	}
+	defaults := NewEmbeddedOCRSolver(EmbeddedOCRConfig{})
+	if !defaults.acceptMatch(0.24, 0.08) {
+		t.Fatal("clear far match should be accepted")
+	}
+	if defaults.acceptMatch(0.24, 0.03) {
+		t.Fatal("far match with a thin margin must stay rejected")
+	}
+}
+
 func TestEmbeddedOCRSolverUsesCalibratedConsensusDefaults(t *testing.T) {
 	solver := NewEmbeddedOCRSolver(EmbeddedOCRConfig{})
 	if solver.maximumDistance != 0.20 || solver.minimumScoreMargin != 0.02 {
@@ -229,4 +243,56 @@ func syntheticCaptchaJPEG(t *testing.T, answer string) []byte {
 		t.Fatal(err)
 	}
 	return encoded.Bytes()
+}
+
+func TestTrainedGlyphTemplatesArePopulated(t *testing.T) {
+	if len(trainedGlyphTemplates) == 0 || len(trainedFittedGlyphTemplates) == 0 {
+		t.Fatal("trained templates are empty; run go run ./cmd/rta-ocr-train gen -dir samples")
+	}
+}
+
+func TestPackGlyphRoundTrip(t *testing.T) {
+	source := newBinaryGlyph(templateWidth, templateHeight)
+	source.set(0, 0, true)
+	source.set(7, 3, true)
+	source.set(14, 20, true)
+	got := UnpackGlyph(PackGlyph(source))
+	if !equalBinaryGlyph(source, got) {
+		t.Fatalf("pack/unpack changed the glyph")
+	}
+}
+
+func TestMergeGlyphTableKeepsSameBitmapForDifferentCharacters(t *testing.T) {
+	shared := "same-packed-glyph"
+	merged := mergeGlyphTable(map[byte][]string{
+		'0': {shared, "new-zero"},
+		'8': {shared},
+	}, "08", map[byte][]string{
+		'8': {shared},
+	})
+	if len(merged['0']) != 2 {
+		t.Fatalf("0 templates=%v, want both encodings", merged['0'])
+	}
+	if len(merged['8']) != 0 {
+		t.Fatalf("8 templates=%v, want existing encoding dropped", merged['8'])
+	}
+}
+
+func TestExportGlyphTemplatesFromColorNoiseFixture(t *testing.T) {
+	encoded, err := base64.StdEncoding.DecodeString(colorNoiseCaptchaBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	templates, err := ExportGlyphTemplates(encoded, "e2c63")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, character := range []byte("e2c63") {
+		if len(templates.Stretched[character]) == 0 {
+			t.Fatalf("missing stretched template for %q", character)
+		}
+		if len(templates.Fitted[character]) == 0 {
+			t.Fatalf("missing fitted template for %q", character)
+		}
+	}
 }

@@ -18,8 +18,15 @@ func TestCIPinsPatchedGoInsteadOfGoModPatchZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
+	mod, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "..", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(mod), "go 1.25.13") {
+		t.Fatal("go.mod must require Go 1.25.13 or newer so stdlib CVEs after 1.25.0 stay closed")
+	}
 	if strings.Contains(text, "go-version-file:") {
-		t.Fatal("ci.yml must not use go-version-file: go.mod says 1.25.0 and that patch fails govulncheck")
+		t.Fatal("ci.yml must pin a patched toolchain instead of trusting go-version-file")
 	}
 	if !strings.Contains(text, `GO_VERSION: "1.25.13"`) {
 		t.Fatal("ci.yml must pin GO_VERSION to 1.25.13 or newer so stdlib CVEs are closed")

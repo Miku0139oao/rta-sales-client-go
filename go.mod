@@ -1,6 +1,6 @@
 module github.com/Miku0139oao/rta-sales-client-go
 
-go 1.25.0
+go 1.25.13
 
 require (
 	github.com/danieljoos/wincred v1.2.3
