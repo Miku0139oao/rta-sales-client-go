@@ -1,0 +1,306 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "RTA Sales Analyzer — Runtime Architecture",
+    "locale": "en",
+    "output": "rta-sales-runtime-architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/Miku0139oao/rta-sales-client-go",
+      "revision": "76580013c727e27c02af9f47d7edaa14a6c93a3d"
+    },
+    "viewBox": [1240, 630],
+    "views": [
+      {
+        "id": "workbook-path",
+        "label": "Primary workbook path",
+        "focus": ["operator", "svelte-ui", "runtime-adapter", "app-orchestrator", "workbook-engine", "rta-client", "rta-platform", "local-files"],
+        "note": "Follow a workbook from selection and authenticated daily queries to a validated new copy."
+      },
+      {
+        "id": "trust-boundaries",
+        "label": "Trust boundaries",
+        "focus": ["svelte-ui", "runtime-adapter", "app-orchestrator", "secure-state", "local-files", "rta-client", "rta-platform"],
+        "note": "Inspect renderer input, protected local state, user files, and outbound HTTPS."
+      },
+      {
+        "id": "sales-analysis",
+        "label": "Sales analysis branch",
+        "focus": ["svelte-ui", "runtime-adapter", "app-orchestrator", "sales-analysis", "rta-client", "rta-platform"],
+        "note": "The dashboard shares profiles and RTA integration but bypasses workbook planning."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "operator",
+      "type": "external",
+      "label": "RTA Operator",
+      "sublabel": "accounts + files",
+      "pos": [25, 310],
+      "size": [120, 66],
+      "sources": [{"path": "README.md", "label": "User workflows"}]
+    },
+    {
+      "id": "svelte-ui",
+      "type": "frontend",
+      "label": "Svelte UI",
+      "sublabel": "WebView2 or browser",
+      "pos": [175, 310],
+      "size": [125, 66],
+      "sources": [
+        {"path": "desktop/frontend/src/App.svelte"},
+        {"path": "desktop/frontend/src/main.ts"}
+      ]
+    },
+    {
+      "id": "runtime-adapter",
+      "type": "security",
+      "label": "Runtime Adapter",
+      "sublabel": "Wails RPC/events | HTTP/SSE",
+      "pos": [330, 310],
+      "size": [145, 66],
+      "tag": "invocation boundary",
+      "sources": [
+        {"path": "desktop/frontend/src/lib/wailsBridge.ts"},
+        {"path": "desktop/web_http.go"}
+      ]
+    },
+    {
+      "id": "app-orchestrator",
+      "type": "backend",
+      "label": "desktop.App",
+      "sublabel": "operation orchestrator",
+      "pos": [505, 310],
+      "size": [140, 66],
+      "tag": "in-process state",
+      "sources": [
+        {"path": "desktop/app.go"},
+        {"path": "desktop/native.go"}
+      ]
+    },
+    {
+      "id": "workbook-engine",
+      "type": "backend",
+      "label": "Workbook Engine",
+      "sublabel": "xlsxfill scan / plan / apply",
+      "pos": [675, 310],
+      "size": [150, 66],
+      "tag": "ephemeral plan",
+      "sources": [
+        {"path": "desktop/xlsx_engine.go"},
+        {"path": "xlsxfill/batch.go"},
+        {"path": "xlsxfill/scan.go"}
+      ]
+    },
+    {
+      "id": "rta-client",
+      "type": "backend",
+      "label": "RTA Client + OCR",
+      "sublabel": "auth, stores, sales, retry",
+      "pos": [855, 310],
+      "size": [150, 66],
+      "sources": [
+        {"path": "rtasales/client.go"},
+        {"path": "rtasales/login.go"},
+        {"path": "rtasales/sales.go"}
+      ]
+    },
+    {
+      "id": "rta-platform",
+      "type": "cloud",
+      "label": "RTA Platform APIs",
+      "sublabel": "SSO, stores, article, trend",
+      "pos": [1035, 310],
+      "size": [150, 66],
+      "tag": "external HTTPS",
+      "sources": [{"path": "rtasales/client.go", "label": "Production endpoints"}]
+    },
+    {
+      "id": "secure-state",
+      "type": "security",
+      "label": "Protected Local State",
+      "sublabel": "credentials + session cookies",
+      "pos": [505, 105],
+      "size": [160, 66],
+      "tag": "OS-user scope",
+      "sources": [
+        {"path": "securestore/credential_windows.go"},
+        {"path": "securestore/dpapi_windows.go"},
+        {"path": "securestore/encrypted_file.go"}
+      ]
+    },
+    {
+      "id": "sales-analysis",
+      "type": "backend",
+      "label": "Sales Analysis",
+      "sublabel": "current-first + reports",
+      "pos": [855, 105],
+      "size": [150, 66],
+      "tag": "secondary branch",
+      "sources": [
+        {"path": "desktop/sales_analysis.go"},
+        {"path": "desktop/sales_analysis_report_memo.go"},
+        {"path": "desktop/sales_analysis_export.go"}
+      ]
+    },
+    {
+      "id": "local-files",
+      "type": "database",
+      "label": "Local Files",
+      "sublabel": "input XLSX → new copy / reports",
+      "pos": [667.5, 515],
+      "size": [165, 66],
+      "tag": "user-controlled",
+      "sources": [
+        {"path": "xlsxfill/batch.go", "label": "Safe publication"},
+        {"path": "desktop/sales_analysis_export.go", "label": "Report outputs"}
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Presentation trust boundary",
+      "wraps": ["svelte-ui", "runtime-adapter"],
+      "pad": 24
+    },
+    {
+      "kind": "region",
+      "label": "Trusted Go process — shared by desktop and web composition roots",
+      "wraps": ["app-orchestrator", "workbook-engine", "rta-client", "sales-analysis"],
+      "pad": 24
+    },
+    {
+      "kind": "security-group",
+      "label": "Protected secret persistence",
+      "wraps": ["secure-state"],
+      "pad": 22
+    },
+    {
+      "kind": "security-group",
+      "label": "User-file boundary",
+      "wraps": ["local-files"],
+      "pad": 22
+    },
+    {
+      "kind": "region",
+      "label": "External RTA HTTPS boundary",
+      "wraps": ["rta-platform"],
+      "pad": 22
+    }
+  ],
+  "connections": [
+    {
+      "id": "operate-ui",
+      "from": "operator",
+      "to": "svelte-ui",
+      "label": "select + review",
+      "variant": "emphasis",
+      "labelDy": 58
+    },
+    {
+      "id": "invoke-runtime",
+      "from": "svelte-ui",
+      "to": "runtime-adapter",
+      "label": "commands + progress",
+      "variant": "emphasis",
+      "labelDy": 58
+    },
+    {
+      "id": "dispatch-app",
+      "from": "runtime-adapter",
+      "to": "app-orchestrator",
+      "label": "typed App calls",
+      "variant": "emphasis",
+      "labelDy": -30
+    },
+    {
+      "id": "coordinate-workbook",
+      "from": "app-orchestrator",
+      "to": "workbook-engine",
+      "label": "scan → analyze → apply",
+      "variant": "emphasis",
+      "labelDy": 58
+    },
+    {
+      "id": "route-sales",
+      "from": "workbook-engine",
+      "to": "rta-client",
+      "label": "daily jobs / cookie lanes",
+      "variant": "emphasis",
+      "labelDy": 58
+    },
+    {
+      "id": "call-rta",
+      "from": "rta-client",
+      "to": "rta-platform",
+      "label": "HTTPS auth + stores + sales",
+      "variant": "emphasis",
+      "labelDy": 58
+    },
+    {
+      "id": "load-secrets",
+      "from": "app-orchestrator",
+      "to": "secure-state",
+      "label": "credentials + cookies",
+      "variant": "security",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "read-publish-files",
+      "from": "workbook-engine",
+      "to": "local-files",
+      "label": "read source / publish copy",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "run-analysis",
+      "from": "app-orchestrator",
+      "to": "sales-analysis",
+      "label": "current-first analysis",
+      "variant": "dashed",
+      "labelDy": -40
+    },
+    {
+      "id": "analysis-query",
+      "from": "sales-analysis",
+      "to": "rta-client",
+      "label": "shared RTA sessions",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 64
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Primary path — fill a workbook",
+      "items": [
+        "Scan is network-free; Analyze fingerprints the source, maps stores, and deduplicates daily jobs into authenticated cookie lanes.",
+        "The preview stays in memory. Apply rechecks source identity, preserves formulas, and atomically publishes a distinct new XLSX."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Runtime modes and features",
+      "items": [
+        "Primary: Windows Wails + WebView2. Web uses Cloudflare/Caddy, per-cookie memory state, SSE, and private temp files; CLI calls the core directly.",
+        "Sales analysis bypasses xlsxfill, returns current data first, completes comparisons in the background, and exports PDF or Markdown."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Trust, secrets, and external services",
+      "items": [
+        "Renderer, browser, and workbook inputs are untrusted. Desktop uses Credential Manager + DPAPI; web retains secrets in localStorage and session memory.",
+        "Only RTA Client crosses outbound HTTPS; four RTA hosts are collapsed into one node, with serial cookie lanes and bounded retry/concurrency."
+      ]
+    }
+  ]
+}
