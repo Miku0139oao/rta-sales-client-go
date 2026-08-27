@@ -517,9 +517,29 @@ func (a *App) supplementSalesAnalysis(
 	defer finish()
 	outcomes, _, err := a.runSalesAnalysisJobs(ctx, operationID, selected, periods, jobs, progressOffset, totalTasks, concurrency)
 	if err != nil {
+		a.failSalesAnalysisSupplement(operationID, err, time.Since(started).Milliseconds())
 		return
 	}
 	a.mergeSalesAnalysisSupplement(operationID, selected, periods, primaryIndex, outcomes, time.Since(started).Milliseconds())
+}
+
+func (a *App) failSalesAnalysisSupplement(operationID string, runErr error, durationMS int64) {
+	a.salesResultMu.Lock()
+	if a.salesResult == nil || a.salesResult.OperationID != operationID {
+		a.salesResultMu.Unlock()
+		return
+	}
+	current := *a.salesResult
+	current.Pending = false
+	current.Complete = false
+	current.QueryDurationMS = durationMS
+	if runErr != nil && !errors.Is(runErr, context.Canceled) {
+		current.Issues = append(current.Issues, SalesAnalysisIssue{Message: runErr.Error()})
+	}
+	slim := slimSalesAnalysis(current)
+	a.salesResult = &slim
+	a.salesResultMu.Unlock()
+	a.events.Emit(a.appContext(), salesAnalysisUpdateEventName, slim)
 }
 
 func assembleSalesAnalysisArticles(
