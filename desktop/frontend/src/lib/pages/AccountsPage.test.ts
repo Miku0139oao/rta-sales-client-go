@@ -337,4 +337,16 @@ describe('account safety workflow', () => {
     await fireEvent.click(container.querySelector('.app-dialog')!, { clientX: -1, clientY: -1 });
     await waitFor(() => expect(container.querySelector('.app-dialog')).not.toBeInTheDocument());
   });
+
+  it('does not offer adding an account when listing profiles fails', async () => {
+    const list = vi.fn(async () => { throw new Error('vault unavailable'); });
+    configureBackend({ methods: { ListProfiles: list } });
+    const { container } = render(AccountsPage, { props: { t: translator('zh-TW'), locale: 'zh-TW' } });
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+    expect(screen.queryByText('尚未建立帳號')).not.toBeInTheDocument();
+    expect(button(container, '新增帳號')).toHaveAttribute('disabled');
+    list.mockResolvedValueOnce([]);
+    await fireEvent.click(button(container, '重試失敗項目'));
+    await waitFor(() => expect(screen.getByText('尚未建立帳號')).toBeInTheDocument());
+  });
 });

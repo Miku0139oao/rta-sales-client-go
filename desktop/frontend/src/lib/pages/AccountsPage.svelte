@@ -259,7 +259,7 @@
     <div>
       <h1 id="accounts-title">{t('accounts.title')}</h1>
     </div>
-    <md-filled-button onclick={openCreate} disabled={accountBusy}>
+    <md-filled-button onclick={openCreate} disabled={accountBusy || Boolean(error && profiles.length === 0)}>
       <span class="material-symbols-rounded" slot="icon">add</span>{t('accounts.add')}
     </md-filled-button>
   </div>
@@ -282,6 +282,12 @@
     <div class="loading-state" aria-live="polite">
       <md-circular-progress indeterminate></md-circular-progress>
       <span>{t('common.loading')}</span>
+    </div>
+  {:else if error && profiles.length === 0}
+    <div class="empty-state surface-card">
+      <span class="material-symbols-rounded" aria-hidden="true">error</span>
+      <h2>{t('error.title')}</h2>
+      <md-filled-tonal-button onclick={() => void loadProfiles()}>{t('common.retry')}</md-filled-tonal-button>
     </div>
   {:else if profiles.length === 0}
     <div class="empty-state surface-card">
