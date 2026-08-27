@@ -12,7 +12,7 @@
   import { applyTheme, resolveTheme, systemPrefersDark, watchSystemTheme } from './lib/theme';
   import type { AppSettings, Page, ThemePreference } from './lib/types';
 
-  let activePage: Page = 'excel';
+  let activePage: Page = 'analysis';
   let settings = loadSettings();
   let t = translator(settings.locale);
   let systemDark = systemPrefersDark();
@@ -35,8 +35,8 @@
   }
 
   const navigation: Array<{ id: Page; icon: string; label: string }> = [
-    { id: 'excel', icon: 'table_view', label: 'nav.excel' },
     { id: 'analysis', icon: 'query_stats', label: 'nav.analysis' },
+    { id: 'excel', icon: 'table_view', label: 'nav.excel' },
     { id: 'accounts', icon: 'manage_accounts', label: 'nav.accounts' },
     { id: 'itemcodes', icon: 'tag', label: 'nav.itemcodes' },
     { id: 'settings', icon: 'settings', label: 'nav.settings' },

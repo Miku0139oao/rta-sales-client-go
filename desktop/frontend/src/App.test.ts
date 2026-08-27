@@ -17,7 +17,7 @@ afterEach(() => {
 describe('desktop application shell', () => {
   it('starts in Traditional Chinese with the five primary destinations', () => {
     const { container } = render(App);
-    expect(screen.getByRole('heading', { name: '從活頁簿開始' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '銷售分析' })).toBeInTheDocument();
     expect(screen.getAllByText('Excel 填入').length).toBeGreaterThan(0);
     expect(screen.getAllByText('帳號').length).toBeGreaterThan(0);
     expect(screen.getAllByText('商品代碼').length).toBeGreaterThan(0);
@@ -43,6 +43,8 @@ describe('desktop application shell', () => {
 
   it('opens and scans an xlsx workbook with the file range selected', async () => {
     const { container } = render(App);
+    await fireEvent.click(screen.getAllByRole('button', { name: /Excel 填入/ })[0]);
+    await waitFor(() => expect(screen.getByRole('heading', { name: '從活頁簿開始' })).toBeInTheDocument());
     const openButton = container.querySelector('.file-drop-card md-filled-button');
     expect(openButton).not.toBeNull();
     await fireEvent.click(openButton!);

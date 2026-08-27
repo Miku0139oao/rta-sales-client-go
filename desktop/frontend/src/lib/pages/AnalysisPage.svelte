@@ -169,7 +169,7 @@
   }
   $: busy = loadingProfiles || loadingStores || running || Boolean(result?.pending);
   $: visibleStores = filterStores(stores, storeQuery);
-  $: onBusyChange(busy);
+  $: onBusyChange(running || Boolean(result?.pending));
   $: rangeInvalid = periodMode === 'range' && Boolean(from && to && from > to);
   $: reportPeriods = normalizePeriods(result);
   $: currentPeriod = periodByKey(reportPeriods, 'current') ?? reportPeriods[0];
