@@ -180,6 +180,82 @@ func TestWebHTTPSyncDropsRemovedProfileSecrets(t *testing.T) {
 	}
 }
 
+func TestWebHTTPSyncInvalidatesCookieOnCredentialChange(t *testing.T) {
+	profileID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	server := NewWebServer()
+	httpServer := httptest.NewServer(server.Handler())
+	t.Cleanup(httpServer.Close)
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar}
+	base, err := url.Parse(httpServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncSecrets := func(account, password string) {
+		t.Helper()
+		body, _ := json.Marshal(webSyncRequest{
+			Profiles: []webSyncProfile{{ID: profileID, DisplayName: "Keep", Enabled: true}},
+			Secrets:  map[string]webSyncSecret{profileID: {Account: account, Password: password}},
+		})
+		resp, err := client.Post(base.JoinPath("/api/session").String(), "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			payload, _ := io.ReadAll(resp.Body)
+			t.Fatalf("sync status %d: %s", resp.StatusCode, payload)
+		}
+	}
+	syncSecrets("sa01", "secret-one")
+	server.sessions.Lock()
+	var session *webSession
+	for _, item := range server.byID {
+		session = item
+	}
+	server.sessions.Unlock()
+	if session == nil {
+		t.Fatal("missing web session")
+	}
+	store, err := session.app.cookies.CookieStore(profileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save([]byte(`{"cookies":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	syncSecrets("sa01", "secret-one")
+	kept, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) == 0 {
+		t.Fatal("unchanged credentials dropped the cookie session")
+	}
+	syncSecrets("sa02", "secret-two")
+	cleared, err := session.app.cookies.CookieStore(profileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := cleared.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 0 {
+		t.Fatalf("changed credentials kept previous cookie session: %q", loaded)
+	}
+}
+
+func TestSSEHubUnsubscribeAfterCloseIsIdempotent(t *testing.T) {
+	hub := newSSEHub()
+	ch := hub.Subscribe()
+	hub.Close()
+	hub.Unsubscribe(ch)
+}
+
 func TestWebHTTPRejectsPathEscapeAndOversizedUpload(t *testing.T) {
 	server := NewWebServer()
 	httpServer := httptest.NewServer(server.Handler())

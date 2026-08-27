@@ -117,9 +117,14 @@ func (h *sseHub) Subscribe() chan sseEvent {
 
 func (h *sseHub) Unsubscribe(ch chan sseEvent) {
 	h.mu.Lock()
-	delete(h.subs, ch)
+	_, ok := h.subs[ch]
+	if ok {
+		delete(h.subs, ch)
+	}
 	h.mu.Unlock()
-	close(ch)
+	if ok {
+		close(ch)
+	}
 }
 
 func (h *sseHub) Emit(_ context.Context, name string, payload any) {

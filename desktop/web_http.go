@@ -32,6 +32,7 @@ type webSession struct {
 	app      *App
 	hub      *sseHub
 	dir      string
+	mu       sync.Mutex
 	lastUsed time.Time
 }
 
@@ -119,6 +120,12 @@ func (s *WebServer) handleSync(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, errors.New("web session credential store is unavailable"))
 		return
 	}
+	previous := make(map[string]securestore.Credential, len(records))
+	for _, record := range records {
+		if cred, err := store.Get(record.ID); err == nil {
+			previous[record.ID] = cred
+		}
+	}
 	store.Clear()
 	keep := make(map[string]struct{}, len(records))
 	for _, record := range records {
@@ -134,6 +141,13 @@ func (s *WebServer) handleSync(w http.ResponseWriter, r *http.Request) {
 	}
 	if cookies, ok := session.app.cookies.(*memoryProfileCookies); ok {
 		cookies.dropMissing(keep)
+		for profileID := range keep {
+			next, err := store.Get(profileID)
+			old, had := previous[profileID]
+			if err != nil || !had || old.Account != next.Account || old.Password != next.Password {
+				_ = cookies.DeleteCookie(profileID)
+			}
+		}
 	}
 	if err := session.app.mancodes.Replace(request.Groups); err != nil {
 		writeAPIError(w, http.StatusBadRequest, err)
@@ -148,6 +162,7 @@ func (s *WebServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, err)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maximumWebUpload+1<<20)
 	if err := r.ParseMultipartForm(maximumWebUpload); err != nil {
 		writeAPIError(w, http.StatusBadRequest, err)
 		return
@@ -382,14 +397,21 @@ func (s *WebServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ch := session.hub.Subscribe()
 	defer session.hub.Unsubscribe(ch)
 	ctx := r.Context()
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-ticker.C:
+			session.touch()
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
 		case event, open := <-ch:
 			if !open {
 				return
 			}
+			session.touch()
 			payload, err := json.Marshal(event.Payload)
 			if err != nil {
 				continue
@@ -434,8 +456,9 @@ func (s *WebServer) ensureSession(w http.ResponseWriter, r *http.Request) (*webS
 		s.sessions.Lock()
 		session := s.byID[cookie.Value]
 		if session != nil {
-			session.lastUsed = time.Now()
+			session.touch()
 			s.sessions.Unlock()
+			writeSessionCookie(w, r, session.id)
 			return session, nil
 		}
 		s.sessions.Unlock()
@@ -444,16 +467,29 @@ func (s *WebServer) ensureSession(w http.ResponseWriter, r *http.Request) (*webS
 	if err != nil {
 		return nil, err
 	}
+	writeSessionCookie(w, r, session.id)
+	return session, nil
+}
+
+func writeSessionCookie(w http.ResponseWriter, r *http.Request, id string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     webSessionCookie,
-		Value:    session.id,
+		Value:    id,
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(webSessionTTL.Seconds()),
 	})
-	return session, nil
+}
+
+func (session *webSession) touch() {
+	if session == nil {
+		return
+	}
+	session.mu.Lock()
+	session.lastUsed = time.Now()
+	session.mu.Unlock()
 }
 
 func (s *WebServer) newSession() (*webSession, error) {
@@ -619,7 +655,10 @@ func (s *WebServer) touchReap() {
 	s.sessions.Lock()
 	defer s.sessions.Unlock()
 	for id, session := range s.byID {
-		if session.lastUsed.Before(cutoff) {
+		session.mu.Lock()
+		idle := session.lastUsed.Before(cutoff)
+		session.mu.Unlock()
+		if idle {
 			delete(s.byID, id)
 			session.discard()
 		}
