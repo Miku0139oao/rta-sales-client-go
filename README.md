@@ -18,6 +18,16 @@ The installer file remains `RTA-Excel-Filler-setup.exe`. This is a legacy filena
 
 ---
 
+## Runtime architecture
+
+Explore the repository's high-level runtime architecture, primary workbook path, external RTA dependencies, and trust boundaries.
+
+[![RTA Sales Analyzer runtime architecture](docs/images/rta-sales-runtime-architecture-preview.png)](https://miku0139oao.github.io/rta-sales-client-go/)
+
+[Open the interactive runtime architecture diagram (Traditional Chinese)](https://miku0139oao.github.io/rta-sales-client-go/)
+
+---
+
 ## Requirements
 
 - **Windows 10 or 11 (64-bit)** for the supported desktop, or the web edition in a current browser

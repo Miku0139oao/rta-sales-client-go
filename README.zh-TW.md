@@ -18,6 +18,16 @@
 
 ---
 
+## 執行階段架構
+
+互動式架構圖整理了本專案的主要活頁簿處理路徑、外部 RTA 相依服務，以及呈現層、機密儲存、使用者檔案與 HTTPS 信任邊界。
+
+[![RTA 銷售分析執行階段架構](docs/images/rta-sales-runtime-architecture-preview.png)](https://miku0139oao.github.io/rta-sales-client-go/)
+
+[開啟互動式執行階段架構圖](https://miku0139oao.github.io/rta-sales-client-go/)
+
+---
+
 ## 電腦需要什麼
 
 - **Windows 10 或 11（64 位元）** 的桌面版，或用瀏覽器開網頁版
