@@ -367,10 +367,15 @@ func (c *Client) fetchTrendSeries(ctx context.Context, query SalesQuery, store s
 }
 
 func (c *Client) fetchTrendTotals(ctx context.Context, query SalesQuery, store storeRecord) (trendTotals, error) {
-	days, err := c.fetchTrendDays(ctx, query.StartDate, query.EndDate, store)
-	if err != nil {
-		return trendTotals{}, err
+	var days []TrendDay
+	for _, window := range splitSalesDateRange(query.StartDate, query.EndDate) {
+		windowDays, err := c.fetchTrendDays(ctx, window.start, window.end, store)
+		if err != nil {
+			return trendTotals{}, err
+		}
+		days = append(days, windowDays...)
 	}
+	days = mergeTrendDays(days)
 	if len(days) == 0 {
 		return trendTotals{}, nil
 	}
