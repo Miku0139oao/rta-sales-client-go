@@ -29,6 +29,7 @@
   let codesBusyId = '';
   let transferKind: '' | 'export' | 'import' = '';
   let transferNotice = '';
+  let importingConfirm = false;
 
   $: pageBusy = Boolean(saving || deletingBusy || codesBusyId || transferKind);
   $: onBusyChange(pageBusy);
@@ -245,8 +246,19 @@
     }
   }
 
+  function openImport() {
+    if (pageBusy) return;
+    importingConfirm = true;
+  }
+
+  function closeImport() {
+    if (pageBusy) return;
+    importingConfirm = false;
+  }
+
   async function importCatalog() {
     if (pageBusy) return;
+    importingConfirm = false;
     transferKind = 'import';
     try {
       const result = await backend.importManCodeCatalog();
@@ -274,7 +286,7 @@
         <span class="material-symbols-rounded" slot="icon">upload</span>
         {transferKind === 'export' ? t('itemcodes.exporting') : t('itemcodes.export')}
       </md-outlined-button>
-      <md-outlined-button onclick={importCatalog} disabled={pageBusy}>
+      <md-outlined-button onclick={openImport} disabled={pageBusy}>
         <span class="material-symbols-rounded" slot="icon">download</span>
         {transferKind === 'import' ? t('itemcodes.importing') : t('itemcodes.import')}
       </md-outlined-button>
@@ -420,6 +432,20 @@
       <div class="dialog-actions">
         <md-text-button type="button" onclick={closeEditor} disabled={saving}>{t('common.cancel')}</md-text-button>
         <md-filled-button type="submit" onclick={saveGroup} disabled={saving}>{saving ? t('common.saving') : t('common.save')}</md-filled-button>
+      </div>
+    </form>
+  </dialog>
+{/if}
+
+{#if importingConfirm}
+  <dialog use:modal={{ busy: Boolean(transferKind), onClose: closeImport }} class="app-dialog compact-dialog" aria-modal="true" aria-labelledby="itemcodes-import-title" aria-describedby="itemcodes-import-body">
+    <form class="confirmation-form" onsubmit={(event) => { event.preventDefault(); void importCatalog(); }}>
+      <div class="dialog-symbol danger-symbol"><span class="material-symbols-rounded" aria-hidden="true">download</span></div>
+      <h2 id="itemcodes-import-title">{t('itemcodes.importTitle')}</h2>
+      <p id="itemcodes-import-body">{t('itemcodes.importBody')}</p>
+      <div class="dialog-actions">
+        <md-text-button type="button" onclick={closeImport} disabled={pageBusy}>{t('common.cancel')}</md-text-button>
+        <md-filled-button type="submit" class="danger-button" onclick={importCatalog} disabled={pageBusy} data-autofocus>{t('itemcodes.importConfirm')}</md-filled-button>
       </div>
     </form>
   </dialog>

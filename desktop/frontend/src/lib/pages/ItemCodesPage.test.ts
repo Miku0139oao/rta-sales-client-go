@@ -226,6 +226,7 @@ describe('item code management', () => {
     await waitFor(() => expect(screen.getByText('保健')).toBeInTheDocument());
 
     await fireEvent.click(button(container, '匯入'));
+    await fireEvent.click(screen.getByText('選擇檔案並匯入'));
     await waitFor(() => expect(screen.getByText('個護')).toBeInTheDocument());
     expect(screen.getByText('已匯入 1 個組別。')).toBeInTheDocument();
     expect(screen.queryByText('保健')).not.toBeInTheDocument();
@@ -233,12 +234,14 @@ describe('item code management', () => {
 
     imported.mockResolvedValueOnce({ cancelled: true });
     await fireEvent.click(button(container, '匯入'));
+    await fireEvent.click(screen.getByText('選擇檔案並匯入'));
     await waitFor(() => expect(imported).toHaveBeenCalledTimes(2));
     expect(screen.getByText('個護')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
     imported.mockRejectedValueOnce(new Error('decode mancode catalog: unexpected end of JSON'));
     await fireEvent.click(button(container, '匯入'));
+    await fireEvent.click(screen.getByText('選擇檔案並匯入'));
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('商品代碼目錄格式不正確，現有資料未變更。'));
     expect(screen.getByText('個護')).toBeInTheDocument();
     expect(screen.queryByText('保健')).not.toBeInTheDocument();
