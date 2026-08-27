@@ -2,8 +2,7 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "RTA Sales Analyzer — Runtime Architecture",
-    "locale": "en",
+    "title": "RTA 銷售分析 — 執行階段架構",
     "output": "rta-sales-runtime-architecture.html",
     "quality_profile": "showcase",
     "repository": {
@@ -14,21 +13,21 @@
     "views": [
       {
         "id": "workbook-path",
-        "label": "Primary workbook path",
+        "label": "主要活頁簿路徑",
         "focus": ["operator", "svelte-ui", "runtime-adapter", "app-orchestrator", "workbook-engine", "rta-client", "rta-platform", "local-files"],
-        "note": "Follow a workbook from selection and authenticated daily queries to a validated new copy."
+        "note": "追蹤活頁簿從選取、驗證後的每日查詢，到產生安全的新副本。"
       },
       {
         "id": "trust-boundaries",
-        "label": "Trust boundaries",
+        "label": "信任邊界",
         "focus": ["svelte-ui", "runtime-adapter", "app-orchestrator", "secure-state", "local-files", "rta-client", "rta-platform"],
-        "note": "Inspect renderer input, protected local state, user files, and outbound HTTPS."
+        "note": "檢視呈現層輸入、受保護的本機狀態、使用者檔案與對外 HTTPS。"
       },
       {
         "id": "sales-analysis",
-        "label": "Sales analysis branch",
+        "label": "銷售分析支線",
         "focus": ["svelte-ui", "runtime-adapter", "app-orchestrator", "sales-analysis", "rta-client", "rta-platform"],
-        "note": "The dashboard shares profiles and RTA integration but bypasses workbook planning."
+        "note": "儀表板共用帳號設定與 RTA 整合，但不經過活頁簿規劃流程。"
       }
     ]
   },
@@ -36,17 +35,17 @@
     {
       "id": "operator",
       "type": "external",
-      "label": "RTA Operator",
-      "sublabel": "accounts + files",
+      "label": "RTA 操作者",
+      "sublabel": "帳號與檔案",
       "pos": [25, 310],
       "size": [120, 66],
-      "sources": [{"path": "README.md", "label": "User workflows"}]
+      "sources": [{"path": "README.md", "label": "使用者流程"}]
     },
     {
       "id": "svelte-ui",
       "type": "frontend",
       "label": "Svelte UI",
-      "sublabel": "WebView2 or browser",
+      "sublabel": "WebView2 或瀏覽器",
       "pos": [175, 310],
       "size": [125, 66],
       "sources": [
@@ -57,11 +56,11 @@
     {
       "id": "runtime-adapter",
       "type": "security",
-      "label": "Runtime Adapter",
-      "sublabel": "Wails RPC/events | HTTP/SSE",
+      "label": "執行階段介接層",
+      "sublabel": "Wails RPC/事件 | HTTP/SSE",
       "pos": [330, 310],
       "size": [145, 66],
-      "tag": "invocation boundary",
+      "tag": "呼叫邊界",
       "sources": [
         {"path": "desktop/frontend/src/lib/wailsBridge.ts"},
         {"path": "desktop/web_http.go"}
@@ -71,10 +70,10 @@
       "id": "app-orchestrator",
       "type": "backend",
       "label": "desktop.App",
-      "sublabel": "operation orchestrator",
+      "sublabel": "作業協調器",
       "pos": [505, 310],
       "size": [140, 66],
-      "tag": "in-process state",
+      "tag": "程序內狀態",
       "sources": [
         {"path": "desktop/app.go"},
         {"path": "desktop/native.go"}
@@ -83,11 +82,11 @@
     {
       "id": "workbook-engine",
       "type": "backend",
-      "label": "Workbook Engine",
-      "sublabel": "xlsxfill scan / plan / apply",
+      "label": "活頁簿引擎",
+      "sublabel": "xlsxfill 掃描 / 計畫 / 寫入",
       "pos": [675, 310],
       "size": [150, 66],
-      "tag": "ephemeral plan",
+      "tag": "暫存計畫",
       "sources": [
         {"path": "desktop/xlsx_engine.go"},
         {"path": "xlsxfill/batch.go"},
@@ -98,7 +97,7 @@
       "id": "rta-client",
       "type": "backend",
       "label": "RTA Client + OCR",
-      "sublabel": "auth, stores, sales, retry",
+      "sublabel": "驗證、門市、銷售、重試",
       "pos": [855, 310],
       "size": [150, 66],
       "sources": [
@@ -110,21 +109,21 @@
     {
       "id": "rta-platform",
       "type": "cloud",
-      "label": "RTA Platform APIs",
-      "sublabel": "SSO, stores, article, trend",
+      "label": "RTA 平台 APIs",
+      "sublabel": "SSO、門市、品項、趨勢",
       "pos": [1035, 310],
       "size": [150, 66],
-      "tag": "external HTTPS",
-      "sources": [{"path": "rtasales/client.go", "label": "Production endpoints"}]
+      "tag": "外部 HTTPS",
+      "sources": [{"path": "rtasales/client.go", "label": "正式環境端點"}]
     },
     {
       "id": "secure-state",
       "type": "security",
-      "label": "Protected Local State",
-      "sublabel": "credentials + session cookies",
+      "label": "受保護的本機狀態",
+      "sublabel": "憑證 + 工作階段 Cookie",
       "pos": [505, 105],
       "size": [160, 66],
-      "tag": "OS-user scope",
+      "tag": "OS 使用者範圍",
       "sources": [
         {"path": "securestore/credential_windows.go"},
         {"path": "securestore/dpapi_windows.go"},
@@ -134,11 +133,11 @@
     {
       "id": "sales-analysis",
       "type": "backend",
-      "label": "Sales Analysis",
-      "sublabel": "current-first + reports",
+      "label": "銷售分析",
+      "sublabel": "當期優先 + 報表",
       "pos": [855, 105],
       "size": [150, 66],
-      "tag": "secondary branch",
+      "tag": "次要支線",
       "sources": [
         {"path": "desktop/sales_analysis.go"},
         {"path": "desktop/sales_analysis_report_memo.go"},
@@ -148,45 +147,45 @@
     {
       "id": "local-files",
       "type": "database",
-      "label": "Local Files",
-      "sublabel": "input XLSX → new copy / reports",
+      "label": "本機檔案",
+      "sublabel": "輸入 XLSX → 新副本 / 報表",
       "pos": [667.5, 515],
       "size": [165, 66],
-      "tag": "user-controlled",
+      "tag": "使用者控制",
       "sources": [
-        {"path": "xlsxfill/batch.go", "label": "Safe publication"},
-        {"path": "desktop/sales_analysis_export.go", "label": "Report outputs"}
+        {"path": "xlsxfill/batch.go", "label": "安全發布"},
+        {"path": "desktop/sales_analysis_export.go", "label": "報表輸出"}
       ]
     }
   ],
   "boundaries": [
     {
       "kind": "region",
-      "label": "Presentation trust boundary",
+      "label": "呈現層信任邊界",
       "wraps": ["svelte-ui", "runtime-adapter"],
       "pad": 24
     },
     {
       "kind": "region",
-      "label": "Trusted Go process — shared by desktop and web composition roots",
+      "label": "受信任的 Go 程序",
       "wraps": ["app-orchestrator", "workbook-engine", "rta-client", "sales-analysis"],
       "pad": 24
     },
     {
       "kind": "security-group",
-      "label": "Protected secret persistence",
+      "label": "受保護的機密儲存",
       "wraps": ["secure-state"],
       "pad": 22
     },
     {
       "kind": "security-group",
-      "label": "User-file boundary",
+      "label": "使用者檔案邊界",
       "wraps": ["local-files"],
       "pad": 22
     },
     {
       "kind": "region",
-      "label": "External RTA HTTPS boundary",
+      "label": "外部 RTA HTTPS 邊界",
       "wraps": ["rta-platform"],
       "pad": 22
     }
@@ -196,7 +195,7 @@
       "id": "operate-ui",
       "from": "operator",
       "to": "svelte-ui",
-      "label": "select + review",
+      "label": "選取 + 檢視",
       "variant": "emphasis",
       "labelDy": 58
     },
@@ -204,7 +203,7 @@
       "id": "invoke-runtime",
       "from": "svelte-ui",
       "to": "runtime-adapter",
-      "label": "commands + progress",
+      "label": "命令 + 進度",
       "variant": "emphasis",
       "labelDy": 58
     },
@@ -212,7 +211,7 @@
       "id": "dispatch-app",
       "from": "runtime-adapter",
       "to": "app-orchestrator",
-      "label": "typed App calls",
+      "label": "型別化 App 呼叫",
       "variant": "emphasis",
       "labelDy": -30
     },
@@ -220,7 +219,7 @@
       "id": "coordinate-workbook",
       "from": "app-orchestrator",
       "to": "workbook-engine",
-      "label": "scan → analyze → apply",
+      "label": "掃描 → 分析 → 寫入",
       "variant": "emphasis",
       "labelDy": 58
     },
@@ -228,7 +227,7 @@
       "id": "route-sales",
       "from": "workbook-engine",
       "to": "rta-client",
-      "label": "daily jobs / cookie lanes",
+      "label": "每日作業 / Cookie 通道",
       "variant": "emphasis",
       "labelDy": 58
     },
@@ -236,7 +235,7 @@
       "id": "call-rta",
       "from": "rta-client",
       "to": "rta-platform",
-      "label": "HTTPS auth + stores + sales",
+      "label": "HTTPS 驗證 + 門市 + 銷售",
       "variant": "emphasis",
       "labelDy": 58
     },
@@ -244,7 +243,7 @@
       "id": "load-secrets",
       "from": "app-orchestrator",
       "to": "secure-state",
-      "label": "credentials + cookies",
+      "label": "憑證 + Cookie",
       "variant": "security",
       "fromSide": "top",
       "toSide": "bottom"
@@ -253,7 +252,7 @@
       "id": "read-publish-files",
       "from": "workbook-engine",
       "to": "local-files",
-      "label": "read source / publish copy",
+      "label": "讀取來源 / 發布副本",
       "fromSide": "bottom",
       "toSide": "top",
       "labelDy": 24
@@ -262,7 +261,7 @@
       "id": "run-analysis",
       "from": "app-orchestrator",
       "to": "sales-analysis",
-      "label": "current-first analysis",
+      "label": "當期優先分析",
       "variant": "dashed",
       "labelDy": -40
     },
@@ -270,7 +269,7 @@
       "id": "analysis-query",
       "from": "sales-analysis",
       "to": "rta-client",
-      "label": "shared RTA sessions",
+      "label": "共用 RTA 工作階段",
       "variant": "dashed",
       "fromSide": "bottom",
       "toSide": "top",
@@ -280,26 +279,26 @@
   "cards": [
     {
       "dot": "cyan",
-      "title": "Primary path — fill a workbook",
+      "title": "主要路徑 — 填寫活頁簿",
       "items": [
-        "Scan is network-free; Analyze fingerprints the source, maps stores, and deduplicates daily jobs into authenticated cookie lanes.",
-        "The preview stays in memory. Apply rechecks source identity, preserves formulas, and atomically publishes a distinct new XLSX."
+        "Scan 不連網；Analyze 會建立來源指紋、對應門市，並把每日作業去重後分派至已驗證的 Cookie 通道。",
+        "預覽只保留在記憶體。Apply 會再次核對來源、保留公式，並以原子方式發布不同路徑的新 XLSX。"
       ]
     },
     {
       "dot": "violet",
-      "title": "Runtime modes and features",
+      "title": "執行模式與功能",
       "items": [
-        "Primary: Windows Wails + WebView2. Web uses Cloudflare/Caddy, per-cookie memory state, SSE, and private temp files; CLI calls the core directly.",
-        "Sales analysis bypasses xlsxfill, returns current data first, completes comparisons in the background, and exports PDF or Markdown."
+        "主要模式是 Windows Wails + WebView2。Web 經 Cloudflare/Caddy，使用每個 Cookie 的記憶體狀態、SSE 與私有暫存檔；CLI 直接呼叫核心。",
+        "銷售分析不經 xlsxfill，先回傳當期資料，再於背景完成比較，並可匯出 PDF 或 Markdown。"
       ]
     },
     {
       "dot": "rose",
-      "title": "Trust, secrets, and external services",
+      "title": "信任、機密與外部服務",
       "items": [
-        "Renderer, browser, and workbook inputs are untrusted. Desktop uses Credential Manager + DPAPI; web retains secrets in localStorage and session memory.",
-        "Only RTA Client crosses outbound HTTPS; four RTA hosts are collapsed into one node, with serial cookie lanes and bounded retry/concurrency."
+        "呈現層、瀏覽器與活頁簿輸入皆不受信任。桌面版使用 Credential Manager + DPAPI；Web 會把機密保留在 localStorage 與工作階段記憶體。",
+        "只有 RTA Client 會跨越對外 HTTPS；四個 RTA 主機合併為一個節點，Cookie 通道採序列處理，重試與並行度皆有上限。"
       ]
     }
   ]
