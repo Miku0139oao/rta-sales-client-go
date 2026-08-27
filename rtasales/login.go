@@ -27,18 +27,30 @@ func (c *Client) login(ctx context.Context) error {
 	solverStart := 0
 	var lastError error
 	for attempt := 0; attempt < c.loginAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		image, flag, err := c.fetchCaptcha(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			lastError = err
 			continue
 		}
 		answer, usedSolver, err := c.solveCaptcha(ctx, image, solverStart)
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			lastError = err
 			continue
 		}
 		envelope, err := c.submitLogin(ctx, answer, flag)
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			lastError = err
 			continue
 		}
@@ -78,8 +90,14 @@ func (c *Client) solveCaptcha(ctx context.Context, image []byte, start int) (str
 	}
 	errorsBySolver := make([]error, 0, len(c.captchaSolvers)-start)
 	for index := start; index < len(c.captchaSolvers); index++ {
+		if err := ctx.Err(); err != nil {
+			return "", index, err
+		}
 		answer, err := c.captchaSolvers[index].Solve(ctx, image)
 		answer = strings.TrimSpace(answer)
+		if err != nil && ctx.Err() != nil {
+			return "", index, ctx.Err()
+		}
 		if err == nil && answer != "" && len([]rune(answer)) <= 16 {
 			return answer, index, nil
 		}
