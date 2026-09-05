@@ -18,6 +18,14 @@ The installer file remains `RTA-Excel-Filler-setup.exe`. This is a legacy filena
 
 ---
 
+## What's new in 0.4.5
+
+Product details, sortable tables, saved-query shortcuts, full-page Excel exports, and reconciled store/category sales contributions, plus query-cancellation and long-ranking PDF fixes.
+
+[Release notes and four screenshots (Traditional Chinese)](docs/releases/v0.4.5.zh-TW.md). Screenshots use synthetic demonstration data.
+
+![0.4.5 sales overview and analysis tools with synthetic data](docs/images/v0.4.5/overview.png)
+
 ## Runtime architecture
 
 Explore the repository's high-level runtime architecture, primary workbook path, external RTA dependencies, and trust boundaries.
