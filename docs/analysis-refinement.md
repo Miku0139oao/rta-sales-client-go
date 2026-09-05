@@ -1,5 +1,7 @@
 # 分析頁全面精修：Grok UI、可追查洞察與可靠性
 
+> 後續已完成首屏、貢獻拆解、效能及匯出驗證，最新交付見[分析優化紀錄](analysis-optimization.md)。
+
 ## 交付
 
 - 新的獨立簽章預覽版：`release/RTA-Excel-Filler-refined-preview.exe`。
