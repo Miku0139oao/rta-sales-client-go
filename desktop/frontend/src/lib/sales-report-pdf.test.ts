@@ -6,6 +6,7 @@ import {
   addSalesReportPeriodItems,
   buildSalesAnalysisPDF,
   categoryCardRowMetrics,
+  categoryRankingCardRowLimit,
   categoryRankingCardSlots,
   categoryRankingCardsPerPage,
   createSalesReportAccumulator,
@@ -332,6 +333,9 @@ describe('sales analysis PDF', () => {
     expect(categoryRankingCardsPerPage(16)).toBe(6);
     expect(categoryRankingCardsPerPage(24)).toBe(3);
     expect(categoryRankingCardsPerPage(40)).toBe(3);
+    expect(categoryRankingCardRowLimit(16)).toBe(categoryCardRowMetrics(categoryRankingCardSlots(6)[0]!.height).limit);
+    expect(categoryRankingCardRowLimit(24)).toBe(categoryCardRowMetrics(categoryRankingCardSlots(3)[0]!.height).limit);
+    expect(categoryRankingCardRowLimit(16)).toBeLessThan(categoryRankingCardRowLimit(24));
     expect(normalizeRankingLimit(undefined)).toBe(24);
     expect(normalizeRankingLimit(40)).toBe(40);
     expect(normalizeRankingLimit(200)).toBe(100);

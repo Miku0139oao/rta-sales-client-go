@@ -134,6 +134,7 @@ interface Labels {
   weekday: string;
   weekend: string;
   customers: string;
+  partial: string;
 }
 
 export const ALL_STORES_REPORT_ID = '__all__';
@@ -159,6 +160,20 @@ export function rankingPanelCapacity(height: number, rankingLimit: number): numb
   const row = compact ? 5.35 : 8.55;
   const bottomPad = compact ? 3.5 : 3;
   return Math.max(1, Math.floor((height - headerYOffset - firstOffset - bottomPad) / row) + 1);
+}
+
+export function categoryRankingCardRowLimit(rankingLimit: number): number {
+  const cardsPerPage = categoryRankingCardsPerPage(rankingLimit);
+  // Six-card pages are half-height. Sizing continuation from the 3-up height overstates
+  // rows and the 6-up draw path then clips or drops the last ranks.
+  const slotHeight = categoryRankingCardSlots(cardsPerPage)[0]?.height ?? CONTENT_HEIGHT;
+  return categoryCardRowMetrics(slotHeight).limit;
+}
+
+export function salesReportIsPartial(result: SalesAnalysisResult): boolean {
+  if (!result.complete || result.pending) return true;
+  if ((result.issues?.length ?? 0) > 0) return true;
+  return (result.periods ?? []).some((period) => period.complete === false || (period.issues?.length ?? 0) > 0);
 }
 const COLORS = {
   ink: [24, 39, 58] as RGB,
@@ -316,10 +331,11 @@ function renderSalesAnalysisPDF(
     creator: 'RTA 銷售分析',
   });
 
+  const partial = salesReportIsPartial(result);
   const footers: FooterChapter[] = [];
   appendReportSection(doc, {
     result, storeId, categoryLevel, locale, filter, labels, headerId, baseStoreLabel, combined, stores,
-    accumulator, scope, startOnCurrentPage: true, rankingLimit: limit,
+    accumulator, scope, startOnCurrentPage: true, rankingLimit: limit, partial,
   }, footers);
   if (!scope && extraChapters.length > 0) {
     appendGroupSummaryPages(doc, {
@@ -327,7 +343,7 @@ function renderSalesAnalysisPDF(
     }, footers);
   }
 
-  addFooters(doc, headerId, footers);
+  addFooters(doc, headerId, footers, partial ? labels.partial : '');
   return new Uint8Array(doc.output('arraybuffer'));
 }
 
@@ -346,6 +362,7 @@ interface ReportSectionOptions {
   scope?: SalesReportScope;
   startOnCurrentPage: boolean;
   rankingLimit: number;
+  partial: boolean;
 }
 
 interface FooterChapter {
@@ -357,7 +374,7 @@ interface FooterChapter {
 function appendReportSection(doc: jsPDF, options: ReportSectionOptions, footers: FooterChapter[]): void {
   const {
     result, storeId, categoryLevel, locale, filter, labels, headerId, baseStoreLabel, combined, stores,
-    accumulator, scope, startOnCurrentPage, rankingLimit,
+    accumulator, scope, startOnCurrentPage, rankingLimit, partial,
   } = options;
   const periods = storePeriods(result, storeId, filter, categoryLevel, accumulator, labels.uncategorized, scope, rankingLimit);
   const current = periodByKey(periods, 'current') ?? periods[0];
@@ -367,7 +384,7 @@ function appendReportSection(doc: jsPDF, options: ReportSectionOptions, footers:
   const storeLabel = scope ? `${baseStoreLabel} · ${scope.groupName}` : baseStoreLabel;
   const pageTitle = (title: string) => scope ? `${title} · ${scope.groupName}` : title;
 
-  drawSummaryPage(doc, periods, current, headerId, storeLabel, categoryLevel, labels, locale, pageTitle(labels.summary));
+  drawSummaryPage(doc, periods, current, headerId, storeLabel, categoryLevel, labels, locale, pageTitle(labels.summary), partial);
   const weeks = scope ? [] : weeksForReport(result.weeks ?? [], storeId, combined);
   if (weeks.length) {
     doc.addPage();
@@ -993,8 +1010,10 @@ function drawSummaryPage(
   labels: Labels,
   locale: Locale,
   title = labels.summary,
+  partial = false,
 ): void {
   drawPageHeader(doc, title, `${current.from} - ${current.to}`, storeId, storeLabel);
+  if (partial) drawPartialNotice(doc, labels.partial);
   const previous = periodByKey(periods, 'previous');
   const yearAgo = periodByKey(periods, 'yearAgo');
   const metrics = [
@@ -1289,8 +1308,7 @@ function drawCategoryRankingPage(
     return;
   }
   const cardsPerPage = categoryRankingCardsPerPage(limit);
-  const slotHeight = categoryRankingCardSlots(Math.min(cardsPerPage, 3))[0]?.height ?? CONTENT_HEIGHT;
-  const cards = expandCategoryRankingCards(groups, limit, categoryCardRowMetrics(slotHeight).limit);
+  const cards = expandCategoryRankingCards(groups, limit, categoryRankingCardRowLimit(limit));
   for (let offset = 0; offset < cards.length; offset += cardsPerPage) {
     if (offset > 0) doc.addPage();
     drawPageHeader(doc, title, `${period.from} - ${period.to}`, storeId, storeLabel);
@@ -1666,8 +1684,10 @@ function drawCategoryCard(doc: jsPDF, x: number, y: number, width: number, heigh
   setDraw(doc, COLORS.line);
   doc.line(innerX, headerY + 1.6, x + width - 2.5, headerY + 1.6);
 
+  const bottom = y + height - 2.2;
   group.items.slice(0, metrics.limit).forEach((item, index) => {
     const rowY = headerY + 5.2 + index * metrics.row;
+    if (rowY > bottom) return;
     const rank = rankOffset + index;
     if (index % 2 === 0) {
       setFill(doc, COLORS.surface);
@@ -1723,16 +1743,24 @@ function card(doc: jsPDF, x: number, y: number, width: number, height: number): 
   doc.roundedRect(x, y, width, height, 2.2, 2.2, 'FD');
 }
 
-function addFooters(doc: jsPDF, storeId: string, chapters: FooterChapter[] = []): void {
+function drawPartialNotice(doc: jsPDF, message: string): void {
+  setFill(doc, [255, 243, 224]);
+  doc.rect(0, 24, PAGE_WIDTH, 5.2, 'F');
+  setText(doc, COLORS.negative, 6.3, 'bold');
+  doc.text(fitText(doc, message, CONTENT_WIDTH), CONTENT_X, 27.7);
+}
+
+function addFooters(doc: jsPDF, storeId: string, chapters: FooterChapter[] = [], partial = ''): void {
   const pages = doc.getNumberOfPages();
   for (let page = 1; page <= pages; page += 1) {
     doc.setPage(page);
     const chapter = chapters.find((entry) => page >= entry.start && page <= entry.end);
     const suffix = chapter?.label ? `  |  ${chapter.label}` : '';
+    const note = partial ? `  |  ${partial}` : '';
     setDraw(doc, COLORS.line);
     doc.line(10, 199.5, 287, 199.5);
     setText(doc, COLORS.slate, 6, 'normal');
-    doc.text(`RTA Sales Analysis  |  ${storeId}${suffix}`, 10, 204);
+    doc.text(fitText(doc, `RTA Sales Analysis  |  ${storeId}${suffix}${note}`, 220), 10, 204);
     doc.text(`Page ${page} / ${pages}`, 287, 204, { align: 'right' });
   }
 }
@@ -1820,6 +1848,7 @@ function reportLabels(locale: Locale, rankingLimit: number = DEFAULT_RANKING_LIM
       groupSummary: 'Group summary', group: 'Group',
       weeklyTitle: 'Weekly sales change', week: 'Week', thisWeek: 'This week', lastWeek: 'Last week',
       variance: 'Var', variancePercent: 'Var %', weekday: 'Weekday', weekend: 'Weekend', customers: 'Txns',
+      partial: 'Some data is incomplete; missing values are not zero sales',
     };
   }
   return {
@@ -1837,6 +1866,7 @@ function reportLabels(locale: Locale, rankingLimit: number = DEFAULT_RANKING_LIM
     groupSummary: '群組總結', group: '群組',
     weeklyTitle: '每週銷售變化', week: '週次', thisWeek: '本週', lastWeek: '上週',
     variance: '差異', variancePercent: '差異 %', weekday: '平日', weekend: '週末', customers: '交易',
+    partial: '部分資料尚未完成，缺值不代表零銷售',
   };
 }
 
