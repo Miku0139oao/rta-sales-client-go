@@ -2,6 +2,7 @@ import type { SalesAnalysisItem, SalesAnalysisPeriodResult } from './types';
 import type { AnalysisTable } from './analysisTable';
 import type { Translator } from './i18n';
 import { periodNeedsItemHydration } from './salesAnalysisItems';
+import { buildSalesContributions, salesContributionTables, type SalesContributions } from './salesContributions';
 
 export type InsightKind = 'decline' | 'growth' | 'returns' | 'leader';
 export interface SalesInsight {
@@ -12,6 +13,7 @@ export interface SalesInsight {
 export type InsightReason = 'ready' | 'currentMissing' | 'currentPartial' | 'previousMissing' | 'previousPartial' | 'storesDiffer' | 'invalidData';
 export interface SalesInsights {
   entries: SalesInsight[]; reason: InsightReason; current?: SalesAnalysisPeriodResult; previous?: SalesAnalysisPeriodResult;
+  contributions?: SalesContributions;
 }
 interface Product { code: string; name: string; amount: number; quantity: number; refunds: number }
 function aggregate(items: SalesAnalysisItem[], include: (item: SalesAnalysisItem) => boolean): Map<string, Product> | undefined {
@@ -36,10 +38,11 @@ function coverageReady(period: SalesAnalysisPeriodResult): boolean {
 }
 export function buildSalesInsights(current: SalesAnalysisPeriodResult | undefined, previous: SalesAnalysisPeriodResult | undefined, include: (item: SalesAnalysisItem) => boolean = () => true): SalesInsights {
   const output: SalesInsights = { entries: [], reason: 'ready', current, previous };
-  if (!current || periodNeedsItemHydration(current)) return { ...output, reason: 'currentMissing' };
-  if (!coverageReady(current)) return { ...output, reason: 'currentPartial' };
+  const finish = (result: SalesInsights): SalesInsights => ({ ...result, contributions: buildSalesContributions(result.current, result.previous, include, result.reason) });
+  if (!current || periodNeedsItemHydration(current)) return finish({ ...output, reason: 'currentMissing' });
+  if (!coverageReady(current)) return finish({ ...output, reason: 'currentPartial' });
   const now = aggregate(current.items ?? [], include);
-  if (!now) return { ...output, reason: 'invalidData' };
+  if (!now) return finish({ ...output, reason: 'invalidData' });
   let before: Map<string, Product> | undefined;
   if (!previous || periodNeedsItemHydration(previous)) output.reason = 'previousMissing';
   else if (!coverageReady(previous)) output.reason = 'previousPartial';
@@ -54,9 +57,9 @@ export function buildSalesInsights(current: SalesAnalysisPeriodResult | undefine
   for (const code of codes) {
     const a = now.get(code), b = before?.get(code);
     const difference = before ? (a?.amount ?? 0) - (b?.amount ?? 0) : null;
-    if (difference !== null && !Number.isFinite(difference)) return { ...output, entries: [], reason: 'invalidData' };
+    if (difference !== null && !Number.isFinite(difference)) return finish({ ...output, entries: [], reason: 'invalidData' });
     const rate = difference !== null && b?.amount ? difference / Math.abs(b.amount) : null;
-    if (rate !== null && !Number.isFinite(rate)) return { ...output, entries: [], reason: 'invalidData' };
+    if (rate !== null && !Number.isFinite(rate)) return finish({ ...output, entries: [], reason: 'invalidData' });
     const value: SalesInsight = { kind: 'leader', code, name: a?.name ?? b?.name ?? code, current: a?.amount ?? 0, previous: before ? b?.amount ?? 0 : null,
       difference, percent: rate !== null && Number.isFinite(rate) ? rate : null, quantity: a?.quantity ?? 0, refunds: Math.abs(a?.refunds ?? 0) };
     if (difference !== null && Number.isFinite(difference) && difference < -0.005 && (!decline || difference < decline.difference! || (difference === decline.difference && code < decline.code))) decline = { ...value, kind: 'decline' };
@@ -66,7 +69,7 @@ export function buildSalesInsights(current: SalesAnalysisPeriodResult | undefine
   }
   output.entries = [decline, growth, returns].filter((entry): entry is SalesInsight => Boolean(entry));
   if (output.entries.length < 3 && leader && !output.entries.some(entry => entry.code === leader.code)) output.entries.push(leader);
-  return output;
+  return finish(output);
 }
 export function salesInsightsTable(data: SalesInsights, t: Translator): AnalysisTable {
   return { id: 'insights', name: t('insights.title'), columns: [
@@ -75,4 +78,10 @@ export function salesInsightsTable(data: SalesInsights, t: Translator): Analysis
     { label: t('analysis.variance'), format: 'money' }, { label: t('analysis.vsPrevious'), format: 'percent' },
     { label: t('analysis.returns'), format: 'money' }, { label: t('analysis.netQuantity'), format: 'number' },
   ], rows: data.entries.map(entry => ({ cells: [t(`insights.${entry.kind}`), entry.code, entry.name, entry.current, entry.previous, entry.difference, entry.percent, entry.refunds, entry.quantity] })) };
+}
+export function salesInsightSheets(data: SalesInsights, t: Translator): AnalysisTable[] {
+  const sheets: AnalysisTable[] = [];
+  if (data.entries.length) sheets.push(salesInsightsTable(data, t));
+  if (data.contributions) sheets.push(...salesContributionTables(data.contributions, t));
+  return sheets;
 }

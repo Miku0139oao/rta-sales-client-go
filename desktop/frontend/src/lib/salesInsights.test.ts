@@ -70,4 +70,15 @@ describe('local sales highlights', () => {
     current!.items = []; current!.itemCount = 0; previous!.items = []; previous!.itemCount = 0;
     expect(buildSalesInsights(current, previous)).toMatchObject({ entries: [], reason: 'ready' });
   });
+  it('attaches contribution decomposition only when the same comparison eligibility is ready', () => {
+    const [current, previous] = dataFixture().periods!;
+    const ready = buildSalesInsights(current, previous);
+    expect(ready.contributions).toMatchObject({ ready: true, reason: 'ready' });
+    expect(ready.contributions?.store?.totalDelta).toBe(ready.contributions?.category?.totalDelta);
+    previous!.stores = previous!.stores.filter(store => store.businessId !== '109'); previous!.successfulStores = 2;
+    const blocked = buildSalesInsights(current, previous);
+    expect(blocked.reason).toBe('storesDiffer');
+    expect(blocked.contributions).toMatchObject({ ready: false, reason: 'storesDiffer' });
+    expect(blocked.entries.some(entry => entry.kind === 'growth')).toBe(false);
+  });
 });

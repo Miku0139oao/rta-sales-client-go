@@ -20,7 +20,7 @@
   import AnalysisDataActions from './AnalysisDataActions.svelte';
   import ProductDetailsDialog from './ProductDetailsDialog.svelte';
   import AnalysisInsights from './AnalysisInsights.svelte';
-  import { buildSalesInsights, salesInsightsTable } from '../salesInsights';
+  import { buildSalesInsights, salesInsightSheets } from '../salesInsights';
   import { buildAnalysisTables } from '../analysisTableViews';
   import type { TableSort } from '../analysisTable';
   import { ANALYSIS_PRESETS_KEY, loadAnalysisPresets, analysisPresetShortcuts, markAnalysisPresetUsed, normalizePresetDraft, resolvePresetQuery, type AnalysisPreset, type AnalysisPresetDraft, type PresetFilters } from '../analysisPresets';
@@ -268,7 +268,7 @@
   $: productScopeActive = groupScopeActive || filtersActive(selections, search);
   $: insightData = activeView === 'overview' ? buildSalesInsights(currentPeriod, periodByKey(reportPeriods, 'previous'),
     (item) => matchesFilters(item, selections, search) && (!groupScopeActive || selectedGroupCodes.has(item.articleCode.trim()))) : undefined;
-  $: insightTable = insightData?.entries.length ? salesInsightsTable(insightData, t) : undefined;
+  $: insightTable = insightData ? salesInsightSheets(insightData, t) : undefined;
   $: viewItemKeys = periodKeysForAnalysisView(activeView, [salesRankingKey, quantityRankingKey], productScopeActive);
   $: viewMissingPeriods = reportPeriods.filter((period) => viewItemKeys.includes(period.key) && periodNeedsItemHydration(period));
   $: scopedViewWaiting = (productScopeActive || activeView === 'products') && viewMissingPeriods.length > 0;

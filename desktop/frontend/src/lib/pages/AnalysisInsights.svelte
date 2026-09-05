@@ -2,6 +2,7 @@
   import type { Translator } from '../i18n';
   import type { SalesInsights } from '../salesInsights';
   import { formatTableCell } from '../analysisTable';
+  import AnalysisContributions from './AnalysisContributions.svelte';
   export let t: Translator;
   export let locale: string;
   export let data: SalesInsights;
@@ -30,6 +31,7 @@
     {#if data.current}<p>{data.current.label} · {data.current.from} — {data.current.to}</p>{/if}
     {#if data.previous}<p>{data.previous.label} · {data.previous.from} — {data.previous.to}</p>{/if}
     <p>{t('insights.method')}</p><p>{t('insights.scope')}</p>
+    <AnalysisContributions {t} {locale} data={data.contributions} />
   </details>
 </section>
 <style>

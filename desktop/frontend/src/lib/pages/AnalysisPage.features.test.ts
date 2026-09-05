@@ -5,14 +5,25 @@ import { translator } from '../i18n';
 import { defaultSettings } from '../settings';
 import { dataFixture } from '../../test/analysisDataFixture';
 import type { AnalysisWorkbookRequest } from '../analysisTable';
+import type { SalesAnalysisItem, SalesAnalysisResult } from '../types';
 import AnalysisPage from './AnalysisPage.svelte';
 beforeEach(()=>{localStorage.clear();});
 afterEach(()=>{cleanup();configureBackend(undefined);});
-async function setup(){
- const report=dataFixture(),run=vi.fn(async()=>report),exportFile=vi.fn(async(_request:unknown)=>'report.xlsx');
+function contributionExportFixture():SalesAnalysisResult{
+ const storeIds=Array.from({length:8},(_,index)=>`s${index}`);
+ const item=(storeId:string,amount:number):SalesAnalysisItem=>({storeId,storeLabel:`${storeId} Store`,articleCode:storeId,articleName:storeId,brandName:'Brand',category1:'Health',category1Code:'H',category2:'Beauty',category2Code:'A02',category3:'Skin',category4:'Face',category5:'',transactionCount:1,saleQuantity:1,saleAmount:amount,returnQuantity:0,returnTransactionCount:0,returnAmount:0,netQuantity:1,netSalesAmount:amount});
+ const zero={saleQuantity:0,saleAmount:0,returnQuantity:0,returnAmount:0,netQuantity:0,netSalesAmount:0};
+ const periods=['current','previous'].map((key,index)=>{
+  const rows=storeIds.map((id,storeIndex)=>item(id,index?1:10+storeIndex));
+  return {key,label:index?'上期':'本期',from:index?'2026-07-01':'2026-08-01',to:index?'2026-07-31':'2026-08-31',complete:true,successfulStores:storeIds.length,totals:zero,stores:storeIds.map(id=>({businessId:id,label:`${id} Store`,totals:zero})),items:rows,itemCount:rows.length};
+ });
+ return {operationId:'contrib-export',from:'2026-08-01',to:'2026-08-31',complete:true,pending:false,selectedStores:storeIds.length,successfulStores:storeIds.length,totals:zero,stores:periods[0]!.stores,periods,weeks:[],queryDurationMs:10};
+}
+async function setup(report:SalesAnalysisResult=dataFixture()){
+ const run=vi.fn(async()=>report),exportFile=vi.fn(async(_request:unknown)=>'report.xlsx');
  configureBackend({methods:{ListProfiles:vi.fn(async()=>[{id:'profile',displayName:'Test',enabled:true,priority:1,hasCredentials:true}]),ListSalesAnalysisStores:vi.fn(async()=>report.stores),ListManCodeGroups:vi.fn(async()=>[]),RunSalesAnalysis:run,ClearSalesAnalysis:vi.fn(async()=>undefined),CancelSalesAnalysis:vi.fn(async()=>undefined),ExportSalesAnalysisWorkbook:exportFile}});
  const view=render(AnalysisPage,{props:{t:translator('zh-TW'),settings:defaultSettings}});
- await screen.findByText('107 Store');await fireEvent.click(screen.getByText('開始分析'));await screen.findByRole('heading',{name:'銷售額 Top 24'});
+ await screen.findByText(`${report.stores[0]!.businessId} Store`);await fireEvent.click(screen.getByText('開始分析'));await screen.findByRole('heading',{name:'銷售額 Top 24'});
  return {...view,run,exportFile};
 }
 describe('complete analysis tools',()=>{
@@ -57,6 +68,19 @@ describe('complete analysis tools',()=>{
   const request=exportFile.mock.calls[0]![0] as AnalysisWorkbookRequest;
   const evidence=request.sheets.find(sheet=>sheet.name==='分析重點');
   expect(evidence?.rows[0]?.slice(1,7)).toEqual(['00107','Mask',60,30,30,1]);expect(run).toHaveBeenCalledTimes(1);
+ });
+ it('exports both contribution sheets including groups omitted from the preview',async()=>{
+  const {run,exportFile}=await setup(contributionExportFixture());
+  expect(screen.getByRole('option',{name:'門店差額拆解'})).toBeInTheDocument();
+  expect(screen.getByRole('option',{name:'分類差額拆解'})).toBeInTheDocument();
+  await fireEvent.click(screen.getByRole('button',{name:'匯出此頁 Excel'}));await waitFor(()=>expect(exportFile).toHaveBeenCalledTimes(1));
+  const request=exportFile.mock.calls[0]![0] as AnalysisWorkbookRequest;
+  const stores=request.sheets.find(sheet=>sheet.name==='門店差額拆解');
+  const categories=request.sheets.find(sheet=>sheet.name==='分類差額拆解');
+  expect(stores?.rows.filter(row=>typeof row[4]==='number')).toHaveLength(9);
+  expect(['s0','s1','s2'].every(id=>stores?.rows.some(row=>row[0]===id))).toBe(true);
+  expect(categories?.rows.some(row=>row[0]==='H' && row[4]===100)).toBe(true);
+  expect(run).toHaveBeenCalledTimes(1);
  });
  it('can open the same details from the products table',async()=>{
   const {run}=await setup();await fireEvent.click(screen.getByRole('tab',{name:'商品'}));await fireEvent.click(within(screen.getByRole('tabpanel')).getAllByRole('button',{name:'查看商品詳情：Mask'})[0]!);await screen.findByRole('dialog',{name:'Mask'});expect(run).toHaveBeenCalledTimes(1);

@@ -17,7 +17,7 @@ interface Data {
  topSales: Ranked[]; topQuantity: Ranked[];
  salesGroups: Array<{ name: string; items: Ranked[] }>; quantityGroups: Array<{ name: string; items: Ranked[] }>;
  focus: FocusGroup[];
- insights?: AnalysisTable;
+ insights?: AnalysisTable | AnalysisTable[];
 }
 const num = (value: number | undefined): CellValue => value !== undefined && Number.isFinite(value) ? value : null;
 export const relativeChange = (value: number | undefined, base: number | undefined): number | undefined => value === undefined || base === undefined || base === 0 ? undefined : (value - base) / Math.abs(base);
@@ -45,8 +45,9 @@ export function buildAnalysisTables(data: Data, t: Translator, locale: string, s
  const weekly = table('weekly',t('analysis.weeklyTitle'),[col('analysis.store','text'),col(data.weekAligned?'analysis.currentPeriod':'analysis.thisWeek'),col(data.weekAligned?'analysis.previousPeriod':'analysis.lastWeek'),col('analysis.variance'),col('analysis.variancePercent','percent'),col('analysis.weekday','percent'),col('analysis.weekend','percent'),col('analysis.customers','percent')],weeklyRows);
  const focusName = (group: FocusGroup) => group.name || ({ health: t('analysis.focusHealth'), skin: t('analysis.focusSkin'), pc: t('analysis.focusPC') }[group.id] ?? group.id);
  const focusTable = (kind:'sales'|'quantity') => table(`focus-${kind}`,t(kind==='sales'?'analysis.focusSales':'analysis.focusQuantity'),[col('analysis.promoterGroup','text'),...rankCols,col('analysis.currentPeriod'),col('analysis.netQuantity','number')],data.focus.flatMap((group)=>group[kind].map((item,index)=>({cells:[focusName(group),index+1,item.code,item.name,num(item.amount),num(item.quantity),num(item.currentAmount),num(item.currentQuantity)]}))));
+ const insightSheets = data.insights == null ? [] : Array.isArray(data.insights) ? data.insights : [data.insights];
  return {
-  overview:[performance,table('top-sales',t('analysis.topSales',{count:data.topSales.length}),rankCols,rankRows(data.topSales)),table('top-quantity',t('analysis.topQuantity',{count:data.topQuantity.length}),rankCols,rankRows(data.topQuantity)),...(data.insights?[data.insights]:[])],
+  overview:[performance,table('top-sales',t('analysis.topSales',{count:data.topSales.length}),rankCols,rankRows(data.topSales)),table('top-quantity',t('analysis.topQuantity',{count:data.topQuantity.length}),rankCols,rankRows(data.topQuantity)),...insightSheets],
   products:[products], stores:[stores], weekly:data.week?[weekly]:[],
   categories:[categories,table('category-sales',t('analysis.categorySalesRanking'),[col('analysis.category','text'),...rankCols],groupRankRows(data.salesGroups)),table('category-quantity',t('analysis.monthlyQuantityRanking'),[col('analysis.category','text'),...rankCols],groupRankRows(data.quantityGroups))],
   focus:data.focus.length?[focusTable('sales'),focusTable('quantity')]:[],
