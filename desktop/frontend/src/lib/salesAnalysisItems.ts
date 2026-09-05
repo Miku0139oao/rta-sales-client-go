@@ -96,46 +96,71 @@ export function unpackSalesAnalysisItems(batch: SalesAnalysisPackedItems, stores
   const dict = batch.d ?? batch.dict ?? [];
   const storeList = stores ?? [];
   const rows = batch.r ?? batch.rows ?? [];
-  return rows.map((raw) => {
-    const row = packedRowFields(raw);
-    const store = storeList[row.s];
-    return {
-      storeId: store?.businessId ?? '',
-      storeLabel: store?.label ?? '',
-      articleCode: packedString(dict, row.ac),
-      articleName: packedString(dict, row.an),
-      brandName: packedString(dict, row.br),
-      category1: packedString(dict, row.c1),
-      category1Code: packedString(dict, row.k1),
-      category2: packedString(dict, row.c2),
-      category2Code: packedString(dict, row.k2),
-      category3: packedString(dict, row.c3),
-      category3Code: packedString(dict, row.k3),
-      category4: packedString(dict, row.c4),
-      category4Code: packedString(dict, row.k4),
-      category5: packedString(dict, row.c5),
-      category5Code: packedString(dict, row.k5),
-      transactionCount: row.t ?? 0,
-      saleQuantity: row.sq ?? 0,
-      saleAmount: row.sa ?? 0,
-      returnQuantity: row.rq ?? 0,
-      returnTransactionCount: row.rt ?? 0,
-      returnAmount: row.ra ?? 0,
-      netQuantity: row.nq ?? 0,
-      netSalesAmount: row.ns ?? 0,
-    };
-  });
+  const items = new Array<SalesAnalysisItem>(rows.length);
+  for (let index = 0; index < rows.length; index += 1) {
+    const raw = rows[index]!;
+    items[index] = Array.isArray(raw)
+      ? unpackCompactPackedRow(raw, dict, storeList)
+      : unpackObjectPackedRow(raw, dict, storeList);
+  }
+  return items;
 }
 
-function packedRowFields(row: SalesAnalysisPackedRow | number[]): SalesAnalysisPackedRow {
-  if (!Array.isArray(row)) return row;
-  const at = (index: number) => row[index] ?? 0;
+function unpackCompactPackedRow(row: number[], dict: string[], storeList: SalesAnalysisStoreSummary[]): SalesAnalysisItem {
+  const store = storeList[row[0] ?? 0];
   return {
-    s: at(0), ac: at(1), an: at(2), br: at(3),
-    c1: at(4), k1: at(5), c2: at(6), k2: at(7),
-    c3: at(8), k3: at(9), c4: at(10), k4: at(11),
-    c5: at(12), k5: at(13),
-    t: at(14), sq: at(15), sa: at(16), rq: at(17), rt: at(18), ra: at(19), nq: at(20), ns: at(21),
+    storeId: store?.businessId ?? '',
+    storeLabel: store?.label ?? '',
+    articleCode: packedString(dict, row[1]),
+    articleName: packedString(dict, row[2]),
+    brandName: packedString(dict, row[3]),
+    category1: packedString(dict, row[4]),
+    category1Code: packedString(dict, row[5]),
+    category2: packedString(dict, row[6]),
+    category2Code: packedString(dict, row[7]),
+    category3: packedString(dict, row[8]),
+    category3Code: packedString(dict, row[9]),
+    category4: packedString(dict, row[10]),
+    category4Code: packedString(dict, row[11]),
+    category5: packedString(dict, row[12]),
+    category5Code: packedString(dict, row[13]),
+    transactionCount: row[14] ?? 0,
+    saleQuantity: row[15] ?? 0,
+    saleAmount: row[16] ?? 0,
+    returnQuantity: row[17] ?? 0,
+    returnTransactionCount: row[18] ?? 0,
+    returnAmount: row[19] ?? 0,
+    netQuantity: row[20] ?? 0,
+    netSalesAmount: row[21] ?? 0,
+  };
+}
+
+function unpackObjectPackedRow(row: SalesAnalysisPackedRow, dict: string[], storeList: SalesAnalysisStoreSummary[]): SalesAnalysisItem {
+  const store = storeList[row.s];
+  return {
+    storeId: store?.businessId ?? '',
+    storeLabel: store?.label ?? '',
+    articleCode: packedString(dict, row.ac),
+    articleName: packedString(dict, row.an),
+    brandName: packedString(dict, row.br),
+    category1: packedString(dict, row.c1),
+    category1Code: packedString(dict, row.k1),
+    category2: packedString(dict, row.c2),
+    category2Code: packedString(dict, row.k2),
+    category3: packedString(dict, row.c3),
+    category3Code: packedString(dict, row.k3),
+    category4: packedString(dict, row.c4),
+    category4Code: packedString(dict, row.k4),
+    category5: packedString(dict, row.c5),
+    category5Code: packedString(dict, row.k5),
+    transactionCount: row.t ?? 0,
+    saleQuantity: row.sq ?? 0,
+    saleAmount: row.sa ?? 0,
+    returnQuantity: row.rq ?? 0,
+    returnTransactionCount: row.rt ?? 0,
+    returnAmount: row.ra ?? 0,
+    netQuantity: row.nq ?? 0,
+    netSalesAmount: row.ns ?? 0,
   };
 }
 
