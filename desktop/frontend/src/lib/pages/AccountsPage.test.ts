@@ -339,7 +339,7 @@ describe('account safety workflow', () => {
   });
 
   it('does not offer adding an account when listing profiles fails', async () => {
-    const list = vi.fn(async () => { throw new Error('vault unavailable'); });
+    const list = vi.fn(async (): Promise<typeof profile[]> => { throw new Error('vault unavailable'); });
     configureBackend({ methods: { ListProfiles: list } });
     const { container } = render(AccountsPage, { props: { t: translator('zh-TW'), locale: 'zh-TW' } });
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
