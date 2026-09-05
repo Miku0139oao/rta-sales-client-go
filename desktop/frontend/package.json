@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint:emoji": "node scripts/no-emoji.mjs",
+    "pdf:validate": "node --experimental-strip-types scripts/sales-report-pdf-validate.mjs",
     "verify": "bun run lint:emoji && bun run check && bun run test && bun run build"
   },
   "dependencies": {
@@ -23,12 +24,13 @@
     "svelte": "^5.38.1"
   },
   "devDependencies": {
-    "@tsconfig/svelte": "^5.0.5",
     "@sveltejs/vite-plugin-svelte": "^6.1.0",
     "@testing-library/jest-dom": "^6.6.4",
     "@testing-library/svelte": "^5.2.8",
+    "@tsconfig/svelte": "^5.0.5",
     "@types/node": "^24.2.1",
     "jsdom": "^26.1.0",
+    "pdfjs-dist": "^6.3.289",
     "svelte-check": "^4.3.1",
     "typescript": "^5.9.2",
     "vite": "^7.1.2",
