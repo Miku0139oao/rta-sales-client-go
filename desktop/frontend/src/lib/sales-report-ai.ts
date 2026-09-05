@@ -1,5 +1,5 @@
 import { ALL_STORES_REPORT_ID, isAllStoresReport, salesAnalysisPDFFilename } from './sales-report-pdf';
-import { normalizeRankingLimit } from './settings';
+import { DEFAULT_RANKING_LIMIT, normalizeRankingLimit } from './settings';
 import { salesReportHasScreenFilters, type SalesReportFilter } from './salesReportItems';
 import type {
   Locale,
@@ -45,7 +45,7 @@ export function salesAnalysisAIFilename(storeId: string, from: string, to: strin
 }
 
 export function buildSalesAnalysisAIMarkdown(input: SalesReportAIInput): string {
-  const copy = aiCopy(input.locale);
+  const copy = aiCopy(input.locale, rankingLimitOf(input));
   const current = periodMemo(input.base, 'current');
   const previous = periodMemo(input.base, 'previous');
   const previous2 = periodMemo(input.base, 'previous2');
@@ -451,7 +451,8 @@ function yamlEscape(value: string): string {
   return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
 }
 
-function aiCopy(locale: Locale) {
+function aiCopy(locale: Locale, rankingLimit: number = DEFAULT_RANKING_LIMIT) {
+  const limit = normalizeRankingLimit(rankingLimit);
   if (locale === 'en') {
     return {
       title: 'RTA sales analysis',
@@ -468,7 +469,7 @@ function aiCopy(locale: Locale) {
       ruleNoInvent: 'Do not invent products, categories, stores, or amounts.',
       ruleCurrency: 'All money is Hong Kong dollars (HKD / HK$). Do not convert currency.',
       ruleScope: 'The tables below are already filtered. Do not add categories or products that are not listed.',
-      ruleRankings: 'Top-product tables are the top 15 only. Do not add them up and treat the sum as store sales.',
+      ruleRankings: `Top-product tables are the top ${limit} only. Do not add them up and treat the sum as store sales.`,
       ruleZero: 'A row with HK$0.00 and a quantity is a real voucher or bag line, not an error.',
       ruleJson: 'JSON matches the tables, rounded to 2 decimal places. Prefer the tables if anything looks inconsistent.',
       ruleOutput: 'Write in the same language as this file. Do not ask the user what to do next.',
@@ -536,7 +537,7 @@ function aiCopy(locale: Locale) {
     ruleNoInvent: '不准發明商品、分類、門店或金額。',
     ruleCurrency: '金額一律是港幣（HKD / HK$），不要換算其他幣別。',
     ruleScope: '下面的表已經是篩選後的結果。沒有出現的分類或商品視為不在範圍，不是銷售為 0。',
-    ruleRankings: 'Top 商品只是前 15 名。不要把這 15 項加總當成全店銷售。',
+    ruleRankings: `Top 商品只是前 ${limit} 名。不要把這 ${limit} 項加總當成全店銷售。`,
     ruleZero: '銷額 HK$0.00 但有銷量的列（現金券、膠袋）是真實列，不是錯誤。',
     ruleJson: 'JSON 與上面的表是同一組數字，金額已四捨五入到兩位小數。若看起來不一致，以表格為準。',
     ruleOutput: '用繁體中文寫。不要再問使用者要做什麼。',

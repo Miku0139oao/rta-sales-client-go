@@ -98,7 +98,7 @@ describe('sales analysis AI export', () => {
     expect(markdown).toContain('```json');
     expect(markdown).toContain('"id": "g-skin"');
     expect(markdown).not.toContain('undefined');
-    expect(markdown).toContain('Top 商品只是前 15 名');
+    expect(markdown).toContain('Top 商品只是前 24 名');
     expect(markdown).toContain('較上期');
     expect(markdown).toContain('較前期');
     expect(markdown).toContain('| 上期 | 2026-07-01 → 2026-07-16 | HK$150.00 |');
@@ -158,5 +158,24 @@ describe('sales analysis AI export', () => {
     expect(markdown).toContain('小分類: A01010203  RESPIRATORY SYSTEM');
     expect(markdown).toContain('已限於下列篩選');
     expect(markdown).toContain('"alreadyFiltered": true');
+  });
+
+  it('names the actual ranking depth instead of a stale top-15 cap', () => {
+    const markdown = buildSalesAnalysisAIMarkdown({
+      locale: 'zh-TW',
+      storeId: '107',
+      storeLabel: '107 - Tai Wai',
+      from: '2026-08-01',
+      to: '2026-08-16',
+      categoryLevel: 'category2',
+      filter: defaultSalesReportFilter(),
+      rankingLimit: 40,
+      base: memo(),
+      groups: [],
+    });
+    expect(markdown).toContain('Top 商品只是前 40 名');
+    expect(markdown).toContain('不要把這 40 項加總當成全店銷售');
+    expect(markdown).not.toContain('前 15 名');
+    expect(markdown).not.toContain('前 24 名');
   });
 });
