@@ -24,7 +24,7 @@ const (
 	DefaultMaxJobs = 2000
 	// DefaultConcurrency is the number of independent session lanes queried
 	// at once. Jobs that share one cookie still run serially; one account may
-	// open a few extra logins so its stores can proceed in parallel.
+	// open one login per store so those stores can proceed in parallel.
 	DefaultConcurrency = 160
 	// MaximumConcurrency is the user-selectable ceiling for independent
 	// session lanes across accounts.

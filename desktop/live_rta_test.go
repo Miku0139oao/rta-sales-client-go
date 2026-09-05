@@ -360,7 +360,7 @@ func TestLiveSixteenStoreExtraLogins(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 14*time.Minute)
 	defer cancel()
 
-	const sessionCount = maxAccountQuerySessions
+	const sessionCount = 16
 	hits := make([]*loginHitCounter, sessionCount)
 	clients := make([]*rtasales.Client, sessionCount)
 	for index := range sessionCount {

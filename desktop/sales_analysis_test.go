@@ -16,6 +16,7 @@ type salesAnalysisFakeClient struct {
 	stores  []rtasales.Store
 	results map[string]*rtasales.SalesResult
 	failOn  func(call int, query rtasales.SalesQuery) error
+	hold    func(query rtasales.SalesQuery) <-chan struct{}
 
 	mu        sync.Mutex
 	queries   []rtasales.SalesQuery
@@ -41,9 +42,16 @@ func (c *salesAnalysisFakeClient) Sales(ctx context.Context, query rtasales.Sale
 	if c.started != nil {
 		c.started <- struct{}{}
 	}
-	if c.release != nil {
+	var wait <-chan struct{}
+	if c.hold != nil {
+		wait = c.hold(query)
+	}
+	if wait == nil && c.release != nil {
+		wait = c.release
+	}
+	if wait != nil {
 		select {
-		case <-c.release:
+		case <-wait:
 		case <-ctx.Done():
 			c.mu.Lock()
 			c.active--
@@ -355,8 +363,11 @@ func TestSalesAnalysisQueriesReportPeriodsInParallelAndIncludesTrend(t *testing.
 }
 
 func TestAccountQuerySessionCountCapsExtraLogins(t *testing.T) {
-	if got := accountQuerySessionCount(40, 160); got != maxAccountQuerySessions {
-		t.Fatalf("40 stores at 160 concurrency = %d, want %d", got, maxAccountQuerySessions)
+	if got := accountQuerySessionCount(40, 160); got != 40 {
+		t.Fatalf("40 stores at 160 concurrency = %d, want 40", got)
+	}
+	if got := accountQuerySessionCount(200, 160); got != maxAccountQuerySessions {
+		t.Fatalf("200 stores at 160 concurrency = %d, want %d", got, maxAccountQuerySessions)
 	}
 	if got := accountQuerySessionCount(2, 160); got != 2 {
 		t.Fatalf("two stores = %d, want 2", got)
@@ -366,6 +377,57 @@ func TestAccountQuerySessionCountCapsExtraLogins(t *testing.T) {
 	}
 	if got := accountQuerySessionCount(0, 160); got != 1 {
 		t.Fatalf("no stores = %d, want 1", got)
+	}
+}
+
+func TestSalesAnalysisOverlapsFollowOnBeforeAllCurrentFinish(t *testing.T) {
+	holdB := make(chan struct{})
+	previousA := make(chan struct{})
+	var previousOnce sync.Once
+	stores := []rtasales.Store{
+		{BusinessID: "S01", Label: "S01"},
+		{BusinessID: "S02", Label: "S02"},
+	}
+	client := &salesAnalysisFakeClient{
+		stores:  stores,
+		results: map[string]*rtasales.SalesResult{"S01": {}, "S02": {}},
+		hold: func(query rtasales.SalesQuery) <-chan struct{} {
+			day := query.StartDate.Format("2006-01-02")
+			if query.BusinessStoreID == "S02" && day == "2026-08-15" {
+				return holdB
+			}
+			if query.BusinessStoreID == "S01" && day == "2026-07-15" {
+				previousOnce.Do(func() { close(previousA) })
+			}
+			return nil
+		},
+	}
+	app, _, _ := newTestApp(t, new(fakeEngine), fakeClients{byAccount: map[string]accountClient{"analysis-account": client}})
+	profile, err := app.CreateOrUpdateProfile(ProfileUpsertRequest{
+		DisplayName: "Analysis", Account: "analysis-account", Password: "password", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	errs := make(chan error, 1)
+	go func() {
+		_, runErr := app.RunSalesAnalysis(SalesAnalysisRequest{
+			ProfileID: profile.ID, StoreIDs: []string{"S01", "S02"}, Concurrency: 160,
+			Periods: []SalesAnalysisPeriodRequest{
+				{Key: "current", Label: "Current", From: "2026-08-15", To: "2026-08-15"},
+				{Key: "previous", Label: "Previous", From: "2026-07-15", To: "2026-07-15"},
+			},
+		})
+		errs <- runErr
+	}()
+	select {
+	case <-previousA:
+	case <-time.After(2 * time.Second):
+		t.Fatal("store S01 previous period did not start before S02 current finished")
+	}
+	close(holdB)
+	if err := <-errs; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -382,8 +444,8 @@ func TestSalesAnalysisSerializesPerProfileAtDefaultAndMaximumConcurrency(t *test
 		storeCount  int
 		wantActive  int
 	}{
-		{name: "default opens a few extra logins", concurrency: 0, storeCount: 40, wantActive: maxAccountQuerySessions},
-		{name: "maximum still caps extra logins", concurrency: 160, storeCount: 40, wantActive: maxAccountQuerySessions},
+		{name: "default opens one login per store", concurrency: 0, storeCount: 40, wantActive: 40},
+		{name: "concurrency caps sessions below store count", concurrency: 3, storeCount: 5, wantActive: 3},
 		{name: "one store stays on one login", concurrency: 160, storeCount: 1, wantActive: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {

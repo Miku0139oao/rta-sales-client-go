@@ -10,8 +10,8 @@ import (
 
 const (
 	reportNominalAmount = 0.01
-	reportTopProducts   = 15
-	reportGroupItems    = 24
+	reportTopProducts   = 100
+	reportGroupItems    = 100
 	reportFocusItems    = 8
 )
 

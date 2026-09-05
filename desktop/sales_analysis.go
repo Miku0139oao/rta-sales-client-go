@@ -22,9 +22,9 @@ const (
 	salesAnalysisUpdateEventName   = "rta:sales-analysis-update"
 	// maxAccountQuerySessions is how many independent RTA logins one profile
 	// may open. Each login keeps its own cookie; requests on one cookie stay
-	// serial. Live checks of 8 parallel sessions did not evict the first
-	// login or return HTTP 429 on a 16-store five-period query.
-	maxAccountQuerySessions = 8
+	// serial. RTA does not evict older sessions, so one store can have its
+	// own login up to the workbook concurrency ceiling.
+	maxAccountQuerySessions = xlsxfill.MaximumConcurrency
 )
 
 var salesAnalysisRateLimitRetryDelays = [...]time.Duration{time.Second, 3 * time.Second}
@@ -115,24 +115,36 @@ func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResul
 	a.events.Emit(a.appContext(), salesAnalysisProgressEventName, SalesAnalysisProgress{
 		OperationID: operationID, Current: 0, Total: totalTasks, Status: "running",
 	})
-	primaryOutcomes, completed, err := a.runSalesAnalysisJobs(ctx, operationID, selected, periods, primaryJobs, 0, totalTasks, concurrency)
-	if err != nil {
+	run := a.startSalesAnalysisJobs(ctx, operationID, selected, periods, primaryJobs, followJobs, 0, totalTasks, concurrency, primaryIndex)
+	select {
+	case <-run.primaryDone:
+	case <-ctx.Done():
+	}
+	if err := ctx.Err(); err != nil {
+		_ = run.wait()
 		return SalesAnalysisResult{}, err
 	}
 
-	analysis, packed := assembleSalesAnalysisArticles(operationID, selected, []normalizedSalesAnalysisPeriod{periods[primaryIndex]}, [][]storeOutcome{primaryOutcomes[primaryIndex]})
+	analysis, packed := assembleSalesAnalysisArticles(
+		operationID, selected,
+		[]normalizedSalesAnalysisPeriod{periods[primaryIndex]},
+		[][]storeOutcome{run.copyPeriodArticles(primaryIndex, len(selected))},
+	)
 	analysis.Pending = len(followJobs) > 0
 	analysis.Complete = !analysis.Pending && len(analysis.Issues) == 0
 	analysis.QueryDurationMS = time.Since(started).Milliseconds()
 	remembered := a.rememberSalesAnalysis(analysis, packed)
 	if len(followJobs) == 0 {
+		if err := run.wait(); err != nil {
+			return SalesAnalysisResult{}, err
+		}
 		released = true
 		finish()
 		return remembered, nil
 	}
 
 	released = true
-	go a.supplementSalesAnalysis(ctx, finish, started, operationID, selected, periods, primaryIndex, followJobs, completed, totalTasks, concurrency)
+	go a.finishSalesAnalysisSupplement(finish, started, operationID, selected, periods, primaryIndex, run)
 	return remembered, nil
 }
 
@@ -217,25 +229,63 @@ func followOnSalesAnalysisJobs(periods []normalizedSalesAnalysisPeriod, primaryI
 	return jobs
 }
 
-func (a *App) runSalesAnalysisJobs(
+type analysisJobRun struct {
+	// Article slice headers never change after setup. primaryDone publishes the
+	// current-period rows; done separately publishes finalOutcomes with trends.
+	finalOutcomes [][]storeOutcome
+	outcomes      [][]storeOutcome
+	completed     atomic.Int64
+	primaryDone   chan struct{}
+	done          chan struct{}
+	runErr        error
+	errMu         sync.Mutex
+}
+
+func (r *analysisJobRun) wait() error {
+	<-r.done
+	r.errMu.Lock()
+	defer r.errMu.Unlock()
+	return r.runErr
+}
+
+func (r *analysisJobRun) copyPeriodArticles(periodIndex, storeCount int) []storeOutcome {
+	if r == nil || periodIndex < 0 || periodIndex >= len(r.outcomes) {
+		return make([]storeOutcome, storeCount)
+	}
+	out := make([]storeOutcome, storeCount)
+	copy(out, r.outcomes[periodIndex])
+	return out
+}
+
+func isPrimaryArticleJob(task analysisJob, primaryIndex int) bool {
+	return task.kind == "article" && task.periodIndex == primaryIndex
+}
+
+func (a *App) startSalesAnalysisJobs(
 	ctx context.Context,
 	operationID string,
 	selected []selectedStore,
 	periods []normalizedSalesAnalysisPeriod,
-	tasks []analysisJob,
-	progressOffset, totalTasks, concurrency int,
-) ([][]storeOutcome, int, error) {
-	if len(tasks) == 0 {
-		return make([][]storeOutcome, len(periods)), progressOffset, nil
+	primaryJobs, followJobs []analysisJob,
+	progressOffset, totalTasks, concurrency, primaryIndex int,
+) *analysisJobRun {
+	run := &analysisJobRun{
+		outcomes:    make([][]storeOutcome, len(periods)),
+		primaryDone: make(chan struct{}),
+		done:        make(chan struct{}),
 	}
-	outcomes := make([][]storeOutcome, len(periods))
+	run.completed.Store(int64(progressOffset))
 	for periodIndex := range periods {
-		outcomes[periodIndex] = make([]storeOutcome, len(selected))
+		run.outcomes[periodIndex] = make([]storeOutcome, len(selected))
+	}
+	tasks := append(append([]analysisJob{}, primaryJobs...), followJobs...)
+	if len(tasks) == 0 {
+		run.finalOutcomes = run.outcomes
+		close(run.primaryDone)
+		close(run.done)
+		return run
 	}
 	trendOutcomes := make([]storeOutcome, len(periods))
-	// Schedule cookie lanes. One login stays serial; extra logins for the same
-	// account are separate lanes so stores can run in parallel. Other accounts
-	// keep their own lanes.
 	jobsByLane := make(map[string][]analysisJob)
 	laneOrder := make([]string, 0)
 	for _, task := range tasks {
@@ -248,8 +298,20 @@ func (a *App) runSalesAnalysisJobs(
 	jobs := make(chan []analysisJob)
 	workerCount := min(concurrency, len(laneOrder))
 	var waitGroup sync.WaitGroup
-	var completed atomic.Int64
-	completed.Store(int64(progressOffset))
+	var primaryOnce sync.Once
+	primaryRemaining := atomic.Int64{}
+	primaryRemaining.Store(int64(len(primaryJobs)))
+	if len(primaryJobs) == 0 {
+		primaryOnce.Do(func() { close(run.primaryDone) })
+	}
+	markPrimary := func(task analysisJob) {
+		if !isPrimaryArticleJob(task, primaryIndex) {
+			return
+		}
+		if primaryRemaining.Add(-1) == 0 {
+			primaryOnce.Do(func() { close(run.primaryDone) })
+		}
+	}
 	for worker := 0; worker < workerCount; worker++ {
 		waitGroup.Add(1)
 		go func() {
@@ -278,9 +340,9 @@ func (a *App) runSalesAnalysisJobs(
 						query.BusinessStoreID = store.BusinessID
 						query.SkipTrend = true
 						result, queryErr = a.querySalesAnalysisWithRateLimitRetry(ctx, selectedStore.query, query)
-						outcomes[task.periodIndex][task.storeIndex] = storeOutcome{result: result, err: queryErr}
+						run.outcomes[task.periodIndex][task.storeIndex] = storeOutcome{result: result, err: queryErr}
 					}
-					current := int(completed.Add(1))
+					current := int(run.completed.Add(1))
 					status := "success"
 					if queryErr != nil {
 						status = "failed"
@@ -290,38 +352,40 @@ func (a *App) runSalesAnalysisJobs(
 						StoreID: storeID, StoreLabel: storeLabel,
 						PeriodKey: period.key, PeriodLabel: period.label, Status: status,
 					})
+					markPrimary(task)
 				}
 			}
 		}()
 	}
-	sendCancelled := false
 	for _, lane := range laneOrder {
 		select {
 		case jobs <- jobsByLane[lane]:
 		case <-ctx.Done():
-			sendCancelled = true
-		}
-		if sendCancelled {
-			break
+			close(jobs)
+			go func() {
+				waitGroup.Wait()
+				primaryOnce.Do(func() { close(run.primaryDone) })
+				run.errMu.Lock()
+				run.runErr = ctx.Err()
+				run.errMu.Unlock()
+				close(run.done)
+			}()
+			return run
 		}
 	}
 	close(jobs)
-	waitGroup.Wait()
-	if err := ctx.Err(); err != nil {
-		return nil, int(completed.Load()), err
-	}
-	for periodIndex, outcome := range trendOutcomes {
-		if outcome.result == nil && outcome.err == nil {
-			continue
+	go func() {
+		waitGroup.Wait()
+		primaryOnce.Do(func() { close(run.primaryDone) })
+		run.finalOutcomes = attachTrendOutcomes(run.outcomes, trendOutcomes)
+		if err := ctx.Err(); err != nil {
+			run.errMu.Lock()
+			run.runErr = err
+			run.errMu.Unlock()
 		}
-		if len(outcomes[periodIndex]) == 0 {
-			outcomes[periodIndex] = make([]storeOutcome, 1)
-		}
-		// Stash the all-stores trend on a sidecar by overwriting nothing;
-		// callers read it via applyStoredTrend below using period extras.
-		_ = outcome
-	}
-	return attachTrendOutcomes(outcomes, trendOutcomes), int(completed.Load()), nil
+		close(run.done)
+	}()
+	return run
 }
 
 func salesAnalysisJobLane(task analysisJob, selected []selectedStore) string {
@@ -494,33 +558,42 @@ func waitForSalesAnalysisRetry(ctx context.Context, delay time.Duration) error {
 }
 
 func attachTrendOutcomes(article [][]storeOutcome, trends []storeOutcome) [][]storeOutcome {
+	combined := append([][]storeOutcome(nil), article...)
 	for periodIndex, trend := range trends {
 		if trend.result == nil && trend.err == nil {
 			continue
 		}
-		article[periodIndex] = append(article[periodIndex], trend)
+		combined[periodIndex] = append(append([]storeOutcome(nil), article[periodIndex]...), trend)
 	}
-	return article
+	return combined
 }
 
-func (a *App) supplementSalesAnalysis(
-	ctx context.Context,
+func (a *App) finishSalesAnalysisSupplement(
 	finish func(),
 	started time.Time,
 	operationID string,
 	selected []selectedStore,
 	periods []normalizedSalesAnalysisPeriod,
 	primaryIndex int,
-	jobs []analysisJob,
-	progressOffset, totalTasks, concurrency int,
+	run *analysisJobRun,
 ) {
 	defer finish()
-	outcomes, _, err := a.runSalesAnalysisJobs(ctx, operationID, selected, periods, jobs, progressOffset, totalTasks, concurrency)
-	if err != nil {
+	if err := run.wait(); err != nil {
 		a.failSalesAnalysisSupplement(operationID, err, time.Since(started).Milliseconds())
 		return
 	}
-	a.mergeSalesAnalysisSupplement(operationID, selected, periods, primaryIndex, outcomes, time.Since(started).Milliseconds())
+	a.mergeSalesAnalysisSupplement(operationID, selected, periods, primaryIndex, run.finalOutcomes, time.Since(started).Milliseconds())
+}
+
+// Clone only fields changed during supplementation. Published snapshots can be
+// serialized outside salesResultMu, so locking the cache alone is insufficient.
+func salesAnalysisForUpdate(current SalesAnalysisResult) SalesAnalysisResult {
+	current.Periods = append([]SalesAnalysisPeriodResult(nil), current.Periods...)
+	current.Issues = append([]SalesAnalysisIssue(nil), current.Issues...)
+	for index := range current.Periods {
+		current.Periods[index].Issues = append([]SalesAnalysisIssue(nil), current.Periods[index].Issues...)
+	}
+	return current
 }
 
 func (a *App) failSalesAnalysisSupplement(operationID string, runErr error, durationMS int64) {
@@ -529,7 +602,7 @@ func (a *App) failSalesAnalysisSupplement(operationID string, runErr error, dura
 		a.salesResultMu.Unlock()
 		return
 	}
-	current := *a.salesResult
+	current := salesAnalysisForUpdate(*a.salesResult)
 	current.Pending = false
 	current.Complete = false
 	current.QueryDurationMS = durationMS
@@ -662,7 +735,7 @@ func (a *App) mergeSalesAnalysisSupplement(
 		a.salesResultMu.Unlock()
 		return
 	}
-	current := *a.salesResult
+	current := salesAnalysisForUpdate(*a.salesResult)
 	packed := a.salesPacked
 	if packed == nil {
 		packed = make(map[string]SalesAnalysisPackedItems)
