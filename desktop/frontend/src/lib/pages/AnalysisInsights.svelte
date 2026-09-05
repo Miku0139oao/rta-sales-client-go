@@ -14,7 +14,7 @@
   {#if data.entries.length}
     <div class="insight-grid">
       {#each data.entries as entry (`${entry.kind}:${entry.code}`)}
-        <article class:decline={entry.kind === 'decline'}>
+        <article class="insight-card" class:decline={entry.kind === 'decline'}>
           <h3>{t(`insights.${entry.kind}`)}</h3>
           <strong class="insight-value">{entry.kind === 'growth' ? '+' : ''}{money(entry.kind === 'decline' || entry.kind === 'growth' ? entry.difference : entry.kind === 'returns' ? entry.refunds : entry.current)}</strong>
           <button type="button" class="insight-link" aria-label={t('insights.inspect', { name: entry.name })} onclick={() => onProduct(entry.code, entry.name)}>{entry.name}<span>{entry.code}</span></button>
@@ -50,5 +50,19 @@
   .coverage-note { margin: 0 0 12px; }
   details { margin-top: 12px; font-size: 11px; color: var(--md-sys-color-on-surface-variant); }
   summary { cursor: pointer; width: fit-content; }
-  @media(max-width:520px) { .insights { padding: 12px; }.insights-heading > span { margin-left: 0; } }
+  @media (min-width: 521px) {
+    .insight-grid:has(> article:only-child) > article {
+      display: grid;
+      grid-template-columns: max-content minmax(0, 1fr);
+      grid-template-areas: "kind product" "value basis";
+      column-gap: 28px;
+      row-gap: 4px;
+      align-items: start;
+    }
+    .insight-grid:has(> article:only-child) h3 { grid-area: kind; margin: 0; }
+    .insight-grid:has(> article:only-child) .insight-value { grid-area: value; margin: 0; }
+    .insight-grid:has(> article:only-child) .insight-link { grid-area: product; min-width: 0; }
+    .insight-grid:has(> article:only-child) article > p { grid-area: basis; margin: 0; min-width: 0; }
+  }
+  @media (max-width: 520px) { .insights { padding: 12px; }.insights-heading > span { margin-left: 0; } }
 </style>
