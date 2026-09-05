@@ -430,6 +430,8 @@ export interface SalesAnalysisProgress {
   status?: 'running' | 'success' | 'failed' | string;
 }
 
+export type { AnalysisWorkbookRequest } from './analysisTable';
+
 export interface SalesAnalysisPDFWriteRequest {
   directory: string;
   filename: string;
@@ -444,9 +446,11 @@ export interface AppSettings {
   useLocalMapping: boolean;
   mappingPath: string;
   simulateStoreCount: number;
+  rankingLimit: number;
 }
 
 export interface BackendApi {
+  exportSalesAnalysisWorkbook(request: import('./analysisTable').AnalysisWorkbookRequest): Promise<string>;
   openWorkbook(): Promise<string>;
   openMappingFile(): Promise<string>;
   saveWorkbook(request: SaveWorkbookRequest): Promise<string>;

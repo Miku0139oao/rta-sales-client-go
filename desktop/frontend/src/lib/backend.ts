@@ -640,6 +640,9 @@ export const backend: BackendApi = {
   chooseSalesAnalysisPDFDirectory: () =>
     invoke(['ChooseSalesAnalysisPDFDirectory'], [], async () => 'C:\\Users\\Demo\\Documents\\RTA Reports'),
 
+  exportSalesAnalysisWorkbook: (request: import('./analysisTable').AnalysisWorkbookRequest) =>
+    invoke<string>(['ExportSalesAnalysisWorkbook'], [request], async () => { throw new AppError('backend_unavailable', 'Workbook export requires the backend'); }),
+
   writeSalesAnalysisPDF: (request: SalesAnalysisPDFWriteRequest) =>
     invoke(['WriteSalesAnalysisPDF'], [request], async () => `${request.directory}\\${request.filename}`),
 

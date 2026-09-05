@@ -7,7 +7,10 @@ import {
   type SalesReportFilter,
 } from './salesReportItems';
 import { weeklySegmentRows } from './storeSegment';
+import { DEFAULT_RANKING_LIMIT, normalizeRankingLimit } from './settings';
 import { AppError } from './types';
+
+export { DEFAULT_RANKING_LIMIT, normalizeRankingLimit };
 import type {
   Locale,
   SalesAnalysisItem,
@@ -144,6 +147,19 @@ const CONTENT_WIDTH = 277;
 const CONTENT_HEIGHT = 166;
 const CARD_GAP = 4;
 const CATEGORY_CARDS_PER_PAGE = 6;
+
+export function categoryRankingCardsPerPage(rankingLimit: number): number {
+  return normalizeRankingLimit(rankingLimit) <= 16 ? CATEGORY_CARDS_PER_PAGE : 3;
+}
+
+export function rankingPanelCapacity(height: number, rankingLimit: number): number {
+  const compact = normalizeRankingLimit(rankingLimit) > 16;
+  const headerYOffset = 19;
+  const firstOffset = compact ? 6 : 8;
+  const row = compact ? 5.35 : 8.55;
+  const bottomPad = compact ? 3.5 : 3;
+  return Math.max(1, Math.floor((height - headerYOffset - firstOffset - bottomPad) / row) + 1);
+}
 const COLORS = {
   ink: [24, 39, 58] as RGB,
   navy: [24, 55, 82] as RGB,
@@ -195,8 +211,10 @@ export async function prepareSalesAnalysisFontFromText(text: string, locale: Loc
       add('RTA SALES');
       add('RTA Sales Analysis');
       add('Page');
-      for (const value of Object.values(reportLabels(locale))) add(value);
-      for (const value of Object.values(reportLabels(locale === 'en' ? 'zh-TW' : 'en'))) add(value);
+      for (const limit of [16, 24, 32] as const) {
+        for (const value of Object.values(reportLabels(locale, limit))) add(value);
+        for (const value of Object.values(reportLabels(locale === 'en' ? 'zh-TW' : 'en', limit))) add(value);
+      }
       return bytesToBase64(await subsetter.subsetReportFont(fontBytes, [...glyphs].join('')));
     } finally {
       releaseLoadedReportFont();
@@ -218,6 +236,7 @@ export async function generateSalesAnalysisPDF(
   accumulator?: SalesReportAccumulator,
   extraChapters: SalesReportChapter[] = [],
   scope?: SalesReportScope,
+  rankingLimit: number = DEFAULT_RANKING_LIMIT,
 ): Promise<Uint8Array> {
   try {
     const extraScopes = extraChapters.map((chapter) => chapter.scope);
@@ -227,6 +246,7 @@ export async function generateSalesAnalysisPDF(
     ]);
     return renderSalesAnalysisPDF(
       result, storeId, categoryLevel, locale, resolvedFont, PDFDocument, filter, accumulator, scope, extraChapters,
+      rankingLimit,
     );
   } catch (error) {
     if (error instanceof AppError) throw error;
@@ -243,12 +263,14 @@ export async function buildSalesAnalysisPDF(
   filter: SalesReportFilter = defaultSalesReportFilter(),
   scope?: SalesReportScope,
   extraChapters: SalesReportScope[] = [],
+  rankingLimit: number = DEFAULT_RANKING_LIMIT,
 ): Promise<Uint8Array> {
   try {
     const { jsPDF: PDFDocument } = await import('jspdf');
     return renderSalesAnalysisPDF(
       result, storeId, categoryLevel, locale, fontBase64, PDFDocument, filter, undefined, scope,
       extraChapters.map((chapter) => ({ scope: chapter })),
+      rankingLimit,
     );
   } catch (error) {
     if (error instanceof AppError) throw error;
@@ -267,8 +289,10 @@ function renderSalesAnalysisPDF(
   accumulator?: SalesReportAccumulator,
   scope?: SalesReportScope,
   extraChapters: SalesReportChapter[] = [],
+  rankingLimit: number = DEFAULT_RANKING_LIMIT,
 ): Uint8Array {
-  const labels = reportLabels(locale);
+  const limit = normalizeRankingLimit(rankingLimit);
+  const labels = reportLabels(locale, limit);
   const combined = isAllStoresReport(storeId);
   const stores = listSuccessfulReportStores(result);
   const store = stores.find((candidate) => candidate.businessId === storeId);
@@ -295,7 +319,7 @@ function renderSalesAnalysisPDF(
   const footers: FooterChapter[] = [];
   appendReportSection(doc, {
     result, storeId, categoryLevel, locale, filter, labels, headerId, baseStoreLabel, combined, stores,
-    accumulator, scope, startOnCurrentPage: true,
+    accumulator, scope, startOnCurrentPage: true, rankingLimit: limit,
   }, footers);
   if (!scope && extraChapters.length > 0) {
     appendGroupSummaryPages(doc, {
@@ -321,6 +345,7 @@ interface ReportSectionOptions {
   accumulator?: SalesReportAccumulator;
   scope?: SalesReportScope;
   startOnCurrentPage: boolean;
+  rankingLimit: number;
 }
 
 interface FooterChapter {
@@ -332,9 +357,9 @@ interface FooterChapter {
 function appendReportSection(doc: jsPDF, options: ReportSectionOptions, footers: FooterChapter[]): void {
   const {
     result, storeId, categoryLevel, locale, filter, labels, headerId, baseStoreLabel, combined, stores,
-    accumulator, scope, startOnCurrentPage,
+    accumulator, scope, startOnCurrentPage, rankingLimit,
   } = options;
-  const periods = storePeriods(result, storeId, filter, categoryLevel, accumulator, labels.uncategorized, scope);
+  const periods = storePeriods(result, storeId, filter, categoryLevel, accumulator, labels.uncategorized, scope, rankingLimit);
   const current = periodByKey(periods, 'current') ?? periods[0];
   if (!current) return;
   if (!startOnCurrentPage) doc.addPage();
@@ -353,7 +378,7 @@ function appendReportSection(doc: jsPDF, options: ReportSectionOptions, footers:
     drawStoreComparisonPage(doc, result, headerId, storeLabel, labels, locale);
   }
   doc.addPage();
-  drawOverallRankingsPage(doc, current, headerId, storeLabel, categoryLevel, labels, locale, pageTitle(`${labels.topSales} / ${labels.topQuantity}`));
+  drawOverallRankingsPage(doc, current, headerId, storeLabel, categoryLevel, labels, locale, rankingLimit, pageTitle(`${labels.topSales} / ${labels.topQuantity}`));
   const yearAgoNext = periodByKey(periods, 'yearAgoNext');
   if (yearAgoNext && (!scope || periodHasFocusRows(yearAgoNext))) {
     doc.addPage();
@@ -365,7 +390,7 @@ function appendReportSection(doc: jsPDF, options: ReportSectionOptions, footers:
     if (!period) continue;
     if (!scope || periodHasCategoryRows(period, 'amount')) {
       doc.addPage();
-      drawCategoryRankingPage(doc, period, headerId, storeLabel, categoryLevel, 'amount', labels, locale, pageTitle);
+      drawCategoryRankingPage(doc, period, headerId, storeLabel, categoryLevel, 'amount', labels, locale, rankingLimit, pageTitle);
     }
   }
   for (const key of ['current', 'previous', 'previous2']) {
@@ -373,7 +398,7 @@ function appendReportSection(doc: jsPDF, options: ReportSectionOptions, footers:
     if (!period) continue;
     if (!scope || periodHasCategoryRows(period, 'quantity')) {
       doc.addPage();
-      drawCategoryRankingPage(doc, period, headerId, storeLabel, categoryLevel, 'quantity', labels, locale, pageTitle);
+      drawCategoryRankingPage(doc, period, headerId, storeLabel, categoryLevel, 'quantity', labels, locale, rankingLimit, pageTitle);
     }
   }
 
@@ -804,10 +829,12 @@ function storePeriods(
   accumulator?: SalesReportAccumulator,
   uncategorized = 'Uncategorized',
   scope?: SalesReportScope,
+  rankingLimit: number = DEFAULT_RANKING_LIMIT,
 ): StorePeriod[] {
   const scopeCodes = itemCodeSet(scope);
+  const limit = normalizeRankingLimit(rankingLimit);
   return normalizedPeriods(result).flatMap((period) => {
-    const memo = accumulator ? storePeriodMemo(accumulator, period.key, uncategorized, period.key === 'yearAgoNext') : undefined;
+    const memo = accumulator ? storePeriodMemo(accumulator, period.key, uncategorized, period.key === 'yearAgoNext', limit) : undefined;
     const keep = (item: SalesAnalysisItem) => includeInSalesReport(item, filter, level)
       && (!scope || scopeCodes.has(item.articleCode.trim()));
     if (isAllStoresReport(storeId)) {
@@ -835,30 +862,33 @@ function storePeriodMemo(
   periodKey: string,
   uncategorized: string,
   includeFocus = false,
+  rankingLimit: number = DEFAULT_RANKING_LIMIT,
 ): (Pick<StorePeriod, 'amountGroups' | 'quantityGroups' | 'topAmount' | 'topQuantity' | 'focusGroups' | 'focusCatalog'>
   & { totals?: SalesAnalysisTotals }) | undefined {
   const period = accumulator.periods.get(periodKey);
   if (!period) return undefined;
+  const limit = normalizeRankingLimit(rankingLimit);
   return {
     ...(period.totals ? { totals: period.totals } : {}),
-    amountGroups: groupsFromAccumulator(period, 'amount', uncategorized),
-    quantityGroups: groupsFromAccumulator(period, 'quantity', uncategorized),
-    topAmount: sortRankedItems([...period.products.values()], 'amount').slice(0, 15),
-    topQuantity: sortRankedItems([...period.products.values()], 'quantity').slice(0, 15),
+    amountGroups: groupsFromAccumulator(period, 'amount', uncategorized, limit),
+    quantityGroups: groupsFromAccumulator(period, 'quantity', uncategorized, limit),
+    topAmount: sortRankedItems([...period.products.values()], 'amount').slice(0, limit),
+    topQuantity: sortRankedItems([...period.products.values()], 'quantity').slice(0, limit),
     focusCatalog: period.focusCatalog,
     focusGroups: period.focusGroups
       ?? (period.focusCatalog ? [] : (includeFocus ? focusGroupsFromAccumulator(period, accumulator.periods.get('current')) : undefined)),
   };
 }
 
-function groupsFromAccumulator(period: PeriodAccumulator, metric: Metric, uncategorized: string): CategoryGroup[] {
+function groupsFromAccumulator(period: PeriodAccumulator, metric: Metric, uncategorized: string, rankingLimit: number = DEFAULT_RANKING_LIMIT): CategoryGroup[] {
+  const limit = normalizeRankingLimit(rankingLimit);
   return [...period.categories.values()].map((group) => ({
     id: group.id,
     code: group.code,
     name: group.name || uncategorized,
     amount: group.amount,
     quantity: group.quantity,
-    items: sortRankedItems([...group.products.values()], metric).slice(0, 24),
+    items: sortRankedItems([...group.products.values()], metric).slice(0, limit),
   })).filter((group) => group.items.length > 0).sort((left, right) =>
     (metric === 'amount' ? right.amount - left.amount : right.quantity - left.quantity)
       || left.id.localeCompare(right.id, undefined, { numeric: true }),
@@ -1218,11 +1248,23 @@ function drawOverallRankingsPage(
   level: SalesReportCategoryLevel,
   labels: Labels,
   locale: Locale,
+  rankingLimit: number,
   title = `${labels.topSales} / ${labels.topQuantity}`,
 ): void {
-  drawPageHeader(doc, title, `${current.from} - ${current.to}`, storeId, storeLabel);
-  drawRankingPanel(doc, 10, 31, 136.5, 159, labels.topSales, current.topAmount ?? rankItems(current.items, 'amount').slice(0, 15), 'amount', level, labels, locale);
-  drawRankingPanel(doc, 150.5, 31, 136.5, 159, labels.topQuantity, current.topQuantity ?? rankItems(current.items, 'quantity').slice(0, 15), 'quantity', level, labels, locale);
+  const limit = normalizeRankingLimit(rankingLimit);
+  const compact = limit > 16;
+  const sales = (current.topAmount ?? rankItems(current.items, 'amount')).slice(0, limit);
+  const quantity = (current.topQuantity ?? rankItems(current.items, 'quantity')).slice(0, limit);
+  const capacity = rankingPanelCapacity(159, limit);
+  const pages = Math.max(1, Math.ceil(Math.max(sales.length, quantity.length, 1) / capacity));
+  for (let page = 0; page < pages; page += 1) {
+    if (page > 0) doc.addPage();
+    drawPageHeader(doc, title, `${current.from} - ${current.to}`, storeId, storeLabel);
+    const from = page * capacity;
+    const to = from + capacity;
+    drawRankingPanel(doc, 10, 31, 136.5, 159, labels.topSales, sales.slice(from, to), 'amount', level, labels, locale, compact, from);
+    drawRankingPanel(doc, 150.5, 31, 136.5, 159, labels.topQuantity, quantity.slice(from, to), 'quantity', level, labels, locale, compact, from);
+  }
 }
 
 function drawCategoryRankingPage(
@@ -1234,27 +1276,53 @@ function drawCategoryRankingPage(
   metric: Metric,
   labels: Labels,
   locale: Locale,
+  rankingLimit: number,
   titleFor: (title: string) => string = (title) => title,
 ): void {
   const title = titleFor(`${period.label} - ${metric === 'amount' ? labels.salesRanking : labels.quantityRanking}`);
+  const limit = normalizeRankingLimit(rankingLimit);
   const groups = metric === 'amount'
-    ? period.amountGroups ?? categoryGroups(period.items, level, metric, labels.uncategorized)
-    : period.quantityGroups ?? categoryGroups(period.items, level, metric, labels.uncategorized);
+    ? period.amountGroups ?? categoryGroups(period.items, level, metric, labels.uncategorized, limit)
+    : period.quantityGroups ?? categoryGroups(period.items, level, metric, labels.uncategorized, limit);
   if (groups.length === 0) {
     drawPageHeader(doc, title, `${period.from} - ${period.to}`, storeId, storeLabel);
     return;
   }
-  for (let offset = 0; offset < groups.length; offset += CATEGORY_CARDS_PER_PAGE) {
+  const cardsPerPage = categoryRankingCardsPerPage(limit);
+  const slotHeight = categoryRankingCardSlots(Math.min(cardsPerPage, 3))[0]?.height ?? CONTENT_HEIGHT;
+  const cards = expandCategoryRankingCards(groups, limit, categoryCardRowMetrics(slotHeight).limit);
+  for (let offset = 0; offset < cards.length; offset += cardsPerPage) {
     if (offset > 0) doc.addPage();
     drawPageHeader(doc, title, `${period.from} - ${period.to}`, storeId, storeLabel);
-    const pageGroups = groups.slice(offset, offset + CATEGORY_CARDS_PER_PAGE);
+    const pageGroups = cards.slice(offset, offset + cardsPerPage);
     const slots = categoryRankingCardSlots(pageGroups.length);
     pageGroups.forEach((group, index) => {
       const slot = slots[index];
       if (!slot) return;
-      drawCategoryCard(doc, slot.x, slot.y, slot.width, slot.height, group, metric, labels, locale);
+      drawCategoryCard(doc, slot.x, slot.y, slot.width, slot.height, group, metric, labels, locale, group.rankOffset ?? 0);
     });
   }
+}
+
+function expandCategoryRankingCards(
+  groups: CategoryGroup[],
+  rankingLimit: number,
+  rowsPerCard: number,
+): Array<CategoryGroup & { rankOffset: number }> {
+  const rowLimit = Math.max(1, rowsPerCard);
+  const cards: Array<CategoryGroup & { rankOffset: number }> = [];
+  for (const group of groups) {
+    const items = group.items.slice(0, rankingLimit);
+    if (items.length === 0) continue;
+    for (let offset = 0; offset < items.length; offset += rowLimit) {
+      cards.push({
+        ...group,
+        items: items.slice(offset, offset + rowLimit),
+        rankOffset: offset,
+      });
+    }
+  }
+  return cards;
 }
 
 export function categoryRankingCardSlots(count: number): Array<{ x: number; y: number; width: number; height: number }> {
@@ -1525,37 +1593,59 @@ function drawFocusList(
   });
 }
 
-function drawRankingPanel(doc: jsPDF, x: number, y: number, width: number, height: number, title: string, items: RankedItem[], metric: Metric, level: SalesReportCategoryLevel, labels: Labels, locale: Locale): void {
+function drawRankingPanel(
+  doc: jsPDF,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  title: string,
+  items: RankedItem[],
+  metric: Metric,
+  level: SalesReportCategoryLevel,
+  labels: Labels,
+  locale: Locale,
+  compact = false,
+  rankOffset = 0,
+): void {
   card(doc, x, y, width, height);
   panelTitle(doc, x, y, width, title);
   const itemsById = new Map(items.map((item) => [item.id, item]));
   const innerX = x + 4;
   const headerY = y + 19;
   const columns = [8, width - 79, 34, 29];
+  const firstOffset = compact ? 6 : 8;
+  const row = compact ? 5.35 : 8.55;
+  const barHeight = compact ? 4.8 : 7.7;
+  const barOffset = compact ? 3.2 : 4.7;
   drawTableHeader(doc, innerX, headerY, columns, ['#', labels.product, labels.amount, labels.quantity]);
   items.forEach((item, index) => {
-    const rowY = headerY + 8 + index * 8.55;
+    const rowY = headerY + firstOffset + index * row;
     if (index % 2 === 0) {
       setFill(doc, COLORS.surface);
-      doc.roundedRect(innerX, rowY - 4.7, width - 8, 7.7, 1.2, 1.2, 'F');
+      doc.roundedRect(innerX, rowY - barOffset, width - 8, barHeight, 1.2, 1.2, 'F');
     }
-    setText(doc, index < 3 ? COLORS.teal : COLORS.slate, 7, 'bold');
-    doc.text(String(index + 1), innerX + 2, rowY);
-    setText(doc, COLORS.ink, 6.8, 'bold');
-    doc.text(fitText(doc, item.name || item.code || '-', columns[1] - 3), innerX + columns[0] + 1, rowY - 1.1);
-    setText(doc, COLORS.slate, 5.3, 'normal');
-    const meta = [item.code, item.brand].filter(Boolean).join(' / ');
-    doc.text(fitText(doc, meta || categoryForRankedItem(itemsById.get(item.id), level, locale), columns[1] - 3), innerX + columns[0] + 1, rowY + 2.3);
+    const rank = rankOffset + index;
+    setText(doc, rank < 3 ? COLORS.teal : COLORS.slate, compact ? 6.2 : 7, 'bold');
+    doc.text(String(rank + 1), innerX + 2, rowY);
+    setText(doc, COLORS.ink, compact ? 6.2 : 6.8, 'bold');
+    doc.text(fitText(doc, item.name || item.code || '-', columns[1] - 3), innerX + columns[0] + 1, compact ? rowY : rowY - 1.1);
+    if (!compact) {
+      setText(doc, COLORS.slate, 5.3, 'normal');
+      const meta = [item.code, item.brand].filter(Boolean).join(' / ');
+      doc.text(fitText(doc, meta || categoryForRankedItem(itemsById.get(item.id), level, locale), columns[1] - 3), innerX + columns[0] + 1, rowY + 2.3);
+    }
     const amountX = innerX + columns[0] + columns[1] + columns[2] - 2;
     const quantityX = innerX + columns.reduce((sum, value) => sum + value, 0) - 2;
-    setText(doc, metric === 'amount' ? COLORS.ink : COLORS.slate, 6.8, metric === 'amount' ? 'bold' : 'normal');
-    doc.text(compactMoney(item.amount), amountX, rowY + 0.7, { align: 'right' });
-    setText(doc, metric === 'quantity' ? COLORS.ink : COLORS.slate, 6.8, metric === 'quantity' ? 'bold' : 'normal');
-    doc.text(formatQuantity(item.quantity), quantityX, rowY + 0.7, { align: 'right' });
+    const valueY = compact ? rowY : rowY + 0.7;
+    setText(doc, metric === 'amount' ? COLORS.ink : COLORS.slate, compact ? 6.2 : 6.8, metric === 'amount' ? 'bold' : 'normal');
+    doc.text(compactMoney(item.amount), amountX, valueY, { align: 'right' });
+    setText(doc, metric === 'quantity' ? COLORS.ink : COLORS.slate, compact ? 6.2 : 6.8, metric === 'quantity' ? 'bold' : 'normal');
+    doc.text(formatQuantity(item.quantity), quantityX, valueY, { align: 'right' });
   });
 }
 
-function drawCategoryCard(doc: jsPDF, x: number, y: number, width: number, height: number, group: CategoryGroup, metric: Metric, labels: Labels, locale: Locale): void {
+function drawCategoryCard(doc: jsPDF, x: number, y: number, width: number, height: number, group: CategoryGroup, metric: Metric, labels: Labels, locale: Locale, rankOffset = 0): void {
   card(doc, x, y, width, height);
   setFill(doc, COLORS.tealSoft);
   doc.roundedRect(x, y, width, 11, 2, 2, 'F');
@@ -1578,12 +1668,13 @@ function drawCategoryCard(doc: jsPDF, x: number, y: number, width: number, heigh
 
   group.items.slice(0, metrics.limit).forEach((item, index) => {
     const rowY = headerY + 5.2 + index * metrics.row;
+    const rank = rankOffset + index;
     if (index % 2 === 0) {
       setFill(doc, COLORS.surface);
       doc.rect(innerX, rowY - 2.5, width - 5, metrics.row - 0.17, 'F');
     }
-    setText(doc, index < 3 ? COLORS.teal : COLORS.slate, 5.5, 'bold');
-    doc.text(String(index + 1), innerX + 1, rowY);
+    setText(doc, rank < 3 ? COLORS.teal : COLORS.slate, 5.5, 'bold');
+    doc.text(String(rank + 1), innerX + 1, rowY);
     setText(doc, COLORS.ink, metrics.nameSize, 'normal');
     doc.text(fitText(doc, item.name || item.code || '-', columns[1] - 2), innerX + columns[0] + 1, rowY);
     const primary = metric === 'amount' ? compactMoney(item.amount) : formatQuantity(item.quantity);
@@ -1664,7 +1755,8 @@ function rankItems(items: SalesAnalysisItem[], metric: Metric): RankedItem[] {
   );
 }
 
-function categoryGroups(items: SalesAnalysisItem[], level: SalesReportCategoryLevel, metric: Metric, uncategorized: string): CategoryGroup[] {
+function categoryGroups(items: SalesAnalysisItem[], level: SalesReportCategoryLevel, metric: Metric, uncategorized: string, rankingLimit: number = DEFAULT_RANKING_LIMIT): CategoryGroup[] {
+  const limit = normalizeRankingLimit(rankingLimit);
   const grouped = new Map<string, { code: string; name: string; amount: number; quantity: number; source: SalesAnalysisItem[] }>();
   for (const item of items) {
     const code = categoryCode(item, level);
@@ -1678,7 +1770,7 @@ function categoryGroups(items: SalesAnalysisItem[], level: SalesReportCategoryLe
   }
   return [...grouped.entries()].map(([id, group]) => ({
     id, code: group.code, name: group.name, amount: group.amount, quantity: group.quantity,
-    items: rankItems(group.source, metric).slice(0, 24),
+    items: rankItems(group.source, metric).slice(0, limit),
   })).filter((group) => group.items.length > 0).sort((left, right) =>
     (metric === 'amount' ? right.amount - left.amount : right.quantity - left.quantity)
       || left.id.localeCompare(right.id, undefined, { numeric: true }),
@@ -1710,7 +1802,8 @@ function categoryForRankedItem(_item: RankedItem | undefined, _level: SalesRepor
   return '';
 }
 
-function reportLabels(locale: Locale): Labels {
+function reportLabels(locale: Locale, rankingLimit: number = DEFAULT_RANKING_LIMIT): Labels {
+  const limit = normalizeRankingLimit(rankingLimit);
   if (locale === 'en') {
     return {
       title: 'Store sales analysis', summary: 'Sales summary', period: 'Period', generated: 'Generated',
@@ -1720,7 +1813,7 @@ function reportLabels(locale: Locale): Labels {
       focusTitle: 'Watch next', focusHealth: 'Health', focusSkin: 'Skin', focusPC: 'Personal care',
       focusSales: 'Top 10 by sales', focusQuantity: 'Top 10 by quantity',
       categoryPerformance: 'Category performance', category: 'Category',
-      topSales: 'Top 15 by sales', topQuantity: 'Top 15 by quantity', salesRanking: 'Category sales ranking',
+      topSales: `Top ${limit} by sales`, topQuantity: `Top ${limit} by quantity`, salesRanking: 'Category sales ranking',
       quantityRanking: 'Category quantity ranking', product: 'Product', amount: 'Sales', quantity: 'Qty', uncategorized: 'Uncategorized',
       allStores: 'All stores', localTotal: 'Local total', touristTotal: 'Tourist total',
       storeComparison: 'Store comparison', store: 'Store',
@@ -1737,7 +1830,7 @@ function reportLabels(locale: Locale): Labels {
     focusTitle: '接下來關注', focusHealth: '保健', focusSkin: '護膚', focusPC: '個護',
     focusSales: '銷售額 Top 10', focusQuantity: '銷量 Top 10',
     categoryPerformance: '分類表現', category: '分類',
-    topSales: '銷售額 Top 15', topQuantity: '銷量 Top 15', salesRanking: '分類商品銷售排行',
+    topSales: `銷售額 Top ${limit}`, topQuantity: `銷量 Top ${limit}`, salesRanking: '分類商品銷售排行',
     quantityRanking: '分類商品銷量排行', product: '商品', amount: '銷售額', quantity: '銷量', uncategorized: '未分類',
     allStores: '全部門店', localTotal: '本地合計', touristTotal: '旅客合計',
     storeComparison: '門店比較', store: '門店',

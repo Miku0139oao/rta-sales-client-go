@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { backend } from '../backend';
   import { errorMessage } from '../i18n';
   import { isWebRuntime } from '../runtime';
@@ -15,6 +15,15 @@
     unpackSalesAnalysisItems,
   } from '../salesAnalysisItems';
   import { modal } from '../modal';
+  import AnalysisPresetsDialog from './AnalysisPresetsDialog.svelte';
+  import AnalysisDataTable from './AnalysisDataTable.svelte';
+  import AnalysisDataActions from './AnalysisDataActions.svelte';
+  import ProductDetailsDialog from './ProductDetailsDialog.svelte';
+  import AnalysisInsights from './AnalysisInsights.svelte';
+  import { buildSalesInsights, salesInsightsTable } from '../salesInsights';
+  import { buildAnalysisTables } from '../analysisTableViews';
+  import type { TableSort } from '../analysisTable';
+  import { ANALYSIS_PRESETS_KEY, loadAnalysisPresets, analysisPresetShortcuts, markAnalysisPresetUsed, normalizePresetDraft, resolvePresetQuery, type AnalysisPreset, type AnalysisPresetDraft, type PresetFilters } from '../analysisPresets';
   import {
     defaultSalesReportFilter,
     includeInSalesReport,
@@ -22,6 +31,13 @@
     type SalesReportFacets,
     type SalesReportFilter,
   } from '../salesReportItems';
+  import {
+    RANKING_LIMIT_CHOICES,
+    RANKING_LIMIT_MAX,
+    RANKING_LIMIT_MIN,
+    isPresetRankingLimit,
+    normalizeRankingLimit,
+  } from '../settings';
   import { weeklySegmentRows } from '../storeSegment';
   import { alignRangeComparisonPeriods } from '../periodAlignment';
   import {
@@ -56,12 +72,21 @@
   export let t: Translator;
   export let settings: AppSettings;
   export let onBusyChange: (busy: boolean) => void = () => undefined;
+  export let onSettingsChange: (next: AppSettings) => void = () => undefined;
   export let onGoToAccounts: () => void = () => undefined;
 
   type CategoryKey = 'category1' | 'category2' | 'category3' | 'category4' | 'category5';
   type FacetSelections = Record<CategoryKey, Set<string>>;
   type ReportView = 'overview' | 'weekly' | 'focus' | 'categories' | 'products' | 'stores';
   type PeriodMode = 'month' | 'range';
+  type QueryDraft = {
+    profileId: string; periodMode: PeriodMode; month: string; from: string; to: string;
+    weekCompare: boolean; storeIds: string[]; stores: SalesAnalysisStore[];
+  };
+  type ItemHydrationRun = {
+    operationId: string; generation: number; keys: Set<string>;
+    task?: Promise<SalesAnalysisPeriodResult[]>;
+  };
   type ValueFormat = 'money' | 'number';
   type FilteredTotals = SalesAnalysisTotals & { skuCount: number; basketValue?: number };
   type PerformanceRow = { label: string; current?: number; previous?: number; yearAgo?: number; format: ValueFormat };
@@ -161,7 +186,36 @@
   let pageRows: SalesAnalysisItem[] = [];
   let loadedSimulateCount: number | undefined;
   let hydrateGeneration = 0;
+  let hydrationRun: ItemHydrationRun | undefined;
+  let hydrationOperationId = '';
+  let hydrationFailures: Record<string, string> = {};
+  let hydratingPeriod = '';
   let storeLoadGeneration = 0;
+  let queryOpen = false;
+  let lastRunKey = '';
+  let appliedQuery: QueryDraft | undefined;
+  let tableSorts: Record<string, TableSort> = {};
+  let exportingData = false;
+  let selectedProduct: { code: string; name: string; periodKey: string } | undefined;
+  let presetsOpen = false;
+  let presetSaveDraft: AnalysisPresetDraft | undefined;
+  let savedPresets: AnalysisPreset[] = [];
+  let shortcutBusy = false;
+  let shortcutNotice = '';
+  $: shortcutGroups = analysisPresetShortcuts(savedPresets);
+  let stagedPreset: { id: string; name: string; filters: PresetFilters } | undefined;
+  let beforePresetQuery: QueryDraft | undefined;
+  let presetWarning = '';
+  let reportAccount = '';
+  let filtersOpen = false;
+  let facetSearch = '';
+  let reportWorkspace: HTMLDivElement | undefined;
+  let reportNavigation: HTMLDivElement | undefined;
+  let reportFilter: HTMLElement | undefined;
+  let productSearch: HTMLInputElement | undefined;
+  let rankingFocused = false;
+  let rankingInput = String(settings.rankingLimit);
+  const prefetchPeriodKeys = ['current', 'previous', 'previous2', 'yearAgo', 'yearAgoNext'];
 
   $: if (!loadingProfiles && profileId && loadedSimulateCount !== settings.simulateStoreCount) {
     loadedSimulateCount = settings.simulateStoreCount;
@@ -169,16 +223,41 @@
   }
   $: busy = loadingProfiles || loadingStores || running || Boolean(result?.pending);
   $: visibleStores = filterStores(stores, storeQuery);
-  $: onBusyChange(running || Boolean(result?.pending));
+  $: onBusyChange(running || exportingData || Boolean(result?.pending));
   $: rangeInvalid = periodMode === 'range' && Boolean(from && to && from > to);
   $: reportPeriods = normalizePeriods(result);
   $: currentPeriod = periodByKey(reportPeriods, 'current') ?? reportPeriods[0];
-  $: neededPeriodKeys = periodKeysForAnalysisView(
-    activeView,
-    [salesRankingKey, quantityRankingKey],
-    groupScopeActive || filtersActive(selections, search),
+  $: currentReady = Boolean(
+    currentPeriod && ((currentPeriod.items?.length ?? 0) > 0 || (currentPeriod.topAmount?.length ?? 0) > 0 || (currentPeriod.itemCount ?? 0) > 0),
   );
-  $: if (result && !exportingPDF) void ensurePeriodItems(neededPeriodKeys);
+  $: draftQueryKey = JSON.stringify({
+    profileId, periodMode,
+    period: periodMode === 'month' ? month : `${from}:${to}:${weekCompare}`,
+    storeIds: [...selectedStoreIds].sort(),
+  });
+  $: queryDirty = Boolean(result && lastRunKey && (draftQueryKey !== lastRunKey || stagedPreset));
+  $: activeFilterCount = facets.reduce((count, facet) => count + selections[facet.key].size, 0)
+    + (search.trim() ? 1 : 0) + (selectedGroupId ? 1 : 0);
+  $: reportTabs = [
+    { key: 'overview', label: t('analysis.overview'), icon: 'space_dashboard' },
+    { key: 'weekly', label: t('analysis.weekly'), icon: 'calendar_view_week' },
+    { key: 'focus', label: t('analysis.focus'), icon: 'upcoming' },
+    { key: 'categories', label: t('analysis.categories'), icon: 'account_tree' },
+    { key: 'products', label: t('analysis.products'), icon: 'inventory_2' },
+    { key: 'stores', label: t('analysis.stores'), icon: 'storefront' },
+  ].filter((tab) => !groupScopeActive || tab.key !== 'weekly');
+  $: neededPeriodKeys = result
+    ? prefetchPeriodKeys.filter((key) => (result?.periods ?? []).some((period) => period.key === key))
+    : periodKeysForAnalysisView(
+      activeView,
+      [salesRankingKey, quantityRankingKey],
+      groupScopeActive || filtersActive(selections, search),
+    );
+  $: if (result && !exportingPDF && !running) void ensurePeriodItems(neededPeriodKeys);
+  $: currentDetailsMissing = periodNeedsItemHydration(currentPeriod);
+  $: itemFailureRows = Object.entries(hydrationFailures).map(([key, message]) => ({
+    key, label: periodByKey(reportPeriods, key)?.label ?? key, message,
+  }));
   $: selectedGroup = manCodeGroups.find((group) => group.id === selectedGroupId);
   $: selectedGroupCodes = new Set((selectedGroup?.codes ?? []).map((code) => code.trim()).filter(Boolean));
   $: groupScopeActive = Boolean(selectedGroup);
@@ -187,6 +266,12 @@
     return !groupScopeActive || selectedGroupCodes.has(item.articleCode.trim());
   });
   $: productScopeActive = groupScopeActive || filtersActive(selections, search);
+  $: insightData = activeView === 'overview' ? buildSalesInsights(currentPeriod, periodByKey(reportPeriods, 'previous'),
+    (item) => matchesFilters(item, selections, search) && (!groupScopeActive || selectedGroupCodes.has(item.articleCode.trim()))) : undefined;
+  $: insightTable = insightData?.entries.length ? salesInsightsTable(insightData, t) : undefined;
+  $: viewItemKeys = periodKeysForAnalysisView(activeView, [salesRankingKey, quantityRankingKey], productScopeActive);
+  $: viewMissingPeriods = reportPeriods.filter((period) => viewItemKeys.includes(period.key) && periodNeedsItemHydration(period));
+  $: scopedViewWaiting = (productScopeActive || activeView === 'products') && viewMissingPeriods.length > 0;
   $: facetOptionMap = listFacetOptionMap(currentPeriod, selections, selectedGroupCodes, groupScopeActive, settings.locale);
   $: currentTotals = totalsForPeriod(currentPeriod, selections, search, selectedGroupCodes, groupScopeActive);
   $: previousTotals = totalsForPeriod(periodByKey(reportPeriods, 'previous'), selections, search, selectedGroupCodes, groupScopeActive);
@@ -198,18 +283,18 @@
     periodByKey(reportPeriods, 'yearAgo') ? yearAgoTotals : undefined,
   );
   $: categoryRows = buildCategoryComparison(reportPeriods, groupLevel, selections, search, selectedGroupCodes, groupScopeActive);
-  $: topSales = productScopeActive || (currentPeriod?.items?.length ?? 0) > 0
-    ? buildTopItems(filteredItems, 'amount').slice(0, 15)
-    : rankedToTopItems(currentPeriod?.topAmount);
-  $: topQuantity = productScopeActive || (currentPeriod?.items?.length ?? 0) > 0
-    ? buildTopItems(filteredItems, 'quantity').slice(0, 15)
-    : rankedToTopItems(currentPeriod?.topQuantity);
+  $: topSales = (productScopeActive || (currentPeriod?.items?.length ?? 0) > 0
+    ? buildTopItems(filteredItems, 'amount')
+    : rankedToTopItems(currentPeriod?.topAmount)).slice(0, settings.rankingLimit);
+  $: topQuantity = (productScopeActive || (currentPeriod?.items?.length ?? 0) > 0
+    ? buildTopItems(filteredItems, 'quantity')
+    : rankedToTopItems(currentPeriod?.topQuantity)).slice(0, settings.rankingLimit);
   $: salesRankingPeriods = reportPeriods.filter((period) => ['current', 'yearAgo', 'yearAgoNext'].includes(period.key));
   $: quantityRankingPeriods = reportPeriods.filter((period) => ['current', 'previous', 'previous2'].includes(period.key));
   $: salesRankingPeriod = periodByKey(salesRankingPeriods, salesRankingKey) ?? salesRankingPeriods[0];
   $: quantityRankingPeriod = periodByKey(quantityRankingPeriods, quantityRankingKey) ?? quantityRankingPeriods[0];
-  $: salesRankingGroups = buildCategoryRankings(salesRankingPeriod, groupLevel, 'amount', selections, search, selectedGroupCodes, groupScopeActive);
-  $: quantityRankingGroups = buildCategoryRankings(quantityRankingPeriod, groupLevel, 'quantity', selections, search, selectedGroupCodes, groupScopeActive);
+  $: salesRankingGroups = buildCategoryRankings(salesRankingPeriod, groupLevel, 'amount', selections, search, selectedGroupCodes, groupScopeActive, settings.rankingLimit);
+  $: quantityRankingGroups = buildCategoryRankings(quantityRankingPeriod, groupLevel, 'quantity', selections, search, selectedGroupCodes, groupScopeActive, settings.rankingLimit);
   $: storeRows = buildStoreRows(reportPeriods, selections, search, selectedGroupCodes, groupScopeActive);
   $: focusPeriod = periodByKey(reportPeriods, 'yearAgoNext');
   $: focusGroups = focusGroupsForScope(
@@ -218,6 +303,24 @@
   $: pageCount = Math.max(1, Math.ceil(filteredItems.length / pageSize));
   $: if (page > pageCount) page = pageCount;
   $: pageRows = filteredItems.slice((page - 1) * pageSize, page * pageSize);
+  $: dataTables = buildAnalysisTables({ items: filteredItems, performance: performanceRows, categories: categoryRows, stores: storeRows,
+    periods: reportPeriods, week: weeklyWeek, weekAligned: weeklyUsesAlignedComparison, topSales, topQuantity,
+    salesGroups: salesRankingGroups, quantityGroups: quantityRankingGroups, focus: focusGroups, insights: insightTable }, t, settings.locale, tableSorts);
+  $: dataContext = [t('analysis.querySummary', { account: reportAccount || t('analysis.savedReport'), period: result ? `${result.from} — ${result.to}` : '', count: result?.selectedStores ?? 0 }),
+    'HKD', ...reportPeriods.map((period) => `${period.label}: ${period.from} — ${period.to}${period.complete ? '' : ` (${t('data.partial')})`}`),
+    ...facets.flatMap(({ key, label }) => selections[key].size ? [`${t(label)}: ${[...selections[key]].join(', ')}`] : []),
+    ...(search ? [`${t('analysis.search')}: ${search}`] : []), ...(selectedGroup ? [`${t('analysis.promoterGroup')}: ${selectedGroup.name}`] : []),
+    ...(result && (!result.complete || result.pending) ? [t('data.partial')] : []),
+    ...(activeView === 'overview' && insightData ? [t('insights.method'), t('insights.scope'), ...(insightData.reason !== 'ready' ? [t(`insights.reason.${insightData.reason}`)] : [])] : []),
+    ...(activeView === 'weekly' && weeklyWeek ? [`${t('analysis.weekly')}: ${weeklyWeek.from} — ${weeklyWeek.to}`, t('data.weeklyScope')] : []),
+    ...(activeView === 'categories' ? [`${t('analysis.categorySalesRanking')}: ${salesRankingPeriod?.label ?? ''}`, `${t('analysis.monthlyQuantityRanking')}: ${quantityRankingPeriod?.label ?? ''}`] : [])];
+
+  function sortData(id: string, sort: TableSort) { tableSorts = { ...tableSorts, [id]: sort }; }
+  function openProduct(code: string, name: string, periodKey = 'current') {
+    if (!code || exportingData) return;
+    selectedProduct = { code, name, periodKey };
+    void ensurePeriodItems(reportPeriods.map((period) => period.key));
+  }
   $: weeklyPeriods = result?.weeks ?? [];
   $: weeklyWeek = weeklyPeriods.find((week) => `${week.from}:${week.to}` === weeklyKey) ?? weeklyPeriods[0];
   $: weeklyUsesAlignedComparison = hasWeekAlignedComparison(reportPeriods);
@@ -229,6 +332,9 @@
   $: exportFilesCount = (exportTargetTotal, exportPDFEnabled, exportAIEnabled, exportGroupDetail, exportGroupIds, manCodeGroups, exportOutputCount());
 
   onMount(() => {
+    reloadShortcuts();
+    const syncPresets = (event: StorageEvent) => { if (event.key === null || event.key === ANALYSIS_PRESETS_KEY) reloadShortcuts(); };
+    window.addEventListener('storage', syncPresets);
     const unsubscribe = backend.onSalesAnalysisProgress((next) => {
       progress = next;
       operationId = next.operationId;
@@ -241,11 +347,16 @@
       if (!target?.closest('.facet-menu')) openFacet = '';
     };
     document.addEventListener('pointerdown', closeFacetMenus);
+    document.addEventListener('keydown', closeFacetOnEscape);
     void initialize();
     return () => {
+      window.removeEventListener('storage', syncPresets);
       unsubscribe();
       unsubscribeUpdate();
       document.removeEventListener('pointerdown', closeFacetMenus);
+      document.removeEventListener('keydown', closeFacetOnEscape);
+      resetHydration();
+      ++storeLoadGeneration;
     };
   });
 
@@ -270,6 +381,17 @@
         }
       }
       if (profileId) await loadStores({ keepResult: Boolean(result) });
+      if (result) {
+        const current = normalizePeriods(result).find((period) => period.key === 'current');
+        periodMode = 'range';
+        from = current?.from ?? result.from;
+        to = current?.to ?? result.to;
+        selectedStoreIds = new Set(result.stores.map((store) => store.businessId));
+        lastRunKey = currentQueryKey();
+        appliedQuery = captureQuery();
+        // Saved reports do not carry an account identity. Never attribute them to the first account.
+        reportAccount = '';
+      }
     } catch (caught) {
       error = errorMessage(settings.locale, caught);
     } finally {
@@ -277,12 +399,117 @@
     }
   }
 
+  function captureQuery(): QueryDraft {
+    return { profileId, periodMode, month, from, to, weekCompare,
+      storeIds: [...selectedStoreIds], stores: stores.map((store) => ({ ...store })) };
+  }
+
+  function restoreQuery() {
+    const saved = appliedQuery ?? beforePresetQuery;
+    if (!saved || running || exportingPDF) return;
+    // An account switch may still be loading. Ignore that reply after restoring the draft.
+    ++storeLoadGeneration;
+    loadingStores = false;
+    ({ profileId, periodMode, month, from, to, weekCompare } = saved);
+    stores = saved.stores.map((store) => ({ ...store }));
+    selectedStoreIds = new Set(saved.storeIds);
+    stagedPreset = undefined;
+    beforePresetQuery = undefined;
+    presetWarning = '';
+    storeQuery = '';
+    error = '';
+  }
+
+  function reloadShortcuts() {
+    try { savedPresets = loadAnalysisPresets(); shortcutNotice = ''; }
+    catch { savedPresets = []; shortcutNotice = t('presets.readError'); }
+  }
+  function closePresets() { presetsOpen = false; reloadShortcuts(); }
+  async function quickApplyPreset(id: string) {
+    if (shortcutBusy || loadingProfiles || loadingStores || running || exportingPDF || exportingData) return;
+    shortcutBusy = true; shortcutNotice = '';
+    try {
+      // Re-read before applying so deleted/changed entries in another window are not reused.
+      savedPresets = loadAnalysisPresets();
+      const preset = savedPresets.find((preset) => preset.id === id);
+      shortcutNotice = preset ? (await stagePreset(preset) ?? '') : t('presets.applyError');
+    } catch { shortcutNotice = t('presets.readError'); }
+    finally { shortcutBusy = false; }
+  }
+  function openPresets() {
+    if (loadingProfiles || loadingStores || running || exportingPDF || exportingData) return;
+    try {
+      const profile = profiles.find((profile) => profile.id === profileId);
+      if (!profile) throw new Error('No account');
+      presetSaveDraft = normalizePresetDraft({
+        query: { ...captureQuery(), profileName: profile.displayName, monthMode: 'fixed',
+          // Inactive date fields should not prevent saving a valid period.
+          ...(periodMode === 'month' ? { from: `${month}-01`, to: `${month}-01` } : { month: from.slice(0, 7) }) },
+        filters: stagedPreset?.filters ?? { search, groupId: selectedGroupId, groupLevel,
+          categories: Object.fromEntries(facets.map(({ key }) => [key, [...selections[key]]])) },
+      });
+    } catch { presetSaveDraft = undefined; }
+    presetsOpen = true;
+  }
+
+  async function stagePreset(preset: AnalysisPreset): Promise<string | undefined> {
+    if (loadingProfiles || loadingStores || running || exportingPDF || exportingData) return t('presets.applyError');
+    if (!profiles.some((profile) => profile.id === preset.query.profileId)) return t('presets.accountMissing');
+    if (preset.filters.groupId && !manCodeGroups.some((group) => group.id === preset.filters.groupId)) return t('presets.groupMissing');
+    const generation = ++storeLoadGeneration;
+    loadingStores = true;
+    try {
+      const query = resolvePresetQuery(preset.query);
+      const listed = await backend.listSalesAnalysisStores(query.profileId, settings.simulateStoreCount);
+      if (generation !== storeLoadGeneration) return t('presets.applyError');
+      const available = new Set(listed.map((store) => store.businessId));
+      const validIds = query.storeIds.filter((id) => available.has(id));
+      if (!validIds.length) return t('presets.noStores');
+      const missing = query.storeIds.filter((id) => !available.has(id));
+      beforePresetQuery ??= captureQuery();
+      ({ profileId, periodMode, month, from, to, weekCompare } = query);
+      stores = listed;
+      selectedStoreIds = new Set(validIds);
+      storeQuery = '';
+      stagedPreset = { id: preset.id, name: preset.name, filters: normalizePresetDraft(preset).filters };
+      presetWarning = missing.length ? t('presets.skippedStores', { count: missing.length, ids: missing.join(', ') }) : '';
+      queryOpen = true;
+      error = '';
+      return undefined;
+    } catch { return t('presets.applyError'); }
+    finally { if (generation === storeLoadGeneration) loadingStores = false; }
+  }
+
+  function finishPresetApplication(submitted: typeof stagedPreset) {
+    if (submitted) {
+      search = submitted.filters.search;
+      selectedGroupId = submitted.filters.groupId;
+      groupLevel = submitted.filters.groupLevel;
+      selections = Object.fromEntries(facets.map(({ key }) => [key, new Set(submitted.filters.categories[key])])) as FacetSelections;
+      try { savedPresets = markAnalysisPresetUsed(submitted.id); shortcutNotice = ''; }
+      catch { shortcutNotice = t('presets.historyWriteError'); }
+      page = 1;
+    }
+    stagedPreset = undefined;
+    beforePresetQuery = undefined;
+    presetWarning = '';
+  }
+
+  function currentQueryKey(): string {
+    return JSON.stringify({
+      profileId,
+      periodMode,
+      period: periodMode === 'month' ? month : `${from}:${to}:${weekCompare}`,
+      storeIds: [...selectedStoreIds].sort(),
+    });
+  }
+
   async function loadStores(options: { keepResult?: boolean } = {}) {
     if (!profileId) return;
     const generation = ++storeLoadGeneration;
     loadingStores = true;
     error = '';
-    if (!options.keepResult) void discardResult();
+    if (!options.keepResult && !result) void discardResult();
     storeQuery = '';
     stores = [];
     selectedStoreIds = new Set<string>();
@@ -299,11 +526,75 @@
     }
   }
 
-  async function changeQuery() {
+  function changeQuery() {
     dismissExportNotice();
-    resetFilters();
-    await discardResult();
-    if (profileId) await loadStores({ keepResult: true });
+    queryOpen = !queryOpen;
+  }
+
+  async function selectReport(view: ReportView) {
+    activeView = view;
+    openFacet = '';
+    await tick();
+    const main = reportWorkspace?.closest('main');
+    if (!main || !reportWorkspace || !reportNavigation) return;
+    const panelTop = reportWorkspace.getBoundingClientRect().top;
+    const navBottom = reportNavigation.getBoundingClientRect().bottom;
+    // Switching views from deep in a long ranking should start at the new report, not mid-list.
+    if (panelTop < navBottom) main.scrollTop += panelTop - navBottom - 16;
+  }
+
+  function returnToFilters() {
+    const main = reportFilter?.closest('main');
+    if (main && reportFilter && reportNavigation) {
+      main.scrollTop += reportFilter.getBoundingClientRect().top - reportNavigation.getBoundingClientRect().bottom - 12;
+    }
+    productSearch?.focus({ preventScroll: true });
+  }
+
+  function navigateReport(event: KeyboardEvent) {
+    const buttons = [...(event.currentTarget as HTMLElement).parentElement!.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    const index = buttons.indexOf(event.target as HTMLButtonElement);
+    if (index < 0) return;
+    const next = event.key === 'ArrowRight' ? (index + 1) % buttons.length
+      : event.key === 'ArrowLeft' ? (index + buttons.length - 1) % buttons.length
+      : event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    buttons[next]?.click();
+    buttons[next]?.focus();
+  }
+
+  function clearScreenFilters() {
+    selections = emptySelections();
+    search = '';
+    selectedGroupId = '';
+    openFacet = '';
+    facetSearch = '';
+    page = 1;
+  }
+
+  function closeFacetOnEscape(event: KeyboardEvent) {
+    if (event.key !== 'Escape' || !openFacet) return;
+    const menu = (event.target as HTMLElement | null)?.closest('.facet-menu');
+    if (!menu) return;
+    event.preventDefault();
+    openFacet = '';
+    menu.querySelector('summary')?.focus();
+  }
+
+  $: if (!rankingFocused) rankingInput = String(settings.rankingLimit);
+
+  function setRankingLimit(limit: number) {
+    const next = normalizeRankingLimit(limit);
+    if (next === settings.rankingLimit) return;
+    onSettingsChange({ ...settings, rankingLimit: next });
+  }
+
+  function commitRankingInput() {
+    rankingFocused = false;
+    const value = rankingInput.trim() ? Number(rankingInput) : settings.rankingLimit;
+    setRankingLimit(value);
+    rankingInput = String(normalizeRankingLimit(value));
   }
 
   function toggleStore(storeId: string) {
@@ -311,22 +602,25 @@
     if (next.has(storeId)) next.delete(storeId);
     else next.add(storeId);
     selectedStoreIds = next;
-    void discardResult();
   }
 
   function selectAllStores() {
-    selectedStoreIds = new Set(stores.map((store) => store.businessId));
-    void discardResult();
+    selectedStoreIds = new Set([...selectedStoreIds, ...visibleStores.map((store) => store.businessId)]);
   }
 
   function clearStores() {
-    selectedStoreIds = new Set<string>();
-    void discardResult();
+    const visibleIds = new Set(visibleStores.map((store) => store.businessId));
+    selectedStoreIds = new Set([...selectedStoreIds].filter((id) => !visibleIds.has(id)));
   }
 
   async function discardResult() {
+    selectedProduct = undefined;
+    resetHydration();
     const operationId = result?.operationId;
     result = undefined;
+    lastRunKey = '';
+    appliedQuery = undefined;
+    queryOpen = false;
     if (!operationId) return;
     try {
       await backend.clearSalesAnalysis(operationId);
@@ -342,6 +636,10 @@
       return;
     }
     const stores = previewStoreIds();
+    const submittedKey = currentQueryKey();
+    const submittedAccount = profiles.find((profile) => profile.id === profileId)?.displayName ?? '';
+    const submittedQuery = captureQuery();
+    const submittedPreset = stagedPreset;
     running = true;
     cancelling = false;
     error = '';
@@ -360,6 +658,11 @@
       result = summary;
       operationId = summary.operationId;
       activeView = 'overview';
+      queryOpen = false;
+      lastRunKey = submittedKey;
+      appliedQuery = submittedQuery;
+      reportAccount = submittedAccount;
+      finishPresetApplication(submittedPreset);
     } catch (caught) {
       error = errorMessage(settings.locale, caught);
     } finally {
@@ -377,11 +680,16 @@
   async function runAnalysis() {
     if (!profileId || selectedStoreIds.size === 0 || rangeInvalid) return;
     const periods = buildPeriodRequests();
-    if (periods.length === 0) return;
+    if (running || exportingData || loadingStores || periods.length === 0) return;
+    const submittedKey = currentQueryKey();
+    const submittedAccount = profiles.find((profile) => profile.id === profileId)?.displayName ?? profileId;
+    const submittedQuery = captureQuery();
+    const submittedPreset = stagedPreset;
+    // Lock the draft before awaiting cancellation; a rapid second click must not start another run.
+    running = true;
     if (operationId) {
       try { await backend.cancelSalesAnalysis(operationId); } catch { /* previous run may already be finished */ }
     }
-    running = true;
     cancelling = false;
     error = '';
     void discardResult();
@@ -399,6 +707,11 @@
       result = summary;
       operationId = summary.operationId;
       activeView = 'overview';
+      queryOpen = false;
+      lastRunKey = submittedKey;
+      appliedQuery = submittedQuery;
+      reportAccount = submittedAccount;
+      finishPresetApplication(submittedPreset);
     } catch (caught) {
       error = errorMessage(settings.locale, caught);
     } finally {
@@ -407,45 +720,78 @@
     }
   }
 
-  async function ensurePeriodItems(keys: string[], options: { retain?: boolean } = {}): Promise<SalesAnalysisPeriodResult[]> {
+  function resetHydration() {
+    ++hydrateGeneration;
+    hydrationRun = undefined;
+    hydrationOperationId = '';
+    hydrationFailures = {};
+    hydratingPeriod = '';
+    loadingItems = false;
+  }
+
+  function ensurePeriodItems(keys: string[]): Promise<SalesAnalysisPeriodResult[]> {
     const summary = result;
-    if (!summary?.periods?.length) return summary?.periods ?? [];
-    const generation = ++hydrateGeneration;
-    const operationId = summary.operationId;
-    const keep = new Set(keys.filter((key) => summary.periods!.some((period) => period.key === key)));
-    let periods = summary.periods;
-    let changed = false;
-    const stillCurrent = () => generation === hydrateGeneration && result?.operationId === operationId;
-    if (!options.retain) {
-      const trimmed = periods.map((period) => {
-        if (keep.has(period.key) || period.key === 'current' || !period.items?.length) return period;
-        changed = true;
-        return { ...period, items: undefined, itemCount: period.itemCount || period.items.length };
-      });
-      if (changed) periods = trimmed;
+    if (!summary?.periods?.length || !summary.operationId) return Promise.resolve(summary?.periods ?? []);
+    if (hydrationOperationId !== summary.operationId) {
+      resetHydration();
+      hydrationOperationId = summary.operationId;
     }
-    for (const key of keep) {
-      const period = periods.find((candidate) => candidate.key === key);
-      if (!period || !periodNeedsItemHydration(period)) continue;
-      if (!operationId) continue;
-      loadingItems = true;
-      try {
-        const packed = await backend.getSalesAnalysisItems({ operationId, periodKey: key });
-        if (!stillCurrent()) return periods;
-        const storeList = (period.stores?.length ? period.stores : summary.stores) ?? [];
-        const items = unpackSalesAnalysisItems(packed, storeList);
-        if (items.length === 0 && (period.itemCount ?? 0) > 0) continue;
-        periods = periods.map((candidate) => candidate.key === key ? { ...candidate, items, itemCount: period.itemCount || items.length } : candidate);
-        changed = true;
-      } catch (caught) {
-        if (!stillCurrent()) return periods;
-        if (options.retain) throw caught;
-        error = errorMessage(settings.locale, caught);
+    const missing = keys.filter((key) => !hydrationFailures[key]
+      && periodNeedsItemHydration(summary.periods!.find((period) => period.key === key)));
+    if (hydrationRun) {
+      for (const key of missing) hydrationRun.keys.add(key);
+      return hydrationRun.task!;
+    }
+    if (!missing.length) return Promise.resolve(summary.periods);
+    const run: ItemHydrationRun = { operationId: summary.operationId, generation: hydrateGeneration, keys: new Set(missing) };
+    hydrationRun = run;
+    loadingItems = true;
+    run.task = hydratePeriodQueue(run);
+    return run.task;
+  }
+
+  async function hydratePeriodQueue(run: ItemHydrationRun): Promise<SalesAnalysisPeriodResult[]> {
+    const stillCurrent = () => run.generation === hydrateGeneration && result?.operationId === run.operationId;
+    try {
+      while (run.keys.size && stillCurrent()) {
+        const key = run.keys.values().next().value!;
+        run.keys.delete(key);
+        const period = result?.periods?.find((period) => period.key === key);
+        if (!period || !periodNeedsItemHydration(period) || hydrationFailures[key]) continue;
+        hydratingPeriod = period.label;
+        try {
+          const packed = await backend.getSalesAnalysisItems({ operationId: run.operationId, periodKey: key });
+          if (!stillCurrent() || !result) break;
+          const latest = result.periods!.find((period) => period.key === key)!;
+          const storeList = (latest.stores?.length ? latest.stores : result.stores) ?? [];
+          const items = unpackSalesAnalysisItems(packed, storeList);
+          if (items.length < (latest.itemCount ?? 0)) {
+            hydrationFailures = { ...hydrationFailures, [key]: t('analysis.itemsIncomplete') };
+            continue;
+          }
+          // Publish each successful period immediately; a failure in another period must not discard it.
+          result = { ...result, periods: result.periods!.map((period) => period.key === key
+            ? { ...period, items, itemCount: items.length } : period) };
+        } catch (caught) {
+          if (!stillCurrent()) break;
+          hydrationFailures = { ...hydrationFailures, [key]: errorMessage(settings.locale, caught) };
+        }
+      }
+      return result?.periods ?? [];
+    } finally {
+      if (stillCurrent()) {
+        loadingItems = false;
+        hydratingPeriod = '';
+        hydrationRun = undefined;
       }
     }
-    if (changed && stillCurrent() && result) result = keepHydratedItems(result, { ...result, periods });
-    if (stillCurrent()) loadingItems = false;
-    return periods;
+  }
+
+  function retryItemHydration() {
+    if (loadingItems || running || exportingPDF || !result) return;
+    const failed = Object.keys(hydrationFailures);
+    hydrationFailures = {};
+    void ensurePeriodItems(failed);
   }
 
   async function cancelAnalysis() {
@@ -454,11 +800,15 @@
     cancelling = true;
     try {
       await backend.cancelSalesAnalysis(id);
-      if (result?.operationId === id) {
+      if (result?.operationId === id && result.pending) {
+        result = { ...result, pending: false };
+        progress = undefined;
+      } else if (!result || result.operationId === id) {
         await discardResult();
         progress = undefined;
         operationId = '';
         activeView = 'overview';
+        queryOpen = false;
       }
     } catch (caught) {
       error = errorMessage(settings.locale, caught);
@@ -468,7 +818,7 @@
   }
 
   function openExportDialog() {
-    if (!result || result.pending || exportingPDF || loadingItems) return;
+    if (!result || exportingPDF || !currentReady) return;
     const available = listSuccessfulReportStores(result);
     exportIncludeCombined = available.length > 1;
     exportStoreIds = new Set();
@@ -605,7 +955,7 @@
   }
 
   async function exportPDF() {
-    if (!result || exportingPDF || loadingItems) return;
+    if (!result || exportingPDF || !currentReady) return;
     if (exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0) return;
     if (exportFilesCount === 0) return;
     exportingPDF = true;
@@ -689,6 +1039,8 @@
               slim, storeId, groupLevel, settings.locale, activeExportFilter(), fontBase64,
               salesReportAccumulatorFromMemo(baseMemo),
               extraChapters,
+              undefined,
+              settings.rankingLimit,
             );
           } catch (caught) {
             if (caught instanceof AppError) throw caught;
@@ -708,6 +1060,7 @@
                   salesReportAccumulatorFromMemo(memo),
                   [],
                   { groupId: group.id, groupName: group.name, itemCodes: group.codes },
+                  settings.rankingLimit,
                 );
               } catch (caught) {
                 if (caught instanceof AppError) throw caught;
@@ -733,6 +1086,7 @@
             to: reportTo,
             categoryLevel: groupLevel,
             filter: activeExportFilter(),
+            rankingLimit: settings.rankingLimit,
             base: baseMemo,
             periodMeta: (slim.periods ?? []).map((period) => ({
               key: period.key,
@@ -769,7 +1123,7 @@
     } finally {
       exportingPDF = false;
       exportDialog = false;
-      if (result) void ensurePeriodItems(periodKeysForView(activeView, [salesRankingKey, quantityRankingKey]));
+      if (result) void ensurePeriodItems(neededPeriodKeys);
     }
   }
 
@@ -891,6 +1245,11 @@
     return periods.find((period) => period.key === key);
   }
 
+  function itemEmptyLabel(period: SalesAnalysisPeriodResult | undefined, failures: Record<string, string>): string {
+    if (!periodNeedsItemHydration(period)) return t('analysis.noResults');
+    return t(failures[period?.key ?? ''] ? 'analysis.itemsUnavailable' : 'common.loading');
+  }
+
   function focusGroupLabel(group: FocusGroup): string {
     if (group.name) return group.name;
     if (group.id === 'health') return t('analysis.focusHealth');
@@ -917,11 +1276,10 @@
       ...next,
       periods: (next.periods ?? []).map((period) => {
         const prev = prevByKey.get(period.key);
-        if ((period.items?.length ?? 0) > 0 || !prev?.items?.length) return period;
-        if (period.key !== 'current' && period.itemCount && period.itemCount > 0 && !period.items) {
-          return period;
-        }
-        return { ...period, items: prev.items, itemCount: period.itemCount || prev.items.length };
+        if (!prev?.items || period.from !== prev.from || period.to !== prev.to
+          || (period.items?.length ?? -1) >= prev.items.length
+          || (period.itemCount ?? 0) > prev.items.length) return period;
+        return { ...period, items: prev.items, itemCount: prev.items.length };
       }),
     };
   }
@@ -940,7 +1298,7 @@
       item.category1, item.category1Code ?? '', item.category2, item.category2Code ?? '',
       item.category3, item.category3Code ?? '', item.category4, item.category4Code ?? '',
       item.category5, item.category5Code ?? '',
-    ].some((value) => value.toLocaleLowerCase().includes(term));
+    ].some((value) => (value ?? '').toLocaleLowerCase().includes(term));
   }
 
   function matchesGroup(item: SalesAnalysisItem, codes: Set<string>, active: boolean): boolean {
@@ -1026,13 +1384,20 @@
     page = 1;
   }
 
+  function visibleFacetOptions(key: CategoryKey, query: string, options: string[]): string[] {
+    const term = openFacet === key ? query.trim().toLocaleLowerCase() : '';
+    return options.filter((option) => option.toLocaleLowerCase().includes(term));
+  }
+
   function clearFacet(key: CategoryKey) {
-    selections = { ...selections, [key]: new Set<string>() };
+    const visible = new Set(visibleFacetOptions(key, facetSearch, facetOptionMap[key]));
+    selections = { ...selections, [key]: facetSearch.trim()
+      ? new Set([...selections[key]].filter((value) => !visible.has(value))) : new Set<string>() };
     page = 1;
   }
 
   function selectFacetAll(key: CategoryKey) {
-    selections = { ...selections, [key]: new Set(facetOptionMap[key]) };
+    selections = { ...selections, [key]: new Set([...selections[key], ...visibleFacetOptions(key, facetSearch, facetOptionMap[key])]) };
     page = 1;
   }
 
@@ -1148,6 +1513,7 @@
     searchTerm: string,
     groupCodes: Set<string>,
     scoped: boolean,
+    limit: number,
   ): CategoryRankingGroup[] {
     if (!period) return [];
     const grouped = new Map<string, { code: string; name: string; items: SalesAnalysisItem[]; amount: number; quantity: number }>();
@@ -1165,7 +1531,7 @@
     return [...grouped.entries()]
       .map(([id, group]) => ({
         id, code: group.code, name: group.name, amount: group.amount, quantity: group.quantity,
-        items: buildTopItems(group.items, sortBy).slice(0, 15),
+        items: buildTopItems(group.items, sortBy).slice(0, limit),
       }))
       .sort((left, right) => (sortBy === 'amount' ? right.amount - left.amount : right.quantity - left.quantity) || left.id.localeCompare(right.id, settings.locale))
       .slice(0, 6);
@@ -1242,6 +1608,7 @@
 
   function toggleFacetMenu(key: CategoryKey) {
     openFacet = openFacet === key ? '' : key;
+    facetSearch = '';
   }
 
   async function openExportFolder() {
@@ -1352,20 +1719,90 @@
   }
 </script>
 
+{#snippet productName(code: string, name: string, periodKey = 'current')}
+  {#if code}<button class="product-name-link" type="button" aria-label={t('data.productOpen', { name })} title={t('data.productOpen', { name })} onclick={() => openProduct(code, name, periodKey)}>{name}</button>{:else}<strong>{name}</strong>{/if}
+{/snippet}
+
+{#snippet rankingControl(disabled = false)}
+  <div class="rank-seg" role="group" aria-label={t('analysis.rankingLimit')}>
+    <span>{t('analysis.rankingLimit')}</span>
+    <div class="rank-seg-track">
+      {#each RANKING_LIMIT_CHOICES as limit}
+        <button type="button" class:active={settings.rankingLimit === limit} aria-pressed={settings.rankingLimit === limit} disabled={disabled} onclick={() => setRankingLimit(limit)}>{limit}</button>
+      {/each}
+    </div>
+    <label class="rank-custom" class:active={!isPresetRankingLimit(settings.rankingLimit)} title={t('analysis.rankingHint')}>
+      <span>{t('analysis.rankingLimitCustom')}</span>
+      <input
+        type="number"
+        min={RANKING_LIMIT_MIN}
+        max={RANKING_LIMIT_MAX}
+        inputmode="numeric"
+        disabled={disabled}
+        class:active={!isPresetRankingLimit(settings.rankingLimit)}
+        aria-label={t('analysis.rankingLimitCustom')}
+        title={t('analysis.rankingLimitCustom')}
+        value={rankingInput}
+        onfocus={() => { rankingFocused = true; }}
+        oninput={(event) => { rankingInput = (event.currentTarget as HTMLInputElement).value; }}
+        onblur={commitRankingInput}
+        onkeydown={(event) => {
+          if (event.key === 'Escape') rankingInput = String(settings.rankingLimit);
+          if (event.key === 'Enter' || event.key === 'Escape') { event.preventDefault(); (event.currentTarget as HTMLInputElement).blur(); }
+        }}
+      />
+    </label>
+  </div>
+{/snippet}
+
 <section class="page analysis-page" class:has-results={Boolean(result && currentPeriod)} aria-labelledby="analysis-title">
   <div class="page-heading split-heading">
-    <h1 id="analysis-title">{t('analysis.title')}</h1>
-    {#if result}
-      <div class="analysis-heading-actions">
-        <md-filled-button type="button" onclick={openExportDialog} disabled={exportingPDF || loadingItems || result.pending}>
+    <div class="heading-copy">
+      <h1 id="analysis-title">{t('analysis.title')}</h1>
+      {#if result && currentPeriod}
+        <div class="heading-meta">
+          <p class="report-context">{t('analysis.querySummary', {
+            account: reportAccount || t('analysis.savedReport'),
+            period: `${currentPeriod.from} — ${currentPeriod.to}`,
+            count: result.selectedStores,
+          })}</p>
+          <div class="heading-flags">
+            <span class="report-status" class:ready={result.complete && !loadingItems && !itemFailureRows.length}>
+              <span class="status-dot" aria-hidden="true"></span>{itemFailureRows.length ? t('analysis.itemsNotReady') : loadingItems || result.pending ? t('common.loading') : result.complete ? t('analysis.reportReady') : t('analysis.partialResult', { count: result.issues?.length ?? 0 })}
+            </span>
+            <details class="period-disclosure">
+              <summary>{t('analysis.periods')}<span class="material-symbols-rounded" aria-hidden="true">expand_more</span></summary>
+              <dl class="period-summary" aria-label={t('analysis.periods')}>
+                {#each reportPeriods as period}<div class:current={period.key === 'current'}><dt>{period.label}</dt><dd>{period.from} — {period.to}</dd></div>{/each}
+              </dl>
+            </details>
+          </div>
+        </div>
+      {:else}
+        <p class="report-context">{t('analysis.queryHint')}</p>
+      {/if}
+    </div>
+    <div class="analysis-heading-actions">
+      <button type="button" class="preset-trigger" onclick={openPresets} disabled={loadingProfiles || loadingStores || running || exportingPDF} aria-haspopup="dialog"><span class="material-symbols-rounded" aria-hidden="true">bookmarks</span>{t('presets.title')}</button>
+      {#if result}
+        <md-filled-button type="button" onclick={openExportDialog} disabled={(exportingPDF || !currentReady) ? true : undefined}>
           <span class="material-symbols-rounded" slot="icon" aria-hidden="true">picture_as_pdf</span>{exportingPDF ? t('analysis.exportingPDFProgress', { current: pdfExportCurrent, total: pdfExportTotal }) : t('analysis.exportPDF')}
         </md-filled-button>
-        <md-outlined-button type="button" onclick={() => void changeQuery()} disabled={exportingPDF}>
-          <span class="material-symbols-rounded" slot="icon" aria-hidden="true">tune</span>{t('analysis.changeQuery')}
+        <md-outlined-button type="button" onclick={() => changeQuery()} disabled={(exportingPDF || running) ? true : undefined} aria-expanded={queryOpen} aria-controls="analysis-query-form">
+          <span class="material-symbols-rounded" slot="icon" aria-hidden="true">{queryOpen ? 'close' : 'tune'}</span>{queryOpen ? t('analysis.closeQuery') : t('analysis.adjustQuery')}
         </md-outlined-button>
-      </div>
-    {/if}
+      {/if}
+    </div>
   </div>
+
+  {#if shortcutGroups.pinned.length || shortcutGroups.recent.length}
+    <nav class="preset-shortcuts" aria-label={t('presets.shortcuts')}>
+      {#each [{ label: 'presets.pinned', entries: shortcutGroups.pinned }, { label: 'presets.recent', entries: shortcutGroups.recent }] as group}
+        {#if group.entries.length}<div class="shortcut-group"><span>{t(group.label)}</span>{#each group.entries as preset (preset.id)}<button type="button" aria-label={t('presets.quickApply', { name: preset.name })} title={`${preset.query.profileName} · ${preset.query.storeIds.join(', ')}`} disabled={shortcutBusy || loadingProfiles || loadingStores || running || exportingPDF || exportingData} onclick={() => void quickApplyPreset(preset.id)}>{preset.name}</button>{/each}</div>{/if}
+      {/each}
+    </nav>
+  {/if}
+  {#if shortcutNotice}<div class="notice error-notice" role="alert">{shortcutNotice}</div>{/if}
 
   {#if error}
     <div class="notice error-notice" role="alert"><span class="material-symbols-rounded" aria-hidden="true">error</span><span>{error}</span></div>
@@ -1387,7 +1824,7 @@
       </md-icon-button>
     </div>
   {/if}
-  {#if loadingItems}
+  {#if loadingItems && !result}
     <div class="notice" role="status"><span class="material-symbols-rounded" aria-hidden="true">progress_activity</span><span>{t('analysis.loadingItems')}</span></div>
   {/if}
 
@@ -1405,12 +1842,16 @@
       {/if}
       <md-filled-button type="button" onclick={onGoToAccounts}>{t('excel.manageAccounts')}</md-filled-button>
     </div>
-  {:else if !result}
-    <form class="analysis-query surface-card" onsubmit={(event) => { event.preventDefault(); void runAnalysis(); }}>
+  {:else if !result || queryOpen}
+    <form id="analysis-query-form" class="analysis-query surface-card" class:compact={Boolean(result)} onsubmit={(event) => { event.preventDefault(); void runAnalysis(); }}>
+      <div class="query-section-heading">
+        <span class="material-symbols-rounded" aria-hidden="true">tune</span>
+        <div><h2>{t('analysis.adjustQuery')}</h2>{#if result}<p>{t('analysis.editQueryHint')}</p>{/if}</div>
+      </div>
       <div class="analysis-query-grid">
         <div class="field-group">
           <label for="analysis-profile">{t('analysis.account')}</label>
-          <select id="analysis-profile" bind:value={profileId} onchange={() => void loadStores()} disabled={loadingStores || running}>
+          <select id="analysis-profile" bind:value={profileId} onchange={() => void loadStores({ keepResult: true })} disabled={loadingStores || running}>
             {#each profiles as profile}<option value={profile.id}>{profile.displayName}</option>{/each}
           </select>
         </div>
@@ -1443,8 +1884,8 @@
 
       <div class="store-selection" aria-labelledby="analysis-stores-label">
         <div class="selection-heading">
-          <strong id="analysis-stores-label">{t('analysis.stores')}</strong>
-          <div><button type="button" onclick={selectAllStores} disabled={loadingStores || stores.length === 0}>{t('analysis.selectAll')}</button><button type="button" onclick={clearStores} disabled={loadingStores || selectedStoreIds.size === 0}>{t('analysis.clear')}</button></div>
+          <strong id="analysis-stores-label">{t('analysis.stores')} <span class="selection-count">{t('analysis.selectedStoreCount', { selected: selectedStoreIds.size, total: stores.length })}</span></strong>
+          <div><button type="button" onclick={selectAllStores} disabled={running || loadingStores || visibleStores.length === 0}>{t(storeQuery.trim() ? 'analysis.selectMatches' : 'analysis.selectAll')}</button><button type="button" onclick={clearStores} disabled={running || loadingStores || !visibleStores.some((store) => selectedStoreIds.has(store.businessId))}>{t(storeQuery.trim() ? 'analysis.clearMatches' : 'analysis.clear')}</button></div>
         </div>
         {#if loadingStores}
           <div class="inline-loading"><md-circular-progress indeterminate></md-circular-progress>{t('analysis.loadingStores')}</div>
@@ -1458,9 +1899,10 @@
               {#if storeQuery}<button type="button" aria-label={t('analysis.clear')} onclick={() => { storeQuery = ''; }}><span class="material-symbols-rounded" aria-hidden="true">close</span></button>{/if}
             </div>
           {/if}
+          {#if storeQuery.trim()}<p class="selection-scope">{t('analysis.storeMatchHint', { count: visibleStores.length })}</p>{/if}
           <div class="store-grid pane-scroll">
             {#each visibleStores as store (store.businessId)}
-              <label class:checked={selectedStoreIds.has(store.businessId)}><input type="checkbox" checked={selectedStoreIds.has(store.businessId)} onchange={() => toggleStore(store.businessId)} /><span class="store-id">{store.businessId}</span><span class="store-name">{store.label}</span></label>
+              <label class:checked={selectedStoreIds.has(store.businessId)}><input type="checkbox" checked={selectedStoreIds.has(store.businessId)} disabled={running} onchange={() => toggleStore(store.businessId)} /><span class="store-id">{store.businessId}</span><span class="store-name">{store.label}</span></label>
             {:else}
               <div class="store-empty">{t('analysis.noResults')}</div>
             {/each}
@@ -1470,11 +1912,24 @@
 
       {#if isWebRuntime()}<div class="inline-blocker"><span class="material-symbols-rounded" aria-hidden="true">info</span>{t('web.previewHint')}</div>{/if}
       {#if rangeInvalid}<div class="inline-blocker"><span class="material-symbols-rounded" aria-hidden="true">event_busy</span>{t('excel.rangeInvalid')}</div>{/if}
+
       <div class="analysis-query-actions">
         <span>{t('analysis.selectedStores', { count: selectedStoreIds.size })}</span>
-        <md-filled-button type="button" onclick={() => void runAnalysis()} disabled={loadingStores || running || selectedStoreIds.size === 0 || rangeInvalid || (periodMode === 'month' ? !month : !from || !to)}><span class="material-symbols-rounded" slot="icon" aria-hidden="true">query_stats</span>{t('analysis.run')}</md-filled-button>
+        <md-filled-button type="button" onclick={() => void runAnalysis()} disabled={(loadingStores || running || selectedStoreIds.size === 0 || rangeInvalid || (periodMode === 'month' ? !month : !from || !to)) ? true : undefined}><span class="material-symbols-rounded" slot="icon" aria-hidden="true">query_stats</span>{result && queryDirty ? t('analysis.rerun') : t('analysis.run')}</md-filled-button>
       </div>
     </form>
+  {/if}
+
+  {#if queryDirty || stagedPreset}
+    <div class="query-draft-notice" role="status">
+      <span class="material-symbols-rounded" aria-hidden="true">edit_note</span>
+      <span>{stagedPreset ? t('presets.staged', { name: stagedPreset.name }) : t('analysis.queryDirty')}</span>
+      {#if presetWarning}<strong class="preset-warning">{presetWarning}</strong>{/if}
+      <div class="query-draft-actions">
+        <button type="button" onclick={restoreQuery} disabled={running || exportingPDF}>{t(!result && stagedPreset ? 'presets.discard' : 'analysis.restoreQuery')}</button>
+        {#if !queryOpen}<button type="button" onclick={changeQuery}>{t('analysis.adjustQuery')}</button>{/if}
+      </div>
+    </div>
   {/if}
 
   {#if running}
@@ -1493,7 +1948,6 @@
 
   {#if result && currentPeriod}
     <section class="analysis-results">
-      <div class="analysis-toolbar">
       {#if result.pending}
         <section class="analysis-supplement" aria-live="polite">
           <div class="analysis-supplement-copy">
@@ -1508,19 +1962,49 @@
         </section>
       {:else if !result.complete}<div class="notice warning-notice" role="status"><span class="material-symbols-rounded" aria-hidden="true">warning</span><span>{t('analysis.partialResult', { count: result.issues?.length ?? 0 })}</span></div>{/if}
 
-      <div class="period-summary" aria-label={t('analysis.periods')}>
-        {#each reportPeriods as period}<span class:current={period.key === 'current'}><strong>{period.label}</strong> {period.from} — {period.to}</span>{/each}
+      {#if itemFailureRows.length > 0}
+        <section class="item-recovery" role="alert">
+          <div><strong>{t('analysis.itemsFailed', { count: itemFailureRows.length })}</strong><p>{t('analysis.itemsRecoveryHint')}</p>
+            <ul>{#each itemFailureRows as failure}<li><b>{failure.label}</b> · {failure.message}</li>{/each}</ul>
+          </div>
+          <button type="button" onclick={retryItemHydration} disabled={loadingItems || running || exportingPDF}>{t('analysis.retryItems')}</button>
+        </section>
+      {/if}
+
+      <div class="report-navigation" bind:this={reportNavigation}>
+        <div class="report-tabs" role="tablist" aria-label={t('analysis.reportViews')}>
+          {#each reportTabs as tab}
+            <button id={`report-tab-${tab.key}`} type="button" onkeydown={navigateReport} class:active={activeView === tab.key} role="tab" aria-selected={activeView === tab.key} aria-controls={`report-panel-${activeView}`} tabindex={activeView === tab.key ? 0 : -1} onclick={() => void selectReport(tab.key as ReportView)}><span class="material-symbols-rounded" aria-hidden="true">{tab.icon}</span>{tab.label}{#if result.pending && ((tab.key === 'weekly' && !result.weeks?.length) || (tab.key === 'focus' && !periodByKey(reportPeriods, 'yearAgoNext')) || (tab.key === 'stores' && reportPeriods.length < 2))}<span class="tab-pending">{t('common.loading')}</span>{/if}</button>
+          {/each}
+        </div>
+        <div class="navigation-tools">
+          {@render rankingControl()}
+          <button class="return-to-filters" type="button" aria-label={t('analysis.returnToFilters')} title={t('analysis.returnToFilters')} onclick={returnToFilters}><span class="material-symbols-rounded" aria-hidden="true">manage_search</span>{#if activeFilterCount}<b>{activeFilterCount}</b>{/if}</button>
+        </div>
       </div>
 
-      <div class="analysis-filters surface-card">
+      <section class="report-filter" bind:this={reportFilter} aria-label={t('analysis.categoryFilters')}>
+        <div class="filter-bar">
+          <div class="analysis-search"><span class="material-symbols-rounded" aria-hidden="true">search</span><input bind:this={productSearch} aria-label={t('analysis.search')} placeholder={t('analysis.search')} value={search} oninput={changeSearch} />{#if search}<button type="button" aria-label={t('analysis.clear')} onclick={() => { search = ''; page = 1; }}><span class="material-symbols-rounded" aria-hidden="true">close</span></button>{/if}</div>
+          <button class="filter-toggle" class:active={filtersOpen || activeFilterCount > 0} type="button" aria-expanded={filtersOpen} aria-controls="analysis-filter-panel" onclick={() => { filtersOpen = !filtersOpen; openFacet = ''; }}><span class="material-symbols-rounded" aria-hidden="true">filter_list</span>{t('analysis.filterToggle')}{#if activeFilterCount}<b>{activeFilterCount}</b>{/if}<span class="material-symbols-rounded" aria-hidden="true">{filtersOpen ? 'expand_less' : 'expand_more'}</span></button>
+          <div class="filter-tools">
+            <span class="scope-count" role="status">{currentDetailsMissing ? t('analysis.itemsNotReady') : t(productScopeActive ? 'analysis.filteredRows' : 'analysis.allRows', { count: filteredItems.length })}</span>
+            {#if loadingItems}<span class="chrome-busy" role="status"><span class="material-symbols-rounded" aria-hidden="true">progress_activity</span><span>{t('analysis.loadingItems')}</span>{#if hydratingPeriod}<span>· {hydratingPeriod}</span>{/if}</span>{/if}
+            <AnalysisDataActions {t} tables={dataTables[activeView] ?? []} context={dataContext} filename={`RTA-${activeView}-${result.from}-${result.to}.xlsx`} compact disabled={running || exportingPDF || scopedViewWaiting || (activeView !== 'weekly' && viewMissingPeriods.length > 0)} onBusy={(value) => { exportingData = value; }} />
+          </div>
+        </div>
+        <div id="analysis-filter-panel" class="filter-panel" hidden={!filtersOpen}>
+          <p class="filter-hint">{t('analysis.filterHint')}</p>
+          <div class="filter-fields">
         <div class="facet-row" aria-label={t('analysis.categoryFilters')}>
           {#each facets as facet}
             <details class="facet-menu" open={openFacet === facet.key}>
               <summary class:active={selections[facet.key].size > 0} onclick={(event) => { event.preventDefault(); toggleFacetMenu(facet.key); }}><span>{t(facet.label)}</span><strong>{selections[facet.key].size > 0 ? selections[facet.key].size : t('analysis.all')}</strong><span class="material-symbols-rounded" aria-hidden="true">expand_more</span></summary>
               <div class="facet-popover">
-                <div class="facet-actions"><button type="button" onclick={() => selectFacetAll(facet.key)}>{t('analysis.selectAll')}</button><button type="button" onclick={() => clearFacet(facet.key)}>{t('analysis.clear')}</button></div>
+                <div class="facet-actions"><button type="button" onclick={() => selectFacetAll(facet.key)} disabled={visibleFacetOptions(facet.key, facetSearch, facetOptionMap[facet.key]).length === 0}>{t(facetSearch.trim() ? 'analysis.selectMatches' : 'analysis.selectAll')}</button><button type="button" onclick={() => clearFacet(facet.key)}>{t(facetSearch.trim() ? 'analysis.clearMatches' : 'analysis.clear')}</button></div>
+                <input class="facet-search" aria-label={t('analysis.facetSearch', { name: t(facet.label) })} placeholder={t('analysis.facetSearch', { name: t(facet.label) })} bind:value={facetSearch} />
                 <div class="facet-options pane-scroll">
-                  {#each facetOptionMap[facet.key] as option}
+                  {#each visibleFacetOptions(facet.key, facetSearch, facetOptionMap[facet.key]) as option}
                     <label><input aria-label={option} type="checkbox" checked={selections[facet.key].has(option)} onchange={() => toggleFacet(facet.key, option)} /><span>{option}</span></label>
                   {:else}
                     <div class="facet-empty">{loadingItems ? t('analysis.loadingItems') : t('analysis.noResults')}</div>
@@ -1530,64 +2014,74 @@
             </details>
           {/each}
         </div>
-        <div class="analysis-filter-tools">
-          <div class="analysis-search"><span class="material-symbols-rounded" aria-hidden="true">search</span><input aria-label={t('analysis.search')} placeholder={t('analysis.search')} value={search} oninput={changeSearch} />{#if search}<button type="button" aria-label={t('analysis.clear')} onclick={() => { search = ''; page = 1; }}><span class="material-symbols-rounded" aria-hidden="true">close</span></button>{/if}</div>
-          {#if manCodeGroups.length > 0}
-            <label class="promoter-group-selector">
-              <span>{t('analysis.promoterGroup')}</span>
-              <select aria-label={t('analysis.promoterGroup')} value={selectedGroupId} onchange={changePromoterGroup}>
-                <option value="">{t('analysis.allProducts')}</option>
-                {#each manCodeGroups as group (group.id)}
-                  <option value={group.id}>{group.name} ({group.codes.length})</option>
-                {/each}
-              </select>
-            </label>
-          {/if}
+        {#if manCodeGroups.length > 0}
+          <label class="promoter-group-selector">
+            <span>{t('analysis.promoterGroup')}</span>
+            <select aria-label={t('analysis.promoterGroup')} value={selectedGroupId} onchange={changePromoterGroup}>
+              <option value="">{t('analysis.allProducts')}</option>
+              {#each manCodeGroups as group (group.id)}
+                <option value={group.id}>{group.name} ({group.codes.length})</option>
+              {/each}
+            </select>
+          </label>
+        {/if}
+      </div>
+
         </div>
-      </div>
+        {#if activeFilterCount > 0}
+          <div class="active-filters" aria-label={t('analysis.activeFilters')}>
+            {#each facets as facet}
+              {#each [...selections[facet.key]] as value}
+                <button class="filter-chip" type="button" aria-label={t('analysis.removeFilter', { name: value })} title={`${t(facet.label)}: ${value}`} onclick={() => toggleFacet(facet.key, value)}><span>{t(facet.label)}: {value}</span><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+              {/each}
+            {/each}
+            {#if search.trim()}<button class="filter-chip" type="button" aria-label={t('analysis.removeFilter', { name: search.trim() })} onclick={() => { search = ''; page = 1; }}><span>“{search.trim()}”</span><span class="material-symbols-rounded" aria-hidden="true">close</span></button>{/if}
+            {#if selectedGroup}<button class="filter-chip" type="button" aria-label={t('analysis.removeFilter', { name: selectedGroup.name })} onclick={() => { selectedGroupId = ''; page = 1; }}><span>{selectedGroup.name}</span><span class="material-symbols-rounded" aria-hidden="true">close</span></button>{/if}
+            <button class="clear-filters" type="button" onclick={clearScreenFilters}>{t('analysis.clearFilters')}</button>
+          </div>
+        {/if}
+      </section>
 
-      <div class="report-tabs" role="tablist" aria-label={t('analysis.reportViews')}>
-        {#each [
-          { key: 'overview', label: t('analysis.overview'), icon: 'space_dashboard' },
-          { key: 'weekly', label: t('analysis.weekly'), icon: 'calendar_view_week' },
-          { key: 'focus', label: t('analysis.focus'), icon: 'upcoming' },
-          { key: 'categories', label: t('analysis.categories'), icon: 'account_tree' },
-          { key: 'products', label: t('analysis.products'), icon: 'inventory_2' },
-          { key: 'stores', label: t('analysis.stores'), icon: 'storefront' },
-        ].filter((tab) => !groupScopeActive || tab.key !== 'weekly') as tab}
-          <button type="button" class:active={activeView === tab.key} role="tab" aria-selected={activeView === tab.key} onclick={() => { activeView = tab.key as ReportView; }}><span class="material-symbols-rounded" aria-hidden="true">{tab.icon}</span>{tab.label}{#if result.pending && ((tab.key === 'weekly' && !result.weeks?.length) || (tab.key === 'focus' && !periodByKey(reportPeriods, 'yearAgoNext')) || (tab.key === 'stores' && reportPeriods.length < 2))}<span class="tab-pending">{t('common.loading')}</span>{/if}</button>
-        {/each}
-      </div>
-      </div>
-
-      <div class="analysis-workspace">
+      <div class="analysis-workspace" bind:this={reportWorkspace} id={`report-panel-${activeView}`} role="tabpanel" aria-labelledby={`report-tab-${activeView}`} tabindex="0">
+      {#if scopedViewWaiting}
+        <div class="filter-empty" role="status"><span class="material-symbols-rounded" aria-hidden="true">hourglass_top</span><div><strong>{t('analysis.itemsNotReady')}</strong><p>{t(viewMissingPeriods.some((period) => hydrationFailures[period.key]) ? 'analysis.itemsUnavailable' : 'analysis.itemsPreparing')}</p></div></div>
+      {:else}
+      {#if productScopeActive && !currentDetailsMissing && filteredItems.length === 0}
+        <div class="filter-empty" role="status"><span class="material-symbols-rounded" aria-hidden="true">search_off</span><div><strong>{t('analysis.noResults')}</strong><p>{t('analysis.noMatchHint')}</p></div></div>
+      {/if}
       {#if activeView === 'overview'}
         <dl class="analysis-kpis">
-          <div><dt>{t('analysis.netSales')}</dt><dd>{formatMoney(currentTotals.netSalesAmount)}</dd><span class={deltaClass(delta(currentTotals.netSalesAmount, yearAgoTotals.netSalesAmount))}>{formatPercent(delta(currentTotals.netSalesAmount, yearAgoTotals.netSalesAmount))} {t('analysis.vsYearAgo')}</span></div>
+          <div class="kpi-primary"><dt>{t('analysis.netSales')}</dt><dd>{formatMoney(currentTotals.netSalesAmount)}</dd><span class={deltaClass(delta(currentTotals.netSalesAmount, yearAgoTotals.netSalesAmount))}>{formatPercent(delta(currentTotals.netSalesAmount, yearAgoTotals.netSalesAmount))} {t('analysis.vsYearAgo')}</span></div>
           <div><dt>{t('analysis.grossSales')}</dt><dd>{formatMoney(currentTotals.saleAmount)}</dd><span class={deltaClass(delta(currentTotals.saleAmount, previousTotals.saleAmount))}>{formatPercent(delta(currentTotals.saleAmount, previousTotals.saleAmount))} {t('analysis.vsPrevious')}</span></div>
           <div><dt>{t('analysis.returns')}</dt><dd>{formatMoney(currentTotals.returnAmount)}</dd><span>{formatNumber(currentTotals.returnQuantity)} {t('analysis.units')}</span></div>
           <div><dt>{t('analysis.netQuantity')}</dt><dd>{formatNumber(currentTotals.netQuantity)}</dd><span class={deltaClass(delta(currentTotals.netQuantity, yearAgoTotals.netQuantity))}>{formatPercent(delta(currentTotals.netQuantity, yearAgoTotals.netQuantity))} {t('analysis.vsYearAgo')}</span></div>
+        </dl>
+        <dl class="analysis-secondary-kpis">
           <div><dt>{t('analysis.transactions')}</dt><dd>{formatValue(currentTotals.transactionCount, 'number')}</dd><span>{groupScopeActive || filtersActive(selections, search) ? t('analysis.wholeStoreOnly') : t('analysis.orders')}</span></div>
           <div><dt>{t('analysis.basket')}</dt><dd>{formatValue(currentTotals.basketValue, 'money')}</dd><span>{groupScopeActive || filtersActive(selections, search) ? t('analysis.wholeStoreOnly') : t('analysis.perOrder')}</span></div>
           <div><dt>{t('analysis.skus')}</dt><dd>{formatNumber(currentTotals.skuCount)}</dd><span>{t('analysis.products')}</span></div>
         </dl>
 
+        {#if insightData}<AnalysisInsights {t} locale={settings.locale} data={insightData} onProduct={openProduct} />{/if}
+
         <section class="performance-card surface-card" aria-labelledby="performance-title">
-          <div class="section-heading"><h2 id="performance-title">{t('analysis.performance')}</h2></div>
+          <details class="performance-details">
+          <summary class="performance-summary"><h2 id="performance-title">{t('analysis.performance')}</h2><span>{t('analysis.currentPeriod')} / {t('analysis.previousPeriod')} / {t('analysis.yearAgoPeriod')}</span><span class="material-symbols-rounded" aria-hidden="true">expand_more</span></summary>
           <div class="table-scroll"><table>
             <thead><tr><th>{t('analysis.metric')}</th><th class="numeric">{t('analysis.currentPeriod')}</th><th class="numeric">{t('analysis.previousPeriod')}</th><th class="numeric">{t('analysis.yearAgoPeriod')}</th><th class="numeric">{t('analysis.vsPrevious')}</th><th class="numeric">{t('analysis.vsYearAgo')}</th></tr></thead>
             <tbody>{#each performanceRows as row}<tr><th>{row.label}</th><td class="numeric emphasis">{formatValue(row.current, row.format)}</td><td class="numeric">{formatValue(row.previous, row.format)}</td><td class="numeric">{formatValue(row.yearAgo, row.format)}</td><td class={`numeric ${deltaClass(delta(row.current, row.previous))}`}>{formatPercent(delta(row.current, row.previous))}</td><td class={`numeric ${deltaClass(delta(row.current, row.yearAgo))}`}>{formatPercent(delta(row.current, row.yearAgo))}</td></tr>{/each}</tbody>
           </table></div>
+          </details>
         </section>
 
         <div class="top-grid">
           <section class="top-card surface-card" aria-labelledby="top-sales-title">
-            <div class="section-heading"><h2 id="top-sales-title">{t('analysis.topSales')}</h2></div>
-            <ol>{#each topSales as item, index}<li><span class="rank">{index + 1}</span><div><strong>{item.name}</strong><span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div><div class="top-metrics"><b>{formatMoney(item.amount)}</b><span>{formatNumber(item.quantity)} {t('analysis.units')}</span></div></li>{:else}<li class="empty-row">{t('analysis.noResults')}</li>{/each}</ol>
+            <div class="section-heading"><h2 id="top-sales-title">{t('analysis.topSales', { count: settings.rankingLimit })}</h2></div>
+            <ol>{#each topSales as item, index}<li class:podium={index < 3}><span class="rank">{index + 1}</span><div class="top-product">{@render productName(item.code, item.name)}<span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div><div class="top-metrics"><b>{formatMoney(item.amount)}</b><span>{formatNumber(item.quantity)} {t('analysis.units')}</span></div></li>{:else}<li class="empty-row">{itemEmptyLabel(currentPeriod, hydrationFailures)}</li>{/each}</ol>
           </section>
           <section class="top-card surface-card" aria-labelledby="top-quantity-title">
-            <div class="section-heading"><h2 id="top-quantity-title">{t('analysis.topQuantity')}</h2></div>
-            <ol>{#each topQuantity as item, index}<li><span class="rank">{index + 1}</span><div><strong>{item.name}</strong><span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div><div class="top-metrics"><b>{formatNumber(item.quantity)} {t('analysis.units')}</b><span>{formatMoney(item.amount)}</span></div></li>{:else}<li class="empty-row">{t('analysis.noResults')}</li>{/each}</ol>
+            <div class="section-heading"><h2 id="top-quantity-title">{t('analysis.topQuantity', { count: settings.rankingLimit })}</h2></div>
+            <ol>{#each topQuantity as item, index}<li class:podium={index < 3}><span class="rank">{index + 1}</span><div class="top-product">{@render productName(item.code, item.name)}<span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div><div class="top-metrics"><b>{formatNumber(item.quantity)} {t('analysis.units')}</b><span>{formatMoney(item.amount)}</span></div></li>{:else}<li class="empty-row">{itemEmptyLabel(currentPeriod, hydrationFailures)}</li>{/each}</ol>
           </section>
         </div>
       {:else if activeView === 'weekly'}
@@ -1609,44 +2103,7 @@
             <div class="ranking-empty">{result.pending ? t('common.loading') : t('analysis.weeklyMissing')}</div>
           {:else}
             <p class="focus-note">{t(weeklyUsesAlignedComparison ? 'analysis.weeklyAlignedHint' : 'analysis.weeklyHint')}</p>
-            <div class="table-scroll store-table">
-              <table>
-                <thead>
-                  <tr>
-                    <th>{t('analysis.store')}</th>
-                    <th class="numeric">{t(weeklyUsesAlignedComparison ? 'analysis.currentPeriod' : 'analysis.thisWeek')}</th>
-                    <th class="numeric">{t(weeklyUsesAlignedComparison ? 'analysis.previousPeriod' : 'analysis.lastWeek')}</th>
-                    <th class="numeric">{t('analysis.variance')}</th>
-                    <th class="numeric">{t('analysis.variancePercent')}</th>
-                    <th class="numeric">{t('analysis.weekday')}</th>
-                    <th class="numeric">{t('analysis.weekend')}</th>
-                    <th class="numeric">{t('analysis.customers')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each weeklySegmentRows(weeklyWeek.stores ?? [], {
-                    store: (store) => store.businessId || store.label || t('analysis.store'),
-                    localTotal: t('analysis.localTotal'),
-                    touristTotal: t('analysis.touristTotal'),
-                    allStores: t('analysis.allStores'),
-                  }) as row}
-                    <tr class:weekly-total={row.kind !== 'store'}>
-                      <th>
-                        {#if row.kind === 'store'}
-                          <strong>{row.values.businessId || row.label}</strong>
-                          {#if row.values.label && row.values.label !== row.values.businessId}<span>{row.values.label}</span>{/if}
-                        {:else}
-                          <strong>{row.label}</strong>
-                        {/if}
-                      </th>
-                      {#each weeklyMetricCells(row.values) as cell}
-                        <td class={cell.className}>{cell.text}</td>
-                      {/each}
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
+            <div class="store-table"><AnalysisDataTable table={dataTables.weekly![0]!} {t} locale={settings.locale} sort={tableSorts.weekly} onSort={sortData} /></div>
           {/if}
         </section>
       {:else if activeView === 'focus'}
@@ -1662,7 +2119,7 @@
           {:else}
             <p class="focus-note">{t('analysis.focusHint')}</p>
             {#if periodNeedsItemHydration(focusPeriod)}
-              <div class="ranking-empty">{t('common.loading')}</div>
+              <div class="ranking-empty">{t(hydrationFailures[focusPeriod.key] ? 'analysis.itemsUnavailable' : 'common.loading')}</div>
             {:else}<div class="focus-grid">
               {#each focusGroups as group (group.id)}
                 <article class="focus-group">
@@ -1674,7 +2131,7 @@
                         {#each group.sales as item, index}
                           <li>
                             <span class="rank">{index + 1}</span>
-                            <div><strong>{item.name || item.code}</strong><span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div>
+                            <div>{@render productName(item.code, item.name || item.code, focusPeriod.key)}<span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div>
                             <div class="top-metrics"><b>{formatMoney(item.amount)}</b><span>{formatNumber(item.quantity)} {t('analysis.units')}</span>{#if item.currentAmount || item.currentQuantity}<em>{t('analysis.focusCurrent')} {formatMoney(item.currentAmount)}</em>{/if}</div>
                           </li>
                         {:else}<li class="empty-row">{t('analysis.noResults')}</li>{/each}
@@ -1686,7 +2143,7 @@
                         {#each group.quantity as item, index}
                           <li>
                             <span class="rank">{index + 1}</span>
-                            <div><strong>{item.name || item.code}</strong><span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div>
+                            <div>{@render productName(item.code, item.name || item.code, focusPeriod.key)}<span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div>
                             <div class="top-metrics"><b>{formatNumber(item.quantity)} {t('analysis.units')}</b><span>{formatMoney(item.amount)}</span>{#if item.currentAmount || item.currentQuantity}<em>{t('analysis.focusCurrent')} {formatNumber(item.currentQuantity)} {t('analysis.units')}</em>{/if}</div>
                           </li>
                         {:else}<li class="empty-row">{t('analysis.noResults')}</li>{/each}
@@ -1702,10 +2159,7 @@
       {:else if activeView === 'categories'}
         <section class="comparison-card surface-card" aria-labelledby="category-title">
           <div class="comparison-heading"><h2 id="category-title">{t('analysis.rolling')}</h2><div class="group-tabs" role="radiogroup" aria-label={t('analysis.groupBy')}>{#each facets as facet}<button type="button" class:active={groupLevel === facet.key} role="radio" aria-checked={groupLevel === facet.key} onclick={() => { groupLevel = facet.key; }}>{t(facet.label)}</button>{/each}</div></div>
-          <div class="category-table"><table>
-            <thead><tr><th>{t('analysis.category')}</th><th class="numeric">{t('analysis.currentPeriod')}</th><th class="numeric">{t('analysis.previousPeriod')}</th><th class="numeric">{t('analysis.previous2Period')}</th><th class="numeric">{t('analysis.yearAgoPeriod')}</th><th class="numeric">{t('analysis.vsPrevious')}</th><th class="numeric">{t('analysis.vsYearAgo')}</th></tr></thead>
-            <tbody>{#each categoryRows as row}<tr><th><strong>{row.name}</strong>{#if row.code}<span>{row.code}</span>{/if}</th><td class="numeric emphasis">{formatMoney(row.current)}</td><td class="numeric">{formatPeriodMoney(row.previous, 'previous')}</td><td class="numeric">{formatPeriodMoney(row.previous2, 'previous2')}</td><td class="numeric">{formatPeriodMoney(row.yearAgo, 'yearAgo')}</td><td class={`numeric ${deltaClass(delta(row.current, row.previous))}`}>{formatPercent(delta(row.current, row.previous))}</td><td class={`numeric ${deltaClass(delta(row.current, row.yearAgo))}`}>{formatPercent(delta(row.current, row.yearAgo))}</td></tr>{:else}<tr><td colspan="7" class="empty-table">{t('analysis.noResults')}</td></tr>{/each}</tbody>
-          </table></div>
+          <div class="category-table"><AnalysisDataTable table={dataTables.categories![0]!} {t} locale={settings.locale} sort={tableSorts.categories} onSort={sortData} /></div>
         </section>
 
         <section class="ranking-section surface-card" aria-labelledby="sales-ranking-title">
@@ -1721,9 +2175,9 @@
             {#each salesRankingGroups as group (group.id)}
               <article class="ranking-group">
                 <header><div><strong>{group.name}</strong>{#if group.code}<span>{group.code}</span>{/if}</div><b>{formatMoney(group.amount)}</b></header>
-                <ol>{#each group.items as item, index}<li><span class="rank">{index + 1}</span><div class="ranking-product"><strong>{item.name}</strong><span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div><div class="ranking-values"><b>{formatMoney(item.amount)}</b><span>{formatNumber(item.quantity)} {t('analysis.units')}</span></div></li>{/each}</ol>
+                <ol>{#each group.items as item, index}<li><span class="rank">{index + 1}</span><div class="ranking-product">{@render productName(item.code, item.name, salesRankingPeriod?.key)}<span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div><div class="ranking-values"><b>{formatMoney(item.amount)}</b><span>{formatNumber(item.quantity)} {t('analysis.units')}</span></div></li>{/each}</ol>
               </article>
-            {:else}<div class="ranking-empty">{t('analysis.noResults')}</div>{/each}
+            {:else}<div class="ranking-empty">{itemEmptyLabel(salesRankingPeriod, hydrationFailures)}</div>{/each}
           </div>
         </section>
 
@@ -1740,33 +2194,37 @@
             {#each quantityRankingGroups as group (group.id)}
               <article class="ranking-group">
                 <header><div><strong>{group.name}</strong>{#if group.code}<span>{group.code}</span>{/if}</div><b>{formatNumber(group.quantity)} {t('analysis.units')}</b></header>
-                <ol>{#each group.items as item, index}<li><span class="rank">{index + 1}</span><div class="ranking-product"><strong>{item.name}</strong><span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div><div class="ranking-values"><b>{formatNumber(item.quantity)} {t('analysis.units')}</b><span>{formatMoney(item.amount)}</span></div></li>{/each}</ol>
+                <ol>{#each group.items as item, index}<li><span class="rank">{index + 1}</span><div class="ranking-product">{@render productName(item.code, item.name, quantityRankingPeriod?.key)}<span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div><div class="ranking-values"><b>{formatNumber(item.quantity)} {t('analysis.units')}</b><span>{formatMoney(item.amount)}</span></div></li>{/each}</ol>
               </article>
-            {:else}<div class="ranking-empty">{t('analysis.noResults')}</div>{/each}
+            {:else}<div class="ranking-empty">{itemEmptyLabel(quantityRankingPeriod, hydrationFailures)}</div>{/each}
           </div>
         </section>
       {:else if activeView === 'products'}
         <section class="analysis-table-card surface-card" aria-labelledby="items-title">
           <div class="analysis-table-heading"><h2 id="items-title">{t('analysis.items')}</h2><strong>{t('common.items', { count: filteredItems.length })}</strong></div>
-          <div class="table-scroll"><table>
-            <thead><tr><th>{t('analysis.store')}</th><th>{t('analysis.category')}</th><th>{t('analysis.article')}</th><th class="numeric">{t('analysis.transactions')}</th><th class="numeric">{t('analysis.grossSales')}</th><th class="numeric">{t('analysis.returns')}</th><th class="numeric">{t('analysis.netQuantity')}</th><th class="numeric">{t('analysis.netSales')}</th></tr></thead>
-            <tbody>{#each pageRows as item (`${item.storeId}:${item.articleCode}:${item.category5}`)}<tr><td><strong>{item.storeId}</strong></td><td class="category-cell"><strong>{categoryValue(item, 'category4')}</strong><span>{item.category4Code || item.category5Code || categoryValue(item, 'category5')}</span></td><td class="article-cell"><strong>{item.articleName || t('common.notAvailable')}</strong><span>{item.articleCode}{item.brandName ? ` · ${item.brandName}` : ''}</span></td><td class="numeric">{formatNumber(item.transactionCount)}</td><td class="numeric">{formatMoney(item.saleAmount)}</td><td class="numeric">{formatMoney(item.returnAmount)}</td><td class="numeric">{formatNumber(item.netQuantity)}</td><td class="numeric net-value">{formatMoney(item.netSalesAmount)}</td></tr>{:else}<tr><td colspan="8" class="empty-table">{t('analysis.noResults')}</td></tr>{/each}</tbody>
-          </table></div>
-          {#if pageCount > 1}<div class="pagination"><md-outlined-button type="button" disabled={page === 1} onclick={() => { page -= 1; }}>{t('analysis.previous')}</md-outlined-button><strong>{page} / {pageCount}</strong><md-outlined-button type="button" disabled={page === pageCount} onclick={() => { page += 1; }}>{t('analysis.next')}</md-outlined-button></div>{/if}
+          <AnalysisDataTable table={dataTables.products![0]!} {t} locale={settings.locale} sort={tableSorts.products} onSort={sortData} onProduct={openProduct} paginated />
         </section>
       {:else}
         <section class="comparison-card surface-card" aria-labelledby="stores-title">
           <div class="section-heading"><h2 id="stores-title">{t('analysis.storeComparison')}</h2></div>
-          <div class="table-scroll store-table"><table>
-            <thead><tr><th>{t('analysis.store')}</th><th class="numeric">{t('analysis.currentPeriod')}</th><th class="numeric">{t('analysis.previousPeriod')}</th><th class="numeric">{t('analysis.yearAgoPeriod')}</th><th class="numeric">{t('analysis.vsPrevious')}</th><th class="numeric">{t('analysis.vsYearAgo')}</th><th class="numeric">{t('analysis.transactions')}</th><th class="numeric">{t('analysis.basket')}</th></tr></thead>
-            <tbody>{#each storeRows as row}<tr><th><strong>{row.id}</strong><span>{row.label}</span></th><td class="numeric emphasis">{formatValue(row.current?.netSalesAmount, 'money')}</td><td class="numeric">{formatValue(row.previous?.netSalesAmount, 'money')}</td><td class="numeric">{formatValue(row.yearAgo?.netSalesAmount, 'money')}</td><td class={`numeric ${deltaClass(delta(row.current?.netSalesAmount, row.previous?.netSalesAmount))}`}>{formatPercent(delta(row.current?.netSalesAmount, row.previous?.netSalesAmount))}</td><td class={`numeric ${deltaClass(delta(row.current?.netSalesAmount, row.yearAgo?.netSalesAmount))}`}>{formatPercent(delta(row.current?.netSalesAmount, row.yearAgo?.netSalesAmount))}</td><td class="numeric">{formatValue(row.current?.transactionCount, 'number')}</td><td class="numeric">{row.current?.transactionCount && row.current?.trendNetSalesAmount !== undefined ? formatMoney(row.current.trendNetSalesAmount / row.current.transactionCount) : '—'}</td></tr>{:else}<tr><td colspan="8" class="empty-table">{t('analysis.noResults')}</td></tr>{/each}</tbody>
-          </table></div>
+          <div class="store-table"><AnalysisDataTable table={dataTables.stores![0]!} {t} locale={settings.locale} sort={tableSorts.stores} onSort={sortData} /></div>
         </section>
+      {/if}
       {/if}
       </div>
     </section>
   {/if}
 </section>
+
+{#if selectedProduct && result}
+  <ProductDetailsDialog {t} locale={settings.locale} code={selectedProduct.code} name={selectedProduct.name} initialPeriod={selectedProduct.periodKey}
+    periods={reportPeriods} context={dataContext.slice(0, reportPeriods.length + 2)} failures={hydrationFailures} loading={loadingItems} pending={Boolean(result.pending)}
+    onRetry={retryItemHydration} onClose={() => { selectedProduct = undefined; }} onBusy={(value) => { exportingData = value; }} />
+{/if}
+
+{#if presetsOpen}
+  <AnalysisPresetsDialog {t} locale={settings.locale} draft={presetSaveDraft} groups={manCodeGroups} onClose={closePresets} onApply={stagePreset} />
+{/if}
 
 {#if exportDialog && result}
   <dialog use:modal={{ busy: exportingPDF, onClose: closeExportDialog }} class="app-dialog export-dialog" aria-modal="true" aria-labelledby="export-dialog-title">
@@ -1851,6 +2309,7 @@
               <input type="checkbox" checked={exportAIEnabled} disabled={exportingPDF} onchange={() => { exportAIEnabled = !exportAIEnabled; }} />
               <span><b>{t('analysis.exportOutputAI')}</b><small>{t('analysis.exportOutputAIHint')}</small></span>
             </label>
+            <div class="export-ranking-limit">{@render rankingControl(exportingPDF)}</div>
           </section>
           {#if listSuccessfulReportStores(result).length > 1}
             <section class="export-section" aria-labelledby="export-files-title">
@@ -1908,6 +2367,9 @@
           {/if}
         </div>
       </div>
+      {#if result.pending}
+        <p class="export-dialog-warning">{t('analysis.exportIncompleteHint')}</p>
+      {/if}
       {#if exportTargetTotal === 0}
         <p class="export-dialog-warning">{t('analysis.exportNeedTarget')}</p>
       {:else if !exportPDFEnabled && !exportAIEnabled}
@@ -1927,19 +2389,101 @@
 <style>
   .analysis-page { max-width: 1480px; }
   .analysis-page.has-results { width: 100%; max-width: 1480px; }
+  .analysis-page .page-heading { margin-bottom: 12px; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+  .analysis-page .page-heading h1 { font-size: clamp(24px, 2vw, 28px); letter-spacing: -.02em; }
+  .heading-copy { display: grid; min-width: 0; gap: 6px; }
+  .heading-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; min-width: 0; }
+  .heading-flags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+  .report-context { margin: 0; color: var(--md-sys-color-on-surface-variant); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+  .heading-meta .report-context { flex: 1 1 16rem; min-width: min(100%, 12rem); overflow-wrap: break-word; }
+  .heading-meta .report-status, .heading-meta .period-disclosure summary { white-space: nowrap; }
+  .analysis-page :is(button, summary, input, select):focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 3px; }
+  .analysis-page :is(button, input, select):disabled { cursor: not-allowed; opacity: .55; }
   .export-notice { display: flex; align-items: center; gap: 12px; }
   .export-notice-copy { display: grid; min-width: 0; flex: 1; gap: 2px; }
   .export-notice-copy code { overflow: hidden; color: var(--md-sys-color-on-surface-variant); font-family: "Cascadia Code", ui-monospace, monospace; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-  .analysis-results { display: grid; gap: 12px; }
-  .analysis-toolbar { display: grid; gap: 10px; overflow: visible; }
-  .analysis-workspace { display: grid; align-content: start; gap: 16px; overflow: visible; }
-  .period-summary { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-variant-numeric: tabular-nums; }
-  .period-summary .current { color: var(--md-sys-color-primary); font-weight: 650; }
+  .analysis-results { display: grid; gap: 12px; min-width: 0; }
+  .analysis-results > *, .analysis-workspace > * { min-width: 0; }
+  .report-status { display: inline-flex; align-items: center; gap: 7px; min-height: 28px; font-size: 12px; color: var(--md-sys-color-on-surface-variant); }
+  .report-status.ready { color: var(--md-sys-color-primary); }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .period-disclosure { min-width: 0; }
+  .heading-meta .period-disclosure[open] { flex: 1 1 100%; }
+  .period-disclosure summary { display: flex; width: fit-content; align-items: center; gap: 4px; min-height: 28px; cursor: pointer; list-style: none; }
+  .period-disclosure summary::-webkit-details-marker { display: none; }
+  .period-disclosure summary .material-symbols-rounded { font-size: 18px; }
+  .period-disclosure[open] summary .material-symbols-rounded { transform: rotate(180deg); }
+  .period-summary { display: grid; gap: 8px; margin: 8px 0 0; padding: 12px 16px; border-left: 2px solid var(--app-active-border); font-variant-numeric: tabular-nums; }
+  .period-summary > div { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+  .period-summary dt { min-width: 5em; font-weight: 650; }
+  .period-summary dd { margin: 0; }
+  .period-summary .current { color: var(--md-sys-color-primary); }
+  .item-recovery { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 12px; padding: 14px 16px; border: 1px solid var(--md-sys-color-error); border-radius: 12px; background: var(--app-card); }
+  .item-recovery > div { flex: 1 1 240px; min-width: 0; }
+  .item-recovery strong { color: var(--md-sys-color-error); font-size: 14px; }
+  .item-recovery p, .item-recovery ul { margin: 6px 0 0; color: var(--md-sys-color-on-surface-variant); font-size: 12px; overflow-wrap: anywhere; }
+  .item-recovery ul { padding-left: 18px; }
+  .item-recovery button { padding: 8px 14px; min-height: 40px; border: 1px solid var(--app-active-border); border-radius: 10px; color: var(--md-sys-color-primary); background: var(--md-sys-color-secondary-container); font-weight: 650; cursor: pointer; }
+  .navigation-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .return-to-filters { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 40px; min-height: 40px; padding: 4px 8px; border: 1px solid var(--app-border); border-radius: 9px; color: var(--md-sys-color-primary); background: var(--app-card); cursor: pointer; }
+  .return-to-filters .material-symbols-rounded { font-size: 22px; }
+  .return-to-filters b { font-size: 12px; }
+  .report-navigation { position: sticky; top: 0; z-index: 24; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border: 1px solid var(--app-border); border-radius: 14px; background: var(--app-card); box-shadow: 0 4px 12px color-mix(in srgb, var(--md-sys-color-shadow) 5%, transparent); }
+  .report-filter { min-width: 0; }
+  .filter-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+  .filter-bar .analysis-search { flex: 1 1 220px; max-width: 400px; }
+  .filter-toggle { display: inline-flex; align-items: center; gap: 7px; min-height: 44px; padding: 0 12px; border: 1px solid var(--app-border); border-radius: 12px; background: var(--app-card); color: var(--md-sys-color-on-surface-variant); font-weight: 650; cursor: pointer; }
+  .filter-toggle.active { border-color: var(--app-active-border); color: var(--md-sys-color-primary); background: var(--md-sys-color-secondary-container); }
+  .filter-toggle .material-symbols-rounded { font-size: 20px; }
+  .filter-toggle b { min-width: 18px; font-size: 12px; }
+  .filter-tools { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px 12px; margin-left: auto; min-width: 0; }
+  .scope-count { font-size: 12px; color: var(--md-sys-color-on-surface-variant); font-variant-numeric: tabular-nums; }
+  .filter-panel { margin-top: 12px; padding: 16px; border: 1px solid var(--app-border); border-radius: 14px; background: var(--app-card); }
+  .filter-panel[hidden] { display: none; }
+  .filter-hint { margin: 0 0 12px; font-size: 12px; color: var(--md-sys-color-on-surface-variant); }
+  .filter-fields { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
+  .filter-fields .facet-row { flex: 1 1 600px; }
+  .filter-fields .promoter-group-selector { flex: 1 1 260px; max-width: 360px; }
+  .active-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+  .filter-chip { display: inline-flex; align-items: center; gap: 6px; max-width: min(100%, 320px); min-height: 32px; padding: 4px 10px; border: 1px solid var(--app-active-border); border-radius: 8px; background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); cursor: pointer; font-size: 12px; }
+  .filter-chip > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .filter-chip .material-symbols-rounded { font-size: 16px; }
+  .clear-filters, .query-draft-notice button { min-height: 32px; padding: 4px 8px; border: 0; background: transparent; color: var(--md-sys-color-primary); font-size: 12px; font-weight: 650; cursor: pointer; }
+  .filter-empty { display: flex; align-items: center; gap: 14px; padding: 20px; border: 1px dashed var(--app-border); border-radius: 14px; color: var(--md-sys-color-on-surface-variant); }
+  .filter-empty p { margin: 4px 0 0; font-size: 13px; }
+  .chrome-busy { display: inline-flex; align-items: center; gap: 6px; color: var(--md-sys-color-primary); font-size: 12px; }
+  .chrome-busy .material-symbols-rounded { font-size: 16px; }
+  .analysis-workspace { display: grid; align-content: start; gap: 16px; overflow: visible; min-width: 0; scroll-margin-top: 90px; }
+  .analysis-workspace:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 4px; }
+  .query-draft-notice { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 14px; margin: 12px 0; border-left: 3px solid var(--md-sys-color-primary); background: var(--md-sys-color-surface-container-low); color: var(--md-sys-color-on-surface-variant); font-size: 13px; }
+  .query-draft-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+  .selection-scope { margin: 8px 0 0; font-size: 12px; color: var(--md-sys-color-on-surface-variant); }
   .store-search { margin-top: 12px; }
-  .analysis-heading-actions { display: flex; align-items: center; gap: 9px; }
+  .preset-shortcuts { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 0; }
+  .shortcut-group { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+  .shortcut-group > span { font-size: 11px; color: var(--md-sys-color-on-surface-variant); }
+  .shortcut-group button { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 36px; border: 1px solid var(--md-sys-color-outline-variant); background: var(--md-sys-color-surface); color: var(--md-sys-color-primary); border-radius: 10px; padding: 7px 10px; font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
+  .shortcut-group button:disabled { opacity: .5; cursor: default; }
+  .shortcut-group button:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 3px; }
+  .product-name-link { padding: 0; border: 0; background: transparent; color: var(--md-sys-color-primary); font: inherit; font-weight: 650; text-align: left; line-height: 1.45; cursor: pointer; overflow-wrap: anywhere; }
+  .product-name-link:hover { text-decoration: underline; }
+  .product-name-link:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 3px; }
+  .analysis-heading-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
+  .preset-trigger { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 8px 12px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 20px; background: var(--md-sys-color-surface); color: var(--md-sys-color-primary); font: inherit; font-size: 13px; cursor: pointer; }
+  .preset-trigger .material-symbols-rounded { font-size: 18px; }
+  .preset-trigger:disabled { opacity: .5; cursor: default; }
+  .preset-trigger:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 3px; }
+  .preset-warning { flex-basis: 100%; font-size: 12px; overflow-wrap: anywhere; color: var(--md-sys-color-error); }
   .analysis-loading { display: flex; min-height: 220px; align-items: center; justify-content: center; gap: 14px; }
   .analysis-loading md-circular-progress, .inline-loading md-circular-progress { width: 24px; height: 24px; }
-  .analysis-query { padding: 24px; }
+  .analysis-query { padding: 24px; margin-bottom: 16px; }
+  .analysis-query.compact { padding: 20px; }
+  .query-section-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+  .query-section-heading > .material-symbols-rounded { display: grid; width: 40px; height: 40px; place-items: center; border-radius: 12px; background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-primary); }
+  .query-section-heading h2 { margin: 0; font-size: 16px; }
+  .query-section-heading p { margin: 4px 0 0; color: var(--md-sys-color-on-surface-variant); font-size: 13px; }
+  .selection-count { margin-left: 8px; color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-weight: 500; }
+  .analysis-query.compact .store-grid { max-height: min(200px, 28vh); }
   .analysis-query-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; }
   .week-compare-toggle { display: flex; min-height: 48px; align-items: center; gap: 10px; cursor: pointer; }
   .week-compare-field input[type="checkbox"] {
@@ -1974,6 +2518,15 @@
   .inline-loading, .store-empty { display: flex; min-height: 92px; align-items: center; justify-content: center; gap: 10px; color: var(--md-sys-color-on-surface-variant); }
   .analysis-query-actions { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--md-sys-color-outline-variant); }
   .analysis-query-actions > span { color: var(--md-sys-color-on-surface-variant); font-variant-numeric: tabular-nums; }
+  .rank-seg { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-shrink: 0; }
+  .rank-seg > span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-weight: 650; }
+  .rank-seg-track { display: flex; align-items: stretch; padding: 3px; border-radius: 9px; background: var(--md-sys-color-surface-container-low); }
+  .rank-seg-track button { min-width: 34px; min-height: 30px; padding: 0 8px; border: 0; border-radius: 6px; color: var(--md-sys-color-on-surface-variant); background: transparent; font-size: 12px; font-weight: 650; cursor: pointer; }
+  .rank-seg-track button.active { color: var(--md-sys-color-primary); background: var(--app-card); box-shadow: 0 1px 3px color-mix(in srgb, var(--md-sys-color-shadow) 12%, transparent); }
+  .rank-custom { display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; min-height: 36px; border: 1px solid var(--app-border); border-radius: 9px; color: var(--md-sys-color-on-surface-variant); background: var(--app-card); font-size: 12px; }
+  .rank-custom.active, .rank-custom:focus-within { border-color: var(--md-sys-color-primary); color: var(--md-sys-color-primary); }
+  .rank-custom input { width: 3.3rem; min-width: 0; min-height: 32px; padding: 0; border: 0; outline: 0; color: var(--md-sys-color-on-surface); background: transparent; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .export-ranking-limit { margin-top: 4px; }
   .analysis-progress { margin-top: 18px; padding: 24px; }
   .analysis-progress-heading { align-items: flex-start; margin-bottom: 16px; }
   .analysis-progress-heading h2 { margin: 0 0 5px; }
@@ -1982,9 +2535,6 @@
   .analysis-progress md-linear-progress { width: 100%; --md-linear-progress-track-height: 9px; --md-linear-progress-active-indicator-height: 9px; }
   .analysis-progress-footer { margin-top: 14px; }
   .analysis-progress-footer > strong { color: var(--md-sys-color-on-surface-variant); font-variant-numeric: tabular-nums; }
-  .analysis-filters { display: flex; flex-direction: column; gap: 10px; overflow: visible; padding: 12px 14px; }
-  .analysis-filter-tools { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 360px); align-items: stretch; gap: 8px; }
-  .analysis-filter-tools .analysis-search { min-width: 0; }
   .promoter-group-selector { display: grid; min-width: 0; min-height: 44px; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; padding-left: 12px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; background: var(--md-sys-color-surface-container-lowest); }
   .promoter-group-selector:focus-within { border-color: var(--md-sys-color-primary); box-shadow: 0 0 0 3px var(--app-field-ring); }
   .promoter-group-selector > span { color: var(--md-sys-color-on-surface-variant); font-size: 11px; font-weight: 680; white-space: nowrap; }
@@ -2002,6 +2552,7 @@
   .facet-menu:last-child .facet-popover,
   .facet-menu:nth-last-child(-n+2) .facet-popover { left: auto; right: 0; }
   .facet-actions { justify-content: flex-end; padding: 2px 4px 8px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+  .facet-search { width: 100%; min-width: 0; min-height: 36px; margin-top: 8px; padding: 6px 10px; border: 1px solid var(--app-border); border-radius: 8px; color: var(--md-sys-color-on-surface); background: var(--app-card); }
   .facet-options { display: grid; max-height: min(260px, 45vh); gap: 3px; overflow: auto; padding-top: 7px; }
   .facet-options label { display: flex; align-items: center; gap: 10px; padding: 8px; cursor: pointer; border-radius: 9px; }
   .facet-options label:hover { background: var(--md-sys-color-surface-container-low); }
@@ -2013,31 +2564,50 @@
   .analysis-search input { width: 100%; min-width: 0; border: 0; outline: 0; color: var(--md-sys-color-on-surface); background: transparent; }
   .analysis-search button { display: grid; place-items: center; padding: 0; }
   .analysis-search button .material-symbols-rounded { font-size: 18px; }
-  .report-tabs { display: flex; width: fit-content; max-width: 100%; gap: 4px; padding: 4px; overflow-x: auto; border: 1px solid var(--app-border); border-radius: 14px; background: var(--app-card); }
-  .report-tabs button { display: flex; min-height: 42px; align-items: center; gap: 8px; padding: 8px 16px; cursor: pointer; border: 0; border-radius: 10px; color: var(--md-sys-color-on-surface-variant); background: transparent; font-weight: 680; white-space: nowrap; }
-  .report-tabs button.active { color: var(--md-sys-color-on-secondary-container); background: var(--md-sys-color-secondary-container); }
+  .report-tabs { display: flex; min-width: 0; gap: 4px; padding: 3px; overflow-x: auto; scrollbar-width: thin; }
+  .report-tabs button { display: flex; min-height: 40px; align-items: center; gap: 7px; padding: 8px 12px; cursor: pointer; border: 0; border-radius: 8px; color: var(--md-sys-color-on-surface-variant); background: transparent; font-size: 13px; font-weight: 650; white-space: nowrap; }
+  .report-tabs button:hover { background: var(--md-sys-color-surface-container-low); }
+  .report-tabs button.active { color: var(--md-sys-color-primary); background: var(--md-sys-color-secondary-container); }
   .report-tabs .material-symbols-rounded { font-size: 20px; }
-  .analysis-kpis { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 10px; margin: 0; }
-  .analysis-kpis > div { grid-column: span 3; min-width: 0; padding: 14px 16px; border: 1px solid var(--app-border); border-radius: 16px; background: var(--app-card); box-shadow: var(--app-shadow); }
-  .analysis-kpis > div:nth-child(n + 5) { grid-column: span 4; }
-  .analysis-kpis dt { color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-weight: 700; }
-  .analysis-kpis dd { margin: 6px 0 4px; color: var(--app-summary-value); font-size: clamp(20px, 1.6vw, 26px); font-weight: 730; font-variant-numeric: tabular-nums; letter-spacing: -.02em; line-height: 1.15; white-space: nowrap; }
-  .analysis-kpis span { color: var(--md-sys-color-on-surface-variant); font-size: 11px; font-weight: 650; }
+  .analysis-kpis { display: grid; grid-template-columns: 1.2fr repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0; }
+  .analysis-kpis > div { min-width: 0; padding: 18px; border: 1px solid var(--app-border); border-radius: 14px; background: var(--app-card); }
+  .analysis-kpis > .kpi-primary { border-color: var(--app-active-border); background: linear-gradient(120deg, var(--md-sys-color-secondary-container), var(--app-card)); }
+  .analysis-kpis dt { color: var(--md-sys-color-on-surface-variant); font-size: 13px; font-weight: 650; }
+  .analysis-kpis dd { margin: 10px 0 8px; color: var(--app-summary-value); font-size: clamp(21px, 1.8vw, 29px); font-weight: 750; font-variant-numeric: tabular-nums; letter-spacing: -.03em; line-height: 1.2; overflow-wrap: anywhere; }
+  .analysis-kpis span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; }
+  .analysis-secondary-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0; padding: 4px 2px 8px; }
+  .analysis-secondary-kpis > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 0 16px; min-width: 0; }
+  .analysis-secondary-kpis > div + div { border-left: 1px solid var(--app-border); }
+  .analysis-secondary-kpis dt, .analysis-secondary-kpis span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; }
+  .analysis-secondary-kpis dd { margin: 0; font-size: 18px; color: var(--app-summary-value); font-weight: 700; font-variant-numeric: tabular-nums; }
   .positive { color: var(--app-proposed) !important; }
   .negative { color: var(--md-sys-color-error) !important; }
   .neutral { color: var(--md-sys-color-on-surface-variant) !important; }
   .performance-card, .comparison-card { overflow: hidden; padding: 0; }
-  .section-heading, .comparison-heading, .analysis-table-heading { padding: 19px 21px 14px; }
-  .section-heading h2, .comparison-heading h2, .analysis-table-heading h2 { margin: 0; }
+  .section-heading, .comparison-heading, .analysis-table-heading { padding: 14px 16px 10px; }
+  .section-heading h2, .comparison-heading h2, .analysis-table-heading h2 { margin: 0; font-size: 16px; font-weight: 700; }
+  .analysis-workspace .surface-card { border-radius: 14px; box-shadow: none; }
+  .performance-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 16px; cursor: pointer; list-style: none; }
+  .performance-summary::-webkit-details-marker { display: none; }
+  .performance-summary h2 { margin: 0; font-size: 16px; }
+  .performance-summary > span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; }
+  .performance-summary > .material-symbols-rounded { margin-left: auto; font-size: 20px; }
+  .performance-details[open] .performance-summary { border-bottom: 1px solid var(--app-border); }
+  .performance-details[open] .performance-summary > .material-symbols-rounded { transform: rotate(180deg); }
   .performance-card .table-scroll { max-height: none; }
-  .comparison-card .table-scroll,
-    .category-table { max-height: none; overflow: visible; }
-  .performance-card th:first-child, .comparison-card th:first-child { text-align: left; }
+  .category-table { max-height: none; }
+  .analysis-workspace .table-scroll { scrollbar-width: thin; }
+  .analysis-workspace th, .analysis-workspace td { padding: 12px 14px; }
+  .analysis-workspace tbody tr:hover { background: var(--md-sys-color-surface-container-low); }
+  .performance-card th:first-child { text-align: left; }
   .emphasis { color: var(--app-summary-value); font-weight: 740; }
   .top-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   .top-card { overflow: hidden; padding: 0; }
-  .top-card ol { display: grid; margin: 0; padding: 0 18px 14px; list-style: none; }
-  .top-card li { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 51px; border-top: 1px solid var(--md-sys-color-outline-variant); }
+  .top-card ol { display: grid; margin: 0; padding: 0 16px 10px; list-style: none; }
+  .top-card li { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 56px; padding: 6px 0; border-top: 1px solid var(--app-table-border); }
+  .top-card li:hover { background: var(--md-sys-color-surface-container-low); }
+  .top-card .top-product strong { white-space: normal; overflow-wrap: anywhere; font-size: 13px; line-height: 1.5; }
+  .top-card .podium .rank { color: var(--md-sys-color-on-primary); background: var(--md-sys-color-primary); }
   .top-card li:first-child { border-top: 0; }
   .top-card li > div { display: grid; min-width: 0; gap: 2px; }
   .top-card li strong, .top-card li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2074,20 +2644,10 @@
   .group-tabs button { min-height: 38px; padding: 7px 10px; cursor: pointer; border: 0; border-right: 1px solid var(--md-sys-color-outline-variant); color: var(--md-sys-color-on-surface-variant); background: transparent; font-size: 12px; font-weight: 650; }
   .group-tabs button:last-child { border-right: 0; }
   .group-tabs button.active { color: var(--md-sys-color-on-secondary-container); background: var(--md-sys-color-secondary-container); }
-  .category-table th:first-child, .store-table th:first-child { min-width: 220px; }
-  .weekly-total { background: var(--md-sys-color-surface-container-low); }
-  .weekly-total th, .weekly-total td { font-weight: 740; }
-  .category-table th span, .store-table th span, .category-cell span, .article-cell span { display: block; margin-top: 3px; color: var(--md-sys-color-on-surface-variant); font-size: 11px; font-weight: 500; }
   .analysis-table-card { padding: 0; overflow: hidden; }
   .analysis-table-heading > strong { color: var(--md-sys-color-on-surface-variant); font-size: 13px; }
-  .analysis-table-card .table-scroll { max-height: min(620px, 62vh); }
-  .category-cell strong, .article-cell strong { display: block; }
-  .net-value { color: var(--app-proposed); font-weight: 700; }
-  .empty-table { height: 150px; text-align: center !important; color: var(--md-sys-color-on-surface-variant); }
-  .pagination { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 14px 18px; border-top: 1px solid var(--app-table-border); }
-  .pagination strong { min-width: 70px; text-align: center; font-variant-numeric: tabular-nums; }
   .ranking-section { overflow: visible; max-height: none; padding: 0; }
-  .ranking-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px 20px; border-bottom: 1px solid var(--app-table-border); }
+  .ranking-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--app-table-border); }
   .ranking-heading > div:first-child { display: grid; gap: 3px; }
   .ranking-heading h2 { margin: 0; }
   .ranking-heading > div:first-child > span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; }
@@ -2101,8 +2661,10 @@
   .ranking-group > header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ranking-group > header span { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
   .ranking-group > header b { color: var(--app-summary-value); font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .ranking-group ol { display: grid; margin: 0; padding: 0 12px 9px; overflow: visible; list-style: none; }
-  .ranking-group li { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 48px; border-top: 1px solid var(--app-table-border); }
+  .ranking-group ol { display: grid; margin: 0; padding: 0 12px 8px; list-style: none; }
+  .ranking-group li { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 52px; padding: 6px 0; border-top: 1px solid var(--app-table-border); }
+  .ranking-group li:hover { background: var(--md-sys-color-surface-container-low); }
+  .ranking-group .ranking-product strong { white-space: normal; overflow-wrap: anywhere; line-height: 1.5; }
   .ranking-group li:first-child { border-top: 0; }
   .ranking-group .rank { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 7px; color: var(--md-sys-color-primary); background: var(--md-sys-color-secondary-container); font-size: 11px; font-weight: 750; }
   .ranking-product, .ranking-values { display: grid; min-width: 0; gap: 2px; }
@@ -2110,7 +2672,7 @@
   .ranking-product span, .ranking-values span { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
   .ranking-values { min-width: max-content; justify-items: end; text-align: right; font-variant-numeric: tabular-nums; }
   .ranking-empty { min-height: 120px; display: grid; place-items: center; color: var(--md-sys-color-on-surface-variant); }
-  .analysis-supplement { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px 16px; padding: 12px 14px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 16px; background: var(--md-sys-color-surface-container-low); }
+  .analysis-supplement { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, 260px) auto; align-items: center; gap: 12px 16px; padding: 12px 14px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 16px; background: var(--md-sys-color-surface-container-low); }
   .analysis-supplement-copy { display: grid; gap: 2px; min-width: 0; }
   .analysis-supplement-copy strong { font-size: 14px; }
   .analysis-supplement-copy span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2296,14 +2858,21 @@
     .analysis-supplement-meter { min-width: 0; }
   }
 
-  @media (max-width: 1100px) {
-    .analysis-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .analysis-kpis > div,
-    .analysis-kpis > div:nth-child(n + 5) { grid-column: auto; }
+  @media (max-width: 1200px) {
+    .report-tabs button { padding-inline: 10px; }
+    .report-tabs .material-symbols-rounded { display: none; }
+    .analysis-kpis > div { padding: 14px; }
+    .analysis-kpis dd { font-size: clamp(18px, 1.9vw, 24px); }
   }
 
   @media (max-width: 980px) {
-    .analysis-filter-tools { grid-template-columns: 1fr; }
+    .report-navigation { flex-wrap: wrap; }
+    .report-tabs { flex: 1 1 100%; }
+    .analysis-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .filter-fields .promoter-group-selector { max-width: none; }
+    .filter-fields .facet-row { position: relative; }
+    .facet-menu { position: static; }
+    .facet-popover, .facet-menu:nth-last-child(-n+2) .facet-popover { left: 0; right: auto; max-width: 100%; }
     .top-grid { grid-template-columns: 1fr; }
     .focus-columns { grid-template-columns: 1fr; }
     .focus-columns > div + div { border-top: 1px solid var(--app-table-border); border-left: 0; }
@@ -2312,11 +2881,29 @@
   }
 
   @media (max-width: 620px) {
-    .analysis-heading-actions { width: 100%; align-items: stretch; flex-direction: column; }
-    .analysis-query { padding: 18px; }
-    .analysis-kpis { grid-template-columns: 1fr; }
-    .analysis-kpis > div,
-    .analysis-kpis > div:nth-child(n + 5) { grid-column: auto; }
+    .analysis-heading-actions { width: 100%; justify-content: flex-start; }
+    .analysis-query, .analysis-query.compact { padding: 16px; }
+    .analysis-query-grid { grid-template-columns: minmax(0, 1fr); }
+    .report-navigation { gap: 4px; padding: 6px; }
+    .report-navigation .rank-seg { padding: 4px; }
+    .report-tabs button { min-height: 44px; }
+    .scope-count { flex: 1 1 auto; }
+    .filter-tools { flex: 1 1 100%; margin-left: 0; justify-content: space-between; }
+    .filter-bar .analysis-search { max-width: none; flex-basis: 160px; }
+    .filter-panel { padding: 12px; }
+    .analysis-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .analysis-kpis > div { padding: 12px; }
+    .analysis-kpis > .kpi-primary, .analysis-kpis > div:nth-child(2) { grid-column: 1 / -1; }
+    .analysis-kpis dd { font-size: 22px; }
+    .analysis-secondary-kpis { grid-template-columns: 1fr; gap: 8px; }
+    .analysis-secondary-kpis > div { padding: 4px 12px; }
+    .analysis-secondary-kpis > div + div { border-left: 0; }
+    .selection-heading { flex-wrap: wrap; }
+    .rank-seg { gap: 6px; }
+    .top-card li { grid-template-columns: 24px minmax(0, 1fr); }
+    .top-card li > .top-metrics { grid-column: 2; grid-template-columns: auto auto; gap: 10px; justify-content: space-between; min-width: 0; }
+    .ranking-group li { grid-template-columns: 24px minmax(0, 1fr); }
+    .ranking-values { grid-column: 2; grid-template-columns: auto auto; justify-content: space-between; min-width: 0; }
     .store-grid { grid-template-columns: 1fr; }
     .analysis-query-actions, .analysis-progress-footer { align-items: stretch; flex-direction: column; }
     .group-tabs { width: 100%; }

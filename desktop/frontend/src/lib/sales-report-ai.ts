@@ -1,4 +1,5 @@
 import { ALL_STORES_REPORT_ID, isAllStoresReport, salesAnalysisPDFFilename } from './sales-report-pdf';
+import { normalizeRankingLimit } from './settings';
 import { salesReportHasScreenFilters, type SalesReportFilter } from './salesReportItems';
 import type {
   Locale,
@@ -36,6 +37,7 @@ export interface SalesReportAIInput {
   base: SalesAnalysisReportMemo;
   groups: SalesReportAIGroup[];
   periodMeta?: SalesReportAIPeriodMeta[];
+  rankingLimit?: number;
 }
 
 export function salesAnalysisAIFilename(storeId: string, from: string, to: string): string {
@@ -78,8 +80,8 @@ export function buildSalesAnalysisAIMarkdown(input: SalesReportAIInput): string 
       },
     ])),
     categories: [] as ReturnType<typeof comparedCategories>,
-    topSales: (current?.topAmount ?? []).slice(0, 15).map(compactItem),
-    topQuantity: (current?.topQuantity ?? []).slice(0, 15).map(compactItem),
+    topSales: (current?.topAmount ?? []).slice(0, rankingLimitOf(input)).map(compactItem),
+    topQuantity: (current?.topQuantity ?? []).slice(0, rankingLimitOf(input)).map(compactItem),
     focusGroups: compactFocusGroups(yearAgoNext?.focusGroups),
     groups: input.groups.map((group) => {
       const groupCurrent = periodMemo(group.memo, 'current');
@@ -305,6 +307,10 @@ function appendItemTable(
     lines.push(`| ${index + 1} | ${mdCell(item.name || item.code)} \`${item.code}\` | ${money(item.amount)} | ${qty(item.quantity)} |`);
   });
   lines.push('');
+}
+
+function rankingLimitOf(input: SalesReportAIInput): number {
+  return normalizeRankingLimit(input.rankingLimit);
 }
 
 function periodMemo(memo: SalesAnalysisReportMemo, key: string): SalesAnalysisPeriodMemo | undefined {

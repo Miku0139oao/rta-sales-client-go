@@ -5,6 +5,10 @@ const LEGACY_STORAGE_KEY = 'rta-sales-desktop-settings-v1';
 
 export const CONCURRENCY_CHOICES = [8, 16, 32, 48, 64, 80, 128, 160] as const;
 export const SIMULATE_STORE_CHOICES = [0, 16] as const;
+export const RANKING_LIMIT_CHOICES = [16, 24, 32] as const;
+export const RANKING_LIMIT_MIN = 5;
+export const RANKING_LIMIT_MAX = 100;
+export const DEFAULT_RANKING_LIMIT = 24;
 
 export const defaultSettings: AppSettings = {
   locale: 'zh-TW',
@@ -14,6 +18,7 @@ export const defaultSettings: AppSettings = {
   useLocalMapping: false,
   mappingPath: '',
   simulateStoreCount: 0,
+  rankingLimit: 24,
 };
 
 function clampInteger(value: unknown, fallback: number, min: number, max: number): number {
@@ -25,6 +30,14 @@ function snapToChoices(value: number, choices: readonly number[]): number {
   return choices.reduce((best, choice) =>
     Math.abs(choice - value) < Math.abs(best - value) ? choice : best,
   );
+}
+
+export function normalizeRankingLimit(value: unknown): number {
+  return clampInteger(value, DEFAULT_RANKING_LIMIT, RANKING_LIMIT_MIN, RANKING_LIMIT_MAX);
+}
+
+export function isPresetRankingLimit(value: number): boolean {
+  return (RANKING_LIMIT_CHOICES as readonly number[]).includes(value);
 }
 
 export function normalizeSettings(value: Partial<AppSettings>): AppSettings {
@@ -42,6 +55,7 @@ export function normalizeSettings(value: Partial<AppSettings>): AppSettings {
       clampInteger(value.simulateStoreCount, defaultSettings.simulateStoreCount, 0, 32),
       SIMULATE_STORE_CHOICES,
     ),
+    rankingLimit: normalizeRankingLimit(value.rankingLimit),
   };
 }
 

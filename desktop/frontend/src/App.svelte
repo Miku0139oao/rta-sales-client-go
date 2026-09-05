@@ -191,6 +191,7 @@
           {t}
           {settings}
           onBusyChange={(busy) => (analysisBusy = busy)}
+          onSettingsChange={updateSettings}
           onGoToAccounts={() => { if (!analysisBusy) void navigateTo('accounts'); }}
         />
         {/key}

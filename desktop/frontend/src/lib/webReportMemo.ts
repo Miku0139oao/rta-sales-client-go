@@ -18,8 +18,8 @@ import type {
   SalesAnalysisTotals,
 } from './types';
 
-const TOP_PRODUCTS = 15;
-const GROUP_ITEMS = 24;
+const TOP_PRODUCTS = 100;
+const GROUP_ITEMS = 100;
 
 function categoryLevel(value: string): SalesReportCategoryLevel {
   if (value === 'category1' || value === 'category3' || value === 'category4' || value === 'category5') return value;

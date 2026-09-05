@@ -353,6 +353,12 @@ export function installWebBackend(): void {
 
       ChooseSalesAnalysisPDFDirectory: async () => WEB_DOWNLOADS,
 
+      ExportSalesAnalysisWorkbook: async (value: unknown) => {
+        const request = value as import('./analysisTable').AnalysisWorkbookRequest;
+        const data = await liveRPC<string>('BuildSalesAnalysisWorkbook', request);
+        return downloadBase64(request.filename, data, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      },
+
       WriteSalesAnalysisPDF: async (value: unknown) => {
         const request = asRecord(value);
         return downloadBase64(String(request.filename ?? 'report.pdf'), String(request.dataBase64 ?? ''), 'application/pdf');

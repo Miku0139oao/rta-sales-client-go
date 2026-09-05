@@ -21,6 +21,11 @@ describe('settings normalization', () => {
       accountConcurrency: 8,
       simulateStoreCount: 16,
     });
+    expect(normalizeSettings({ rankingLimit: 99 as never })).toMatchObject({ rankingLimit: 99 });
+    expect(normalizeSettings({ rankingLimit: 0 as never })).toMatchObject({ rankingLimit: 5 });
+    expect(normalizeSettings({ rankingLimit: 200 as never })).toMatchObject({ rankingLimit: 100 });
+    expect(normalizeSettings({ rankingLimit: 16 })).toMatchObject({ rankingLimit: 16 });
+    expect(normalizeSettings({ rankingLimit: 40 })).toMatchObject({ rankingLimit: 40 });
   });
 
   it('keeps only a local mapping path and enabled flag', () => {

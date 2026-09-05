@@ -7,11 +7,14 @@ import {
   buildSalesAnalysisPDF,
   categoryCardRowMetrics,
   categoryRankingCardSlots,
+  categoryRankingCardsPerPage,
   createSalesReportAccumulator,
   focusReportCards,
   generateSalesAnalysisPDF,
   listSuccessfulReportStores,
+  normalizeRankingLimit,
   prepareSalesAnalysisFont,
+  rankingPanelCapacity,
   salesAnalysisPDFFilename,
   salesReportAccumulatorFromMemo,
 } from './sales-report-pdf';
@@ -112,7 +115,7 @@ describe('sales analysis PDF', () => {
   it('builds a nine-page landscape store report with an embedded Chinese font', async () => {
     const fontBase64 = await reportFont();
     expect(fontBase64.length).toBeLessThan(400_000);
-    const pdf = await buildSalesAnalysisPDF(resultFixture(), '107', 'category2', 'zh-TW', fontBase64);
+    const pdf = await buildSalesAnalysisPDF(resultFixture(), '107', 'category2', 'zh-TW', fontBase64, defaultSalesReportFilter(), undefined, [], 16);
     expect(new TextDecoder().decode(pdf.slice(0, 8))).toBe('%PDF-1.3');
     expect(pdf.byteLength).toBeGreaterThan(5_000);
     expect(pdf.byteLength).toBeLessThan(400_000);
@@ -148,7 +151,7 @@ describe('sales analysis PDF', () => {
     }
     result.items = result.periods?.[0]?.items ?? result.items;
     result.totals = totalsFor(result.items ?? []);
-    const pdf = await buildSalesAnalysisPDF(result, ALL_STORES_REPORT_ID, 'category2', 'zh-TW', await reportFont(result));
+    const pdf = await buildSalesAnalysisPDF(result, ALL_STORES_REPORT_ID, 'category2', 'zh-TW', await reportFont(result), defaultSalesReportFilter(), undefined, [], 16);
     expect(new TextDecoder().decode(pdf.slice(0, 8))).toBe('%PDF-1.3');
     expect(new TextDecoder('latin1').decode(pdf).match(/\/Type \/Page\b/g)).toHaveLength(10);
   });
@@ -160,12 +163,14 @@ describe('sales analysis PDF', () => {
     const groupPDF = await buildSalesAnalysisPDF(
       result, ALL_STORES_REPORT_ID, 'category2', 'zh-TW', fontBase64, defaultSalesReportFilter(),
       { groupId: 'promoter-a', groupName: 'Promoter A', itemCodes: ['107001'] },
+      [], 16,
     );
     expect(new TextDecoder('latin1').decode(groupPDF).match(/\/Type \/Page\b/g)).toHaveLength(9);
 
     const emptyPDF = await buildSalesAnalysisPDF(
       result, ALL_STORES_REPORT_ID, 'category2', 'zh-TW', fontBase64, defaultSalesReportFilter(),
       { groupId: 'missing', groupName: 'Missing Group', itemCodes: ['not-present'] },
+      [], 16,
     );
     expect(new TextDecoder('latin1').decode(emptyPDF).match(/\/Type \/Page\b/g)).toHaveLength(2);
   });
@@ -174,11 +179,12 @@ describe('sales analysis PDF', () => {
     const result = resultFixture();
     result.weeks = [weekRow('2026-08-03', '2026-08-09', 200, 100)];
     const fontBase64 = await reportFont(result);
-    const basePDF = await buildSalesAnalysisPDF(result, ALL_STORES_REPORT_ID, 'category2', 'zh-TW', fontBase64);
+    const basePDF = await buildSalesAnalysisPDF(result, ALL_STORES_REPORT_ID, 'category2', 'zh-TW', fontBase64, defaultSalesReportFilter(), undefined, [], 16);
     const withSummary = await buildSalesAnalysisPDF(
       result, ALL_STORES_REPORT_ID, 'category2', 'zh-TW', fontBase64, defaultSalesReportFilter(),
       undefined,
       [{ groupId: 'promoter-a', groupName: 'Promoter A', itemCodes: ['107001'] }],
+      16,
     );
     const basePages = new TextDecoder('latin1').decode(basePDF).match(/\/Type \/Page\b/g)?.length ?? 0;
     const summaryPages = new TextDecoder('latin1').decode(withSummary).match(/\/Type \/Page\b/g)?.length ?? 0;
@@ -195,7 +201,7 @@ describe('sales analysis PDF', () => {
     }
     result.items = result.periods?.[0]?.items ?? result.items;
     result.totals = totalsFor(result.items ?? []);
-    const pdf = await buildSalesAnalysisPDF(result, '107', 'category2', 'zh-TW', await reportFont(result));
+    const pdf = await buildSalesAnalysisPDF(result, '107', 'category2', 'zh-TW', await reportFont(result), defaultSalesReportFilter(), undefined, [], 16);
     expect(new TextDecoder('latin1').decode(pdf).match(/\/Type \/Page\b/g)).toHaveLength(9);
     if (process.env.SALES_REPORT_3CAT_OUTPUT) writeFileSync(process.env.SALES_REPORT_3CAT_OUTPUT, pdf);
   });
@@ -207,7 +213,7 @@ describe('sales analysis PDF', () => {
       weekRow('2026-08-03', '2026-08-09', 1452746, 711906),
       weekRow('2026-08-10', '2026-08-16', 606950, 1452746),
     ];
-    const pdf = await buildSalesAnalysisPDF(result, '107', 'category2', 'zh-TW', await reportFont(result));
+    const pdf = await buildSalesAnalysisPDF(result, '107', 'category2', 'zh-TW', await reportFont(result), defaultSalesReportFilter(), undefined, [], 16);
     expect(new TextDecoder('latin1').decode(pdf).match(/\/Type \/Page\b/g)).toHaveLength(10);
     if (process.env.SALES_REPORT_WEEKLY_OUTPUT) writeFileSync(process.env.SALES_REPORT_WEEKLY_OUTPUT, pdf);
   });
@@ -251,7 +257,7 @@ describe('sales analysis PDF', () => {
     }
     result.items = items;
     result.totals = totalsFor(items);
-    const pdf = await buildSalesAnalysisPDF(result, '107', 'category2', 'zh-TW', await reportFont(result));
+    const pdf = await buildSalesAnalysisPDF(result, '107', 'category2', 'zh-TW', await reportFont(result), defaultSalesReportFilter(), undefined, [], 16);
     expect(new TextDecoder('latin1').decode(pdf).match(/\/Type \/Page\b/g)?.length).toBeGreaterThan(9);
     if (process.env.SALES_REPORT_MIXED_OUTPUT) writeFileSync(process.env.SALES_REPORT_MIXED_OUTPUT, pdf);
   });
@@ -268,7 +274,7 @@ describe('sales analysis PDF', () => {
       items: undefined,
       periods: (result.periods ?? []).map((period) => ({ ...period, items: undefined })),
     };
-    const pdf = await generateSalesAnalysisPDF(slim, ALL_STORES_REPORT_ID, 'category2', 'zh-TW', defaultSalesReportFilter(), fontBase64, accumulator);
+    const pdf = await generateSalesAnalysisPDF(slim, ALL_STORES_REPORT_ID, 'category2', 'zh-TW', defaultSalesReportFilter(), fontBase64, accumulator, [], undefined, 16);
     expect(new TextDecoder().decode(pdf.slice(0, 8))).toBe('%PDF-1.3');
     expect(new TextDecoder('latin1').decode(pdf).match(/\/Type \/Page\b/g)).toHaveLength(10);
     const fromMemo = salesReportAccumulatorFromMemo({
@@ -296,7 +302,7 @@ describe('sales analysis PDF', () => {
     for (const period of result.periods ?? []) {
       delete (period as { stores?: unknown }).stores;
     }
-    const pdf = await buildSalesAnalysisPDF(result, '107', 'category2', 'zh-TW', await reportFont(result));
+    const pdf = await buildSalesAnalysisPDF(result, '107', 'category2', 'zh-TW', await reportFont(result), defaultSalesReportFilter(), undefined, [], 16);
     expect(new TextDecoder().decode(pdf.slice(0, 8))).toBe('%PDF-1.3');
   });
 
@@ -322,6 +328,15 @@ describe('sales analysis PDF', () => {
     expect(six[0]?.height).toBe(six[3]?.height);
     expect(categoryCardRowMetrics(166).limit).toBeGreaterThan(15);
     expect(categoryCardRowMetrics(81).limit).toBeGreaterThanOrEqual(15);
+    expect(categoryCardRowMetrics(166).limit).toBeGreaterThanOrEqual(32);
+    expect(categoryRankingCardsPerPage(16)).toBe(6);
+    expect(categoryRankingCardsPerPage(24)).toBe(3);
+    expect(categoryRankingCardsPerPage(40)).toBe(3);
+    expect(normalizeRankingLimit(undefined)).toBe(24);
+    expect(normalizeRankingLimit(40)).toBe(40);
+    expect(normalizeRankingLimit(200)).toBe(100);
+    expect(rankingPanelCapacity(159, 16)).toBeGreaterThanOrEqual(16);
+    expect(rankingPanelCapacity(159, 24)).toBeGreaterThanOrEqual(24);
   });
 
   it('keeps catalog focus cards named and does not reserve Health/Skin/PC slots', () => {
@@ -366,7 +381,7 @@ describe('sales analysis PDF', () => {
         items: undefined,
         periods: (result.periods ?? []).map((period) => ({ ...period, items: undefined })),
       };
-      return generateSalesAnalysisPDF(slim, '107', 'category2', 'en', defaultSalesReportFilter(), fontBase64, accumulator);
+      return generateSalesAnalysisPDF(slim, '107', 'category2', 'en', defaultSalesReportFilter(), fontBase64, accumulator, [], undefined, 16);
     };
     const fourPages = new TextDecoder('latin1').decode(await withGroups([
       named('g1', 'Alpha'), named('g2', 'Beta'), named('g3', 'Gamma'), named('g4', 'Delta'),
@@ -376,5 +391,19 @@ describe('sales analysis PDF', () => {
     expect(onePages.match(/\/Type \/Page\b/g)).toHaveLength(9);
     const missPages = new TextDecoder('latin1').decode(await withGroups([], true));
     expect(missPages.match(/\/Type \/Page\b/g)).toHaveLength(9);
+  });
+
+  it('uses 3-up category cards and honors rankingLimit for overview slices', async () => {
+    const fontBase64 = await reportFont();
+    const classic = await buildSalesAnalysisPDF(resultFixture(), '107', 'category2', 'zh-TW', fontBase64, defaultSalesReportFilter(), undefined, [], 16);
+    const deeper = await buildSalesAnalysisPDF(resultFixture(), '107', 'category2', 'zh-TW', fontBase64, defaultSalesReportFilter(), undefined, [], 24);
+    const deepest = await buildSalesAnalysisPDF(resultFixture(), '107', 'category2', 'zh-TW', fontBase64, defaultSalesReportFilter(), undefined, [], 32);
+    const classicPages = new TextDecoder('latin1').decode(classic).match(/\/Type \/Page\b/g)?.length ?? 0;
+    const deeperPages = new TextDecoder('latin1').decode(deeper).match(/\/Type \/Page\b/g)?.length ?? 0;
+    const deepestPages = new TextDecoder('latin1').decode(deepest).match(/\/Type \/Page\b/g)?.length ?? 0;
+    expect(classicPages).toBe(9);
+    expect(deeperPages).toBeGreaterThan(classicPages);
+    expect(deepestPages).toBeGreaterThanOrEqual(deeperPages);
+    expect(rankingPanelCapacity(159, 32)).toBeLessThan(32);
   });
 });

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureBackend } from '../backend';
 import { translator } from '../i18n';
@@ -174,10 +174,11 @@ describe('sales analysis page', () => {
       ClearSalesAnalysis: vi.fn(async () => undefined),
     } });
     render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
-    await waitFor(() => expect(screen.getByText('修改查詢')).toBeInTheDocument());
-    expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument();
-    await fireEvent.click(screen.getByText('修改查詢'));
+    await waitFor(() => expect(screen.getByText('調整條件')).toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: '銷售額 Top 24' })).toBeInTheDocument();
+    await fireEvent.click(screen.getByText('調整條件'));
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: '銷售額 Top 24' })).toBeInTheDocument();
     expect(screen.queryByText('這個帳號沒有可用門店')).not.toBeInTheDocument();
     expect(listStores).toHaveBeenCalled();
   });
@@ -213,8 +214,8 @@ describe('sales analysis page', () => {
     });
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
     await fireEvent.click(screen.getByText('開始分析'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' }).closest('section')).toHaveTextContent('Mask'));
-    expect(getSalesAnalysisItems).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 24' }).closest('section')).toHaveTextContent('Mask'));
+    await waitFor(() => expect(getSalesAnalysisItems).toHaveBeenCalledWith({ operationId: 'slim-1', periodKey: 'current' }));
     await fireEvent.click(screen.getByRole('tab', { name: '商品' }));
     await waitFor(() => expect(getSalesAnalysisItems).toHaveBeenCalledWith({ operationId: 'slim-1', periodKey: 'current' }));
     expect(screen.queryAllByText('沒有符合條件的資料')).toHaveLength(0);
@@ -252,8 +253,8 @@ describe('sales analysis page', () => {
     render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
     await fireEvent.click(screen.getByText('開始分析'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' }).closest('section')).toHaveTextContent('Mask'));
-    expect(getSalesAnalysisItems).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 24' }).closest('section')).toHaveTextContent('Mask'));
+    await waitFor(() => expect(getSalesAnalysisItems).toHaveBeenCalledWith({ operationId: 'dept-filter', periodKey: 'current' }));
 
     await fireEvent.click(screen.getAllByText('商品部門')[0]!);
     const department = await screen.findByText(/A02\s+BEAUTY CARE/);
@@ -315,8 +316,8 @@ describe('sales analysis page', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: '銷售表現' })).toBeInTheDocument());
     const basketKpi = screen.getAllByText('客單價').find((element) => element.tagName === 'DT');
     expect(basketKpi?.parentElement).toHaveTextContent('20.00');
-    const topSales = screen.getByRole('heading', { name: '銷售額 Top 15' }).closest('section');
-    const topQuantity = screen.getByRole('heading', { name: '銷量 Top 15' }).closest('section');
+    const topSales = screen.getByRole('heading', { name: '銷售額 Top 24' }).closest('section');
+    const topQuantity = screen.getByRole('heading', { name: '銷量 Top 24' }).closest('section');
     expect(topSales?.querySelector('.top-metrics')).toHaveTextContent('100.00');
     expect(topSales?.querySelector('.top-metrics')).toHaveTextContent('2 件');
     expect(topQuantity?.querySelector('.top-metrics')).toHaveTextContent('2 件');
@@ -421,7 +422,7 @@ describe('sales analysis page', () => {
     render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
     await fireEvent.click(screen.getByText('開始分析'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 24' })).toBeInTheDocument());
     await waitFor(() => expect(screen.queryByText('正在載入商品明細')).not.toBeInTheDocument());
     await fireEvent.click(screen.getByRole('tab', { name: '分類' }));
     await waitFor(() => expect(screen.getByRole('heading', { name: '三期分類比較' })).toBeInTheDocument());
@@ -457,7 +458,7 @@ describe('sales analysis page', () => {
     render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
     await fireEvent.click(screen.getByText('開始分析'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 24' })).toBeInTheDocument());
     await confirmExport();
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('無法產生 PDF 報告，請再試一次。'));
     expect(screen.queryByText('發生未預期的錯誤，請再試一次。')).not.toBeInTheDocument();
@@ -480,7 +481,7 @@ describe('sales analysis page', () => {
     render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
     await fireEvent.click(screen.getByText('開始分析'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 24' })).toBeInTheDocument());
     await fireEvent.click(screen.getByText('匯出 PDF'));
     await waitFor(() => expect(screen.getByRole('heading', { name: '匯出篩選' })).toBeInTheDocument());
     const dialog = screen.getByRole('dialog', { name: '匯出篩選' });
@@ -546,7 +547,7 @@ describe('sales analysis page', () => {
     render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
     await fireEvent.click(screen.getByText('開始分析'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 24' })).toBeInTheDocument());
     await fireEvent.click(screen.getByText('匯出 PDF'));
     await waitFor(() => expect(screen.getByRole('heading', { name: '匯出篩選' })).toBeInTheDocument());
     expect(screen.getByText('總報告')).toBeInTheDocument();
@@ -589,7 +590,7 @@ describe('sales analysis page', () => {
     render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
     await fireEvent.click(screen.getByText('開始分析'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 24' })).toBeInTheDocument());
     const productScope = screen.getByLabelText('商品範圍');
     expect(productScope).toHaveValue('');
     expect(productScope).toHaveTextContent('我的護膚 (1)');
@@ -669,7 +670,7 @@ describe('sales analysis page', () => {
     render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
     await fireEvent.click(screen.getByText('開始分析'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 24' })).toBeInTheDocument());
     await fireEvent.click(screen.getByText('匯出 PDF'));
     await waitFor(() => expect(screen.getByRole('heading', { name: '群組報告' })).toBeInTheDocument());
     expect(screen.getByLabelText('我的護膚 · 1 個 Item Code')).not.toBeChecked();
@@ -705,7 +706,7 @@ describe('sales analysis page', () => {
     render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
     await fireEvent.click(screen.getByText('開始分析'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 24' })).toBeInTheDocument());
     await fireEvent.click(screen.getByText('匯出 PDF'));
     await waitFor(() => expect(screen.getByRole('heading', { name: '群組報告' })).toBeInTheDocument());
     await fireEvent.click(screen.getByLabelText('我的護膚 · 1 個 Item Code'));
@@ -757,7 +758,7 @@ describe('sales analysis page', () => {
     render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
     await fireEvent.click(screen.getByText('開始分析'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 24' })).toBeInTheDocument());
     await fireEvent.click(screen.getByText('匯出 PDF'));
     await waitFor(() => expect(screen.getByRole('heading', { name: '匯出格式' })).toBeInTheDocument());
     await fireEvent.click(screen.getByLabelText(/匯出給 AI 分析/));
@@ -802,7 +803,7 @@ describe('sales analysis page', () => {
     render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
     await fireEvent.click(screen.getByText('開始分析'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 24' })).toBeInTheDocument());
     await fireEvent.click(screen.getAllByText('小分類')[0]!);
     const segment = await screen.findByText('MASQUE');
     await fireEvent.click(segment.closest('label') ?? segment);
@@ -846,7 +847,7 @@ describe('sales analysis page', () => {
     render(AnalysisPage, { props: { t: translator('en'), settings: { ...defaultSettings, locale: 'en' } } });
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
     await fireEvent.click(screen.getByText('Run analysis'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Top 15 by sales' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Top 24 by sales' })).toBeInTheDocument());
     await fireEvent.click(screen.getByText('Export PDF'));
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Export filters' })).toBeInTheDocument());
     expect(screen.getByRole('heading', { name: 'Group reports' })).toBeInTheDocument();
@@ -886,7 +887,7 @@ describe('sales analysis page', () => {
     await waitFor(() => expect(screen.getByText('本期已可看，正在補其餘資料')).toBeInTheDocument());
     expect(screen.getByText('0 / 0')).toBeInTheDocument();
     expect(screen.getByText('取消')).toBeInTheDocument();
-    expect(screen.getByText('匯出 PDF').closest('md-filled-button')).toHaveAttribute('disabled');
+    expect(screen.getByText('匯出 PDF').closest('md-filled-button')).not.toHaveAttribute('disabled');
   });
 
   it('does not offer analysis when no enabled profile has credentials', async () => {
@@ -1010,14 +1011,14 @@ describe('sales analysis page', () => {
     render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
     await fireEvent.click(screen.getByText('開始分析'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' }).closest('section')).toHaveTextContent('Mask'));
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 24' }).closest('section')).toHaveTextContent('Mask'));
 
     await fireEvent.change(screen.getByLabelText('商品範圍'), { target: { value: 'g-skin' } });
     await waitFor(() => {
       const requested = getSalesAnalysisItems.mock.calls.map((call) => (call[0] as { periodKey: string }).periodKey);
       expect(requested).toEqual(expect.arrayContaining(['current', 'previous', 'yearAgo']));
     });
-    const performance = screen.getByRole('heading', { name: '銷售表現' }).closest('section');
+    const performance = (await screen.findByRole('heading', { name: '銷售表現' })).closest('section');
     await waitFor(() => {
       expect(performance).toHaveTextContent('100.00');
       expect(performance).toHaveTextContent('50.00');
@@ -1061,9 +1062,9 @@ describe('sales analysis page', () => {
     render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
     await fireEvent.click(screen.getByText('開始分析'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 15' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 24' })).toBeInTheDocument());
 
-    const topSales = screen.getByRole('heading', { name: '銷售額 Top 15' }).closest('section');
+    const topSales = screen.getByRole('heading', { name: '銷售額 Top 24' }).closest('section');
     expect(topSales).toHaveTextContent('Mask');
     expect(topSales).toHaveTextContent('Wipes');
     const transactionKpi = screen.getAllByText('交易次數').find((element) => element.tagName === 'DT');
@@ -1093,7 +1094,7 @@ describe('sales analysis page', () => {
     await fireEvent.change(productScope, { target: { value: 'g-skin' } });
 
     await fireEvent.click(screen.getByRole('tab', { name: '關注' }));
-    await waitFor(() => expect(screen.getByText('我的護膚')).toBeInTheDocument());
+    await waitFor(() => expect(within(screen.getByRole('tabpanel')).getByText('我的護膚')).toBeInTheDocument());
     expect(screen.queryByText('護膚', { exact: true })).not.toBeInTheDocument();
     expect(screen.getAllByText('Mask').length).toBeGreaterThan(0);
     expect(screen.queryByText('Wipes')).not.toBeInTheDocument();
