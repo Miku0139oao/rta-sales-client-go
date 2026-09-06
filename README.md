@@ -18,7 +18,13 @@ The supported distribution is `RTA-Excel-Filler-portable.exe` (Windows 64-bit, n
 
 ---
 
-## What's new in 0.4.7
+## What's new in 0.4.8
+
+Fullscreen update and Settings cards now share the same centered width. A version-labelled Changelog reads GitHub Release notes even when the app is already up to date.
+
+[Release notes and screenshots (Traditional Chinese)](docs/releases/v0.4.8.zh-TW.md). Users of 0.4.6/0.4.7 can upgrade from Settings → Check for updates.
+
+## UI improvements in 0.4.7
 
 Update controls now match the existing desktop Settings UI: version badges, switches, primary/secondary actions, collapsible release notes and a redesigned confirmation dialog, with light/dark and narrow-screen support.
 

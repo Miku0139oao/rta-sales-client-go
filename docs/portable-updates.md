@@ -3,7 +3,9 @@
 ## Available
 
 - Windows native-only metadata checks against `Miku0139oao/rta-sales-client-go` latest stable release. Web RPC remains an explicit allowlist and does not expose update methods.
-- Settings display build version, manual checks and release notes as escaped text. Startup metadata checking defaults on, can be disabled using the existing settings storage key, and never downloads an executable. Startup errors are non-disruptive.
+- Settings display build version, manual checks and **更新日誌 / Changelog** as escaped, collapsible text (220px scroll region). The changelog identifies the latest official GitHub Release's actual version, including equal or older releases; it is not labelled as the installed version. Empty bodies and check failures are shown honestly in Settings. Startup metadata checking defaults on, can be disabled using the existing settings storage key, and never downloads an executable. Startup errors are non-disruptive.
+- `Client.Inspect` returns latest stable release version/body separately from an optional validated newer install candidate, using the same single bounded 2 MiB metadata request. `Client.Check` retains its candidate-only contract. Desktop `changelogVersion` / `changelogBody` are independent of `candidateId`, `availableVersion` and candidate `releaseNotes`; equal/older releases cannot authorize installation. Draft/prerelease metadata is rejected, and newer releases must still pass all asset validation. No Markdown HTML is interpreted.
+- The App-level update component remains mounted across navigation. Its Settings details and Settings page share a centered 960px column; compact notices on other pages retain their existing placement.
 - Backend candidates retain exact repository/tag asset URLs. UI APIs accept no download URLs, paths or hashes. Version comparison is numeric; unknown/development/prerelease versions cannot update.
 - HTTP timeouts, size bounds, HTTPS-only allowlisted redirects, exact portable/checksum asset names, unique SHA256 entries and downloaded size/hash verification are covered by isolated tests. Downloads occur only through the explicitly confirmed native install API; metadata checks never download.
 - Pure publisher/image verification policy and helper transaction orchestration support injected tests. Trust must hold for both current and candidate executables, and publisher subjects must match exactly. Leaf certificate renewal is allowed when the subject remains unchanged. PE image/hash/type/architecture and signed version checks are separate mandatory checks.
@@ -55,6 +57,10 @@ Windows sandbox tests compile a small credential-free dummy executable and run o
 - Windows production compilation and PowerShell build/publish syntax checks passed. No validation command published a release or replaced a user executable.
 - Independent targeted review confirmed both launch-boundary protection and commit-acceptance findings resolved, with no further actionable regression in those paths. The subsequent signed old/new Wails fixture trial above also passed; this does not guarantee every deployment environment.
 - Signed publication preserves curated draft notes and screenshot links; localized Windows string lookup is not relied on for numeric version validation.
+
+### Isolated layout/changelog regression (no native launch)
+
+From `desktop/frontend`, set `PLAYWRIGHT_MODULE` to an existing Playwright installation's module/package, then run `node scripts/update-layout-smoke.mjs`. This source-backed fixture uses mocked backend methods, not Wails or real accounts. It checks equal/newer/older release UI, explicit consent, opt-out, single startup check through navigation, escaped text, keyboard disclosure, 220px scroll bounds, and update/settings x/width equality with no horizontal overflow at 3840, 2560, 1920, 1440, 390 and 320 CSS pixels in light/dark themes. Screenshots and geometry JSON go to ignored `node_modules/.cache/update-layout/`, including 3839×2078 native-scale equivalents. This is browser layout coverage, not a new signed/native installation trial.
 
 ## Signed publication
 

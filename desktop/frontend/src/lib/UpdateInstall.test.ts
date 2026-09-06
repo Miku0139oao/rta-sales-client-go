@@ -5,7 +5,7 @@ import { configureBackend, invokeNativeUpdate } from './backend';
 import { defaultSettings } from './settings';
 import type { UpdateStatus } from './updates';
 vi.mock('./runtime', () => ({ isWebRuntime: () => false }));
-const available: UpdateStatus = { currentVersion: '0.4.5', availableVersion: '0.5.0', phase: 'available', candidateId: 'checked-1', releaseNotes: '<b>text only</b>', installSupported: true, error: '' };
+const available: UpdateStatus = { currentVersion: '0.4.5', availableVersion: '0.5.0', phase: 'available', candidateId: 'checked-1', releaseNotes: '<b>text only</b>', changelogVersion: '0.5.0', changelogBody: '<b>text only</b>', installSupported: true, error: '' };
 const settings = { ...defaultSettings, locale: 'en' as const, autoCheckUpdates: false };
 afterEach(() => { cleanup(); configureBackend(undefined); });
 

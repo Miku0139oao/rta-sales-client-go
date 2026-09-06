@@ -9,9 +9,9 @@ import (
 	"github.com/Miku0139oao/rta-sales-client-go/internal/portableupdate"
 )
 
-type checkFunc func(context.Context, string) (*portableupdate.Candidate, error)
+type checkFunc func(context.Context, string) (portableupdate.Inspection, error)
 
-func (f checkFunc) Check(ctx context.Context, v string) (*portableupdate.Candidate, error) {
+func (f checkFunc) Inspect(ctx context.Context, v string) (portableupdate.Inspection, error) {
 	return f(ctx, v)
 }
 func TestWebRPCRejectsUpdatesEvenWithNativeService(t *testing.T) {
@@ -41,10 +41,10 @@ func TestUpdateAPIsUnsupportedWithoutNativeWiring(t *testing.T) {
 func TestUpdateCheckCancellationAndConcurrency(t *testing.T) {
 	entered := make(chan struct{})
 	u := newUpdateService()
-	u.client = checkFunc(func(ctx context.Context, _ string) (*portableupdate.Candidate, error) {
+	u.client = checkFunc(func(ctx context.Context, _ string) (portableupdate.Inspection, error) {
 		close(entered)
 		<-ctx.Done()
-		return nil, ctx.Err()
+		return portableupdate.Inspection{}, ctx.Err()
 	})
 	a := &App{ctx: context.Background(), updates: u}
 	done := make(chan error, 1)
@@ -78,9 +78,40 @@ func TestUpdateCheckCancellationAndConcurrency(t *testing.T) {
 		t.Fatal("install unexpectedly enabled")
 	}
 }
+func TestCurrentAndOlderChangelogNeverBecomeInstallCandidates(t *testing.T) {
+	for _, latest := range []string{"0.4.7", "0.4.6"} {
+		t.Run(latest, func(t *testing.T) {
+			u := newUpdateService()
+			u.status.CurrentVersion = "0.4.7"
+			calls := 0
+			u.client = checkFunc(func(context.Context, string) (portableupdate.Inspection, error) {
+				calls++
+				return portableupdate.Inspection{Version: latest, Body: "<script>escaped notes</script>"}, nil
+			})
+			a := &App{ctx: context.Background(), updates: u}
+			s, err := a.CheckForUpdate()
+			if err != nil || s.Phase != "current" || s.ChangelogVersion != latest || s.ChangelogBody != "<script>escaped notes</script>" || calls != 1 {
+				t.Fatal(s, err, calls)
+			}
+			if s.CandidateID != "" || s.AvailableVersion != "" || s.ReleaseNotes != "" || u.candidate != nil {
+				t.Fatal("fabricated install candidate", s)
+			}
+			if err := a.InstallUpdate(InstallUpdateRequest{Confirmed: true}); err == nil {
+				t.Fatal("installed metadata-only release")
+			}
+			persisted, _ := a.GetUpdateStatus()
+			if persisted != s {
+				t.Fatal("metadata not retained")
+			}
+		})
+	}
+}
+
 func TestMetadataChecksCoexistWithWork(t *testing.T) {
 	u := newUpdateService()
-	u.client = checkFunc(func(context.Context, string) (*portableupdate.Candidate, error) { return nil, nil })
+	u.client = checkFunc(func(context.Context, string) (portableupdate.Inspection, error) {
+		return portableupdate.Inspection{}, nil
+	})
 	a := &App{ctx: context.Background(), updates: u, salesAnalysisRunning: true, profileMutationRunning: true}
 	s, err := a.CheckForUpdate()
 	if err != nil || s.Phase != "current" {

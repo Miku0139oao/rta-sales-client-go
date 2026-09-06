@@ -497,6 +497,13 @@ main:focus {
   margin-inline: auto;
 }
 
+/* Persistent update details and settings use the same centered card column. */
+.settings-column,
+.page.settings-page {
+  width: min(100%, 960px);
+  margin-inline: auto;
+}
+
 .page.analysis-page.has-results,
 .page.analysis-page.has-results .analysis-results,
 .page.analysis-page.has-results .analysis-workspace {

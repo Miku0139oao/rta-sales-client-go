@@ -41,14 +41,15 @@
       const next = await updates.status();
       if (!alive) return;
       status = next;
-      if (!updateIsExclusive(next.phase) && settings.autoCheckUpdates !== false) await check(true);
+      if (!updateIsExclusive(next.phase) && settings.autoCheckUpdates !== false) await check();
     } catch { /* Startup/offline failures must not interrupt the user. */ }
   }
-  async function check(background = false) {
+  async function check() {
     if (checking || exclusive || confirmCandidate) return;
     checking = true; error = '';
+    if (status) status = { ...status, phase: 'checking', candidateId: '', availableVersion: '', releaseNotes: '', changelogVersion: '', changelogBody: '' };
     try { const next = await updates.check(); if (alive) status = next; }
-    catch (cause) { if (alive && !background) error = cause instanceof Error ? cause.message : String(cause); }
+    catch (cause) { if (alive) error = cause instanceof Error ? cause.message : String(cause); }
     finally { if (alive) checking = false; }
   }
   function requestInstall() {
@@ -87,7 +88,7 @@
 </script>
 
 {#if !isWebRuntime() && (details || status?.availableVersion || exclusive)}
-  <section class="surface-card settings-card update-card" class:compact={!details} aria-label={en ? 'Portable updates' : '免安裝版更新'}>
+  <section class="surface-card settings-card update-card" class:compact={!details} class:settings-column={details} aria-label={en ? 'Portable updates' : '免安裝版更新'}>
     <div class="section-icon" aria-hidden="true"><span class="material-symbols-rounded">system_update_alt</span></div>
     <div class="settings-content update-content">
     <header class="update-heading">
@@ -112,15 +113,15 @@
         <p class="update-support">{en ? 'Automatic installation is unavailable for this build.' : '此版本無法自動安裝更新。'} {status.unsupportedReason}</p>
       {/if}
     {/if}
+    {#if details && !checking && status?.changelogVersion}
+      <details class="release-notes">
+        <summary>{en ? 'Changelog' : '更新日誌'} — {en ? 'Latest GitHub Release' : 'GitHub 最新正式版本'} v{status.changelogVersion}</summary>
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need to focus and scroll long changelogs.) -->
+        <pre role="region" tabindex="0" aria-label={`${en ? 'Changelog' : '更新日誌'} v${status.changelogVersion}`}>{status.changelogBody || (en ? 'This release has no changelog.' : '此正式版本未提供更新日誌。')}</pre>
+      </details>
+    {/if}
     {#if status?.availableVersion}
       {#if !exclusive && !checking}<p class="update-status available" role="status"><span class="material-symbols-rounded" aria-hidden="true">new_releases</span>{en ? 'New version available' : '有新版本'}: {status.availableVersion}</p>{/if}
-      {#if details && status.releaseNotes}
-        <details class="release-notes">
-          <summary>{en ? 'Release notes' : '版本更新內容'}</summary>
-          <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need to focus and scroll long release notes.) -->
-          <pre role="region" tabindex="0" aria-label={en ? 'Release notes' : '版本更新內容'}>{status.releaseNotes}</pre>
-        </details>
-      {/if}
       {#if !status.installSupported}
         <p>{en ? 'Close the app and update manually from Releases.' : '請關閉程式後，從 Releases 手動更新。'}</p>
         <a class="update-link" href="https://github.com/Miku0139oao/rta-sales-client-go/releases" target="_blank" rel="noreferrer">GitHub Releases <span class="material-symbols-rounded" aria-hidden="true">open_in_new</span></a>
@@ -130,7 +131,7 @@
       <p class="update-status" role="status"><span class="material-symbols-rounded" aria-hidden="true">sync</span>{phaseText}</p>
       {#if !cancellationClosed}<button class="update-button secondary" type="button" onclick={() => void cancelUpdate()}>{en ? 'Cancel update' : '取消更新'}</button>{/if}
     {/if}
-    {#if error || (exclusive && status?.error)}<p class="dialog-error" role="status">{error || status?.error}</p>{/if}
+    {#if (details && error) || (exclusive && (error || status?.error))}<p class="dialog-error" role="status">{error || status?.error}</p>{/if}
     <div class="form-actions update-actions">
       {#if details}<button class="update-button secondary" type="button" disabled={checking || exclusive || Boolean(confirmCandidate)} onclick={() => void check()}>
         <span class="material-symbols-rounded" aria-hidden="true">refresh</span>{checking ? (en ? 'Checking…' : '檢查中…') : (en ? 'Check for updates' : '檢查更新')}
@@ -149,6 +150,13 @@
         <div><h2 id="update-confirm-title">{en ? 'Confirm update and restart' : '確認更新並重啟'}</h2><p class="update-description">{en ? 'Download the verified update, then restart the app.' : '下載並驗證更新後，程式將重新啟動。'}</p></div>
       </div>
       <div class="version-transition" aria-label={en ? 'Version transition' : '版本變更'}><span>{status?.currentVersion ?? 'dev'}</span><span class="material-symbols-rounded" aria-hidden="true">arrow_forward</span><strong>{status?.availableVersion}</strong></div>
+      {#if status?.releaseNotes}
+        <details class="release-notes">
+          <summary>{en ? 'Changelog' : '更新日誌'} v{status.availableVersion}</summary>
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need to scroll candidate notes.) -->
+          <pre role="region" tabindex="0" aria-label={`${en ? 'Changelog' : '更新日誌'} v${status.availableVersion}`}>{status.releaseNotes}</pre>
+        </details>
+      {/if}
       <div class="notice warning-notice" id="update-confirm-warning"><span class="material-symbols-rounded" aria-hidden="true">warning</span><p>{en ? 'The app will close and restart. Unsaved reports and previews will be lost. Finish and export your work first.' : '程式將關閉並重啟。未儲存的報表與預覽將遺失，請先完成並匯出工作。'}</p></div>
       <p class="update-preserved" id="update-confirm-preserved"><span class="material-symbols-rounded" aria-hidden="true">verified_user</span>{en ? 'Accounts and settings are preserved.' : '已儲存的帳號與設定會保留。'}</p>
     </div>
@@ -160,7 +168,8 @@
 {/if}
 
 <style>
-  .update-card { max-width: 960px; margin-bottom: 22px; }
+  .update-card { margin-bottom: 22px; }
+  .compact { max-width: 960px; }
   .update-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
   .update-content h2 { margin: 0; }
   .update-eyebrow { display: block; margin-bottom: 5px; font-size: 11px; font-weight: 700; letter-spacing: .1em; color: var(--md-sys-color-on-surface-variant); }

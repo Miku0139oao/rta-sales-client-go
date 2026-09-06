@@ -151,29 +151,50 @@ func (c *Client) get(ctx context.Context, rawURL string, limit int64, out io.Wri
 	return nil
 }
 
+// Inspection separates the latest official release's text from permission to install.
+// Candidate is non-nil only for a newer release with fully validated assets.
+type Inspection struct {
+	Version   string
+	Body      string
+	Candidate *Candidate
+}
+
 func (c *Client) Check(ctx context.Context, current string) (*Candidate, error) {
+	result, err := c.Inspect(ctx, current)
+	return result.Candidate, err
+}
+
+// Inspect makes the same single bounded metadata request as Check; never an artifact request.
+func (c *Client) Inspect(ctx context.Context, current string) (Inspection, error) {
 	old, err := ParseVersion(current)
 	if err != nil {
-		return nil, fmt.Errorf("current build cannot update: %w", err)
+		return Inspection{}, fmt.Errorf("current build cannot update: %w", err)
 	}
 	var body strings.Builder
 	if err := c.get(ctx, latestURL, metadataLimit, &body); err != nil {
-		return nil, err
+		return Inspection{}, err
 	}
-	return parseRelease([]byte(body.String()), old)
+	return inspectRelease([]byte(body.String()), old)
 }
 
 func parseRelease(data []byte, old Version) (*Candidate, error) {
+	result, err := inspectRelease(data, old)
+	return result.Candidate, err
+}
+
+func inspectRelease(data []byte, old Version) (Inspection, error) {
+	var result Inspection
 	var r release
 	if err := json.Unmarshal(data, &r); err != nil {
-		return nil, fmt.Errorf("invalid release metadata: %w", err)
+		return result, fmt.Errorf("invalid release metadata: %w", err)
 	}
 	v, err := ParseVersion(r.Tag)
 	if err != nil || r.Draft || r.Prerelease || !strings.HasPrefix(r.Tag, "v") {
-		return nil, errors.New("release is not a stable version")
+		return result, errors.New("release is not a stable version")
 	}
+	result.Version, result.Body = strings.TrimPrefix(r.Tag, "v"), r.Body
 	if !v.NewerThan(old) {
-		return nil, nil
+		return result, nil
 	}
 	candidate := &Candidate{version: strings.TrimPrefix(r.Tag, "v"), notes: r.Body}
 	counts := map[string]int{}
@@ -186,27 +207,28 @@ func parseRelease(data []byte, old Version) (*Candidate, error) {
 		// are only accepted as redirects from this authenticated GitHub URL.
 		expected := "https://github.com/" + Repository + "/releases/download/" + r.Tag + "/" + asset.Name
 		if asset.URL != expected {
-			return nil, errors.New("release asset URL does not match repository/tag/name")
+			return Inspection{}, errors.New("release asset URL does not match repository/tag/name")
 		}
 		if asset.Size <= 0 {
-			return nil, errors.New("invalid release asset size")
+			return Inspection{}, errors.New("invalid release asset size")
 		}
 		if asset.Name == ExecutableAsset {
 			if asset.Size > executableLimit {
-				return nil, errors.New("executable exceeds size limit")
+				return Inspection{}, errors.New("executable exceeds size limit")
 			}
 			candidate.executableURL, candidate.size = asset.URL, asset.Size
 		} else {
 			if asset.Size > checksumLimit {
-				return nil, errors.New("checksums exceed size limit")
+				return Inspection{}, errors.New("checksums exceed size limit")
 			}
 			candidate.checksumURL = asset.URL
 		}
 	}
 	if counts[ExecutableAsset] != 1 || counts[ChecksumsAsset] != 1 {
-		return nil, errors.New("release requires exactly one portable executable and checksum asset")
+		return Inspection{}, errors.New("release requires exactly one portable executable and checksum asset")
 	}
-	return candidate, nil
+	result.Candidate = candidate
+	return result, nil
 }
 
 func parseChecksum(text string) ([32]byte, error) {

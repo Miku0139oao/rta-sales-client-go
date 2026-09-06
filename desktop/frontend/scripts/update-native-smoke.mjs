@@ -21,6 +21,7 @@ try {
  const data={};for(const name of await readdir(join(m.root,'data'))) {if(name.endsWith('.json')||name==='nonce')data[name]=await readFile(join(m.root,'data',name),'utf8');}
  await page.getByRole('button',{name:'Check for updates',exact:true}).click();
  await page.getByText('New version available: 0.4.7',{exact:true}).last().waitFor();
+ await page.getByText('Changelog — Latest GitHub Release v0.4.7',{exact:true}).click();
  await page.getByText(`Signed isolated smoke ${m.nonce}`,{exact:true}).waitFor();
  await page.getByRole('button',{name:'Download and restart…',exact:true}).last().click();
  const dialog=page.getByRole('dialog',{name:'Confirm update and restart'});await dialog.waitFor();

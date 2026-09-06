@@ -19,6 +19,8 @@ type UpdateStatus struct {
 	CandidateID       string `json:"candidateId"`
 	AvailableVersion  string `json:"availableVersion"`
 	ReleaseNotes      string `json:"releaseNotes"`
+	ChangelogVersion  string `json:"changelogVersion"`
+	ChangelogBody     string `json:"changelogBody"`
 	InstallSupported  bool   `json:"installSupported"`
 	UnsupportedReason string `json:"unsupportedReason"`
 	Error             string `json:"error"`
@@ -28,7 +30,7 @@ type InstallUpdateRequest struct {
 	Confirmed   bool   `json:"confirmed"`
 }
 type updateChecker interface {
-	Check(context.Context, string) (*portableupdate.Candidate, error)
+	Inspect(context.Context, string) (portableupdate.Inspection, error)
 }
 type updateReceipt interface {
 	Commit() error
@@ -84,7 +86,7 @@ func (a *App) CheckForUpdate() (UpdateStatus, error) {
 	u.candidate = nil
 	version := u.status.CurrentVersion
 	u.mu.Unlock()
-	candidate, err := u.client.Check(ctx, version)
+	inspection, err := u.client.Inspect(ctx, version)
 	cancel()
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -98,7 +100,9 @@ func (a *App) CheckForUpdate() (UpdateStatus, error) {
 		return u.status, err
 	}
 	u.status.Phase = "current"
-	if candidate != nil {
+	u.status.ChangelogVersion = inspection.Version
+	u.status.ChangelogBody = inspection.Body
+	if candidate := inspection.Candidate; candidate != nil {
 		id, idErr := newUUID()
 		if idErr != nil {
 			u.status.Phase = "error"

@@ -6,7 +6,7 @@ import { defaultSettings, loadSettings, saveSettings } from './settings';
 
 const state = vi.hoisted(() => ({ web: false }));
 vi.mock('./runtime', () => ({ isWebRuntime: () => state.web }));
-const status = { currentVersion: '0.4.5', phase: 'idle', candidateId: '', availableVersion: '', releaseNotes: '', installSupported: false, error: '' };
+const status = { currentVersion: '0.4.5', phase: 'idle', candidateId: '', availableVersion: '', releaseNotes: '', changelogVersion: '', changelogBody: '', installSupported: false, error: '' };
 afterEach(() => { cleanup(); configureBackend(undefined); state.web = false; localStorage.clear(); });
 function setup(check = vi.fn().mockResolvedValue({ ...status, phase: 'current' })) {
   const install = vi.fn();
@@ -36,7 +36,7 @@ describe('portable update notice', () => {
     expect(methods.install).not.toHaveBeenCalled();
   });
   it('escapes release notes and clearly disables automatic installation', async () => {
-    const methods = setup(vi.fn().mockResolvedValue({ ...status, phase: 'available', availableVersion: '0.5.0', releaseNotes: '<script>bad()</script>' }));
+    const methods = setup(vi.fn().mockResolvedValue({ ...status, phase: 'available', availableVersion: '0.5.0', releaseNotes: '<script>bad()</script>', changelogVersion: '0.5.0', changelogBody: '<script>bad()</script>' }));
     const { container } = render(UpdateNotice, { settings: { ...defaultSettings, locale: 'en' }, details: true, onChange: vi.fn() });
     expect(await screen.findByText('<script>bad()</script>')).toBeInTheDocument();
     expect(container.querySelector('script')).toBeNull();
@@ -44,17 +44,49 @@ describe('portable update notice', () => {
     expect(methods.install).not.toHaveBeenCalled();
   });
   it('keeps notes collapsed, labelled and keyboard-scrollable, and hides details in the compact notice', async () => {
-    setup(vi.fn().mockResolvedValue({ ...status, phase: 'available', availableVersion: '0.5.0', releaseNotes: 'Long release notes' }));
+    setup(vi.fn().mockResolvedValue({ ...status, phase: 'available', availableVersion: '0.5.0', releaseNotes: 'Long release notes', changelogVersion: '0.5.0', changelogBody: 'Long release notes' }));
     const view = render(UpdateNotice, { settings: { ...defaultSettings, locale: 'en' }, details: true, onChange: vi.fn() });
     await screen.findByText('Long release notes');
     const disclosure = view.container.querySelector('details')!;
     expect(disclosure.open).toBe(false);
     disclosure.open = true;
-    expect(screen.getByRole('region', { name: 'Release notes' })).toHaveAttribute('tabindex', '0');
+    expect(screen.getByRole('region', { name: 'Changelog v0.5.0' })).toHaveAttribute('tabindex', '0');
     await view.rerender({ details: false });
     expect(view.container.querySelector('details')).toBeNull();
     expect(screen.queryByRole('checkbox')).toBeNull();
     expect(view.container.querySelector('.update-card')).toHaveClass('compact');
+  });
+  it.each(['0.4.5', '0.4.4'])('exposes honest latest release %s notes without an install candidate', async (latest) => {
+    const methods = setup(vi.fn().mockResolvedValue({ ...status, phase: 'current', changelogVersion: latest, changelogBody: '<img src=x onerror=bad()>\n# Official notes' }));
+    const view = render(UpdateNotice, { settings: { ...defaultSettings, locale: 'en' }, details: true, onChange: vi.fn() });
+    const summary = await screen.findByText(`Changelog — Latest GitHub Release v${latest}`);
+    expect(summary.closest('details')?.open).toBe(false);
+    summary.closest('details')!.open = true;
+    expect(screen.getByRole('region', { name: `Changelog v${latest}` })).toHaveTextContent('<img src=x onerror=bad()>');
+    expect(view.container.querySelector('img')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Download and restart…' })).toBeNull();
+    await view.rerender({ details: false });
+    await view.rerender({ details: true });
+    expect(screen.getByText(`Changelog — Latest GitHub Release v${latest}`)).toBeInTheDocument();
+    expect(methods.check).toHaveBeenCalledTimes(1);
+    expect(methods.install).not.toHaveBeenCalled();
+  });
+  it('shows empty release body honestly and uses the Chinese changelog label', async () => {
+    setup(vi.fn().mockResolvedValue({ ...status, phase: 'current', changelogVersion: '0.4.5' }));
+    render(UpdateNotice, { settings: defaultSettings, details: true, onChange: vi.fn() });
+    expect(await screen.findByText('更新日誌 — GitHub 最新正式版本 v0.4.5')).toBeInTheDocument();
+    expect(screen.getByText('此正式版本未提供更新日誌。')).toBeInTheDocument();
+  });
+  it('keeps loading visible and reports startup failures only in details', async () => {
+    let reject!: (error: Error) => void;
+    setup(vi.fn().mockReturnValue(new Promise((_, no) => { reject = no; })));
+    const view = render(UpdateNotice, { settings: { ...defaultSettings, locale: 'en' }, details: true, onChange: vi.fn() });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Checking…' })).toBeDisabled());
+    expect(view.container.querySelector('details')).toBeNull();
+    reject(new Error('offline'));
+    expect(await screen.findByText('offline')).toBeInTheDocument();
+    await view.rerender({ details: false });
+    expect(screen.queryByText('offline')).toBeNull();
   });
   it('labels the startup switch and updates only the preference', async () => {
     setup();

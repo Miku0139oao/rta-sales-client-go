@@ -6,6 +6,8 @@ export interface UpdateStatus {
   candidateId: string;
   availableVersion: string;
   releaseNotes: string;
+  changelogVersion: string;
+  changelogBody: string;
   installSupported: boolean;
   unsupportedReason?: string;
   error: string;

@@ -134,6 +134,71 @@ func TestCheckDoesNotDownload(t *testing.T) {
 		t.Fatal(err, calls)
 	}
 }
+func TestInspectLatestMetadataWithoutDownload(t *testing.T) {
+	for _, current := range []string{"0.4.7", "0.5.0", "0.6.0"} {
+		t.Run(current, func(t *testing.T) {
+			c := NewClient()
+			calls := 0
+			raw, _ := json.Marshal(fixture())
+			c.http.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if r.URL.String() != latestURL {
+					t.Fatal("artifact request during inspection")
+				}
+				return response(string(raw)), nil
+			})
+			result, err := c.Inspect(context.Background(), current)
+			if err != nil || calls != 1 || result.Version != "0.5.0" || result.Body != fixture().Body {
+				t.Fatalf("inspection=%+v calls=%d err=%v", result, calls, err)
+			}
+			if (result.Candidate != nil) != (current == "0.4.7") {
+				t.Fatal("incorrect install eligibility")
+			}
+			if result.Candidate != nil && result.Candidate.Notes() != result.Body {
+				t.Fatal("candidate notes mismatch")
+			}
+		})
+	}
+}
+
+func TestInspectRejectsUnstableAndUnsafeCandidates(t *testing.T) {
+	for _, mutate := range []func(*release){
+		func(r *release) { r.Draft = true },
+		func(r *release) { r.Prerelease = true },
+		func(r *release) { r.Tag = "v0.5.0-beta" },
+	} {
+		for _, current := range []string{"0.4.7", "0.5.0", "0.6.0"} {
+			r := fixture()
+			mutate(&r)
+			raw, _ := json.Marshal(r)
+			old, _ := ParseVersion(current)
+			result, err := inspectRelease(raw, old)
+			if err == nil || result.Candidate != nil || result.Version != "" {
+				t.Fatal("exposed unstable metadata", result, err)
+			}
+		}
+	}
+	for _, mutate := range []func(*release){
+		func(r *release) { r.Assets = append(r.Assets, r.Assets[0]) },
+		func(r *release) { r.Assets[0].URL = "https://github.com/attacker/repo/evil.exe" },
+		func(r *release) { r.Assets[0].Size = 0 },
+	} {
+		r := fixture()
+		mutate(&r)
+		raw, _ := json.Marshal(r)
+		for _, current := range []string{"0.4.7", "0.5.0", "0.6.0"} {
+			old, _ := ParseVersion(current)
+			result, err := inspectRelease(raw, old)
+			if result.Candidate != nil {
+				t.Fatal("unsafe installation candidate")
+			}
+			if current == "0.4.7" && err == nil {
+				t.Fatal("unsafe newer assets accepted")
+			}
+		}
+	}
+}
+
 func TestDownloadFailures(t *testing.T) {
 	sum := sha256.Sum256([]byte("test"))
 	valid := fmt.Sprintf("%x  %s\n", sum, ExecutableAsset)
