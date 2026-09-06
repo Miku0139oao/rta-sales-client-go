@@ -18,7 +18,19 @@
 
 ---
 
-## 0.4.8 改版重點
+## 更新資訊改用 GitHub Pages
+
+新版本從固定的 [Pages 更新資訊](https://miku0139oao.github.io/rta-sales-client-go/updates/latest.json) 取得版本與更新日誌；執行檔／checksum 仍由 GitHub Releases 提供。不需使用者登入 GitHub、提供 token 或另設更新伺服器。啟動檢查使用一小時的已驗證快取與有限退避；手動檢查要求重新驗證，下載仍需明確同意。
+
+**0.4.8 與更早使用 GitHub API 的客戶端，需要一次手動升級至支援 Pages 的發行版。** 舊程式不會自動得知新端點，且可能受 API 限流影響。請先完成工作、關閉程式、保留備份，再以相同路徑和檔名替換，以保留設定。詳見 [更新安全與部署](docs/portable-updates.md)。
+
+## 0.4.9 改版重點
+
+版本與更新日誌改從 GitHub Pages 讀取，不需登入或 Token，不再使用匿名 GitHub API。加入啟動快取及失敗重試間隔；執行檔仍由 GitHub Release 提供並驗證簽章。
+
+**v0.4.8 或更舊版本遇到限流時，請手動下載 v0.4.9 一次。** [改版資訊與切換方式](docs/releases/v0.4.9.zh-TW.md)。
+
+## 0.4.8 全螢幕與日誌
 
 修正全螢幕更新卡片與設定頁錯位，統一置中與寬度。新增從 GitHub Release 讀取的「更新日誌」，即使已是最新版也能查看。
 

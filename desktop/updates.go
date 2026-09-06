@@ -54,7 +54,7 @@ type updateService struct {
 }
 
 func newUpdateService() *updateService {
-	return &updateService{client: portableupdate.NewClient(), status: UpdateStatus{CurrentVersion: buildinfo.Version, Phase: "idle", UnsupportedReason: "Native update lifecycle is not configured / 原生更新生命週期尚未設定"}}
+	return &updateService{client: portableupdate.NewPersistentClient(), status: UpdateStatus{CurrentVersion: buildinfo.Version, Phase: "idle", UnsupportedReason: "Native update lifecycle is not configured / 原生更新生命週期尚未設定"}}
 }
 func (u *updateService) reset(phase string) {
 	u.status = UpdateStatus{CurrentVersion: u.status.CurrentVersion, Phase: phase, InstallSupported: u.status.InstallSupported, UnsupportedReason: u.status.UnsupportedReason}
@@ -67,7 +67,9 @@ func (a *App) GetUpdateStatus() (UpdateStatus, error) {
 	defer a.updates.mu.Unlock()
 	return a.updates.status, nil
 }
-func (a *App) CheckForUpdate() (UpdateStatus, error) {
+func (a *App) CheckForUpdate() (UpdateStatus, error)        { return a.checkForUpdate(false) }
+func (a *App) CheckForUpdateStartup() (UpdateStatus, error) { return a.checkForUpdate(true) }
+func (a *App) checkForUpdate(startup bool) (UpdateStatus, error) {
 	u := a.updates
 	if u == nil {
 		return UpdateStatus{}, errUpdatesUnsupported
@@ -86,7 +88,15 @@ func (a *App) CheckForUpdate() (UpdateStatus, error) {
 	u.candidate = nil
 	version := u.status.CurrentVersion
 	u.mu.Unlock()
-	inspection, err := u.client.Inspect(ctx, version)
+	var inspection portableupdate.Inspection
+	var err error
+	if checker, ok := u.client.(interface {
+		InspectStartup(context.Context, string) (portableupdate.Inspection, error)
+	}); startup && ok {
+		inspection, err = checker.InspectStartup(ctx, version)
+	} else {
+		inspection, err = u.client.Inspect(ctx, version)
+	}
 	cancel()
 	u.mu.Lock()
 	defer u.mu.Unlock()

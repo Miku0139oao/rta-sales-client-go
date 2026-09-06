@@ -22,7 +22,7 @@ const (
 	Repository            = "Miku0139oao/rta-sales-client-go"
 	ExecutableAsset       = "RTA-Excel-Filler-portable.exe"
 	ChecksumsAsset        = "SHA256SUMS.txt"
-	latestURL             = "https://api.github.com/repos/" + Repository + "/releases/latest"
+	latestURL             = "https://miku0139oao.github.io/rta-sales-client-go/updates/latest.json"
 	metadataLimit   int64 = 2 << 20
 	checksumLimit   int64 = 64 << 10
 	executableLimit int64 = 256 << 20
@@ -60,20 +60,24 @@ func (v Version) NewerThan(old Version) bool {
 // Candidate is backend-owned. URLs and sizes cannot be constructed by a caller
 // outside this package and are never returned to the frontend.
 type Candidate struct {
-	version       string
-	notes         string
-	executableURL string
-	checksumURL   string
-	size          int64
+	version          string
+	notes            string
+	executableURL    string
+	checksumURL      string
+	size             int64
+	executableDigest string
+	checksumDigest   string
+	checksumSize     int64
 }
 
 func (c Candidate) Version() string { return c.version }
 func (c Candidate) Notes() string   { return c.notes }
 
 type releaseAsset struct {
-	Name string `json:"name"`
-	URL  string `json:"browser_download_url"`
-	Size int64  `json:"size"`
+	Name   string `json:"name"`
+	URL    string `json:"browser_download_url"`
+	Size   int64  `json:"size"`
+	Digest string `json:"digest"`
 }
 type release struct {
 	Tag        string         `json:"tag_name"`
@@ -85,7 +89,10 @@ type release struct {
 
 // Client has no UI-configurable endpoint, proxy, transport, or timeout.
 // Tests in this package inject a transport without weakening production policy.
-type Client struct{ http *http.Client }
+type Client struct {
+	http  *http.Client
+	cache metadataCache
+}
 
 func NewClient() *Client {
 	transport := newUpdateTransport()
@@ -93,6 +100,9 @@ func NewClient() *Client {
 		Transport: transport,
 		Timeout:   3 * time.Minute,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) > 0 && via[0].URL.String() == latestURL {
+				return errors.New("update metadata redirects are not allowed")
+			}
 			if len(via) >= 5 {
 				return errors.New("too many update redirects")
 			}
@@ -106,7 +116,7 @@ func allowedURL(u *url.URL) error {
 		return errors.New("update URL must use HTTPS without credentials or fragment")
 	}
 	switch u.Hostname() {
-	case "api.github.com", "github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com":
+	case "github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com":
 		return nil
 	default:
 		return errors.New("update host is not allowed")
@@ -118,8 +128,10 @@ func (c *Client) get(ctx context.Context, rawURL string, limit int64, out io.Wri
 	if err != nil {
 		return err
 	}
-	if err := allowedURL(u); err != nil {
-		return err
+	if rawURL != latestURL {
+		if err := allowedURL(u); err != nil {
+			return err
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
@@ -127,16 +139,20 @@ func (c *Client) get(ctx context.Context, rawURL string, limit int64, out io.Wri
 	}
 	req.Header.Set("User-Agent", "RTA-Excel-Filler-updater")
 	req.Header.Set("Accept", "application/octet-stream")
-	if u.Hostname() == "api.github.com" {
-		req.Header.Set("Accept", "application/vnd.github+json")
+	if rawURL == latestURL {
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Cache-Control", "no-cache")
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("cannot reach update service; check your connection and try again: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("update request returned HTTP %d", resp.StatusCode)
+		if resp.StatusCode == 403 || resp.StatusCode == 429 || resp.StatusCode == 503 {
+			return &retryError{delay: retryDelay(resp.Header.Get("Retry-After"), time.Now()), status: resp.StatusCode}
+		}
+		return fmt.Errorf("update service unavailable (HTTP %d); please try again later", resp.StatusCode)
 	}
 	if resp.ContentLength > limit {
 		return errors.New("update response exceeds size limit")
@@ -166,15 +182,7 @@ func (c *Client) Check(ctx context.Context, current string) (*Candidate, error) 
 
 // Inspect makes the same single bounded metadata request as Check; never an artifact request.
 func (c *Client) Inspect(ctx context.Context, current string) (Inspection, error) {
-	old, err := ParseVersion(current)
-	if err != nil {
-		return Inspection{}, fmt.Errorf("current build cannot update: %w", err)
-	}
-	var body strings.Builder
-	if err := c.get(ctx, latestURL, metadataLimit, &body); err != nil {
-		return Inspection{}, err
-	}
-	return inspectRelease([]byte(body.String()), old)
+	return c.inspect(ctx, current, false)
 }
 
 func parseRelease(data []byte, old Version) (*Candidate, error) {
@@ -184,18 +192,22 @@ func parseRelease(data []byte, old Version) (*Candidate, error) {
 
 func inspectRelease(data []byte, old Version) (Inspection, error) {
 	var result Inspection
+	if len(data) > int(metadataLimit) {
+		return result, errors.New("release metadata exceeds size limit")
+	}
 	var r release
 	if err := json.Unmarshal(data, &r); err != nil {
 		return result, fmt.Errorf("invalid release metadata: %w", err)
+	}
+	var flags map[string]json.RawMessage
+	if err := json.Unmarshal(data, &flags); err != nil || string(flags["draft"]) != "false" || string(flags["prerelease"]) != "false" {
+		return result, errors.New("release requires explicit stable flags")
 	}
 	v, err := ParseVersion(r.Tag)
 	if err != nil || r.Draft || r.Prerelease || !strings.HasPrefix(r.Tag, "v") {
 		return result, errors.New("release is not a stable version")
 	}
 	result.Version, result.Body = strings.TrimPrefix(r.Tag, "v"), r.Body
-	if !v.NewerThan(old) {
-		return result, nil
-	}
 	candidate := &Candidate{version: strings.TrimPrefix(r.Tag, "v"), notes: r.Body}
 	counts := map[string]int{}
 	for _, asset := range r.Assets {
@@ -203,8 +215,11 @@ func inspectRelease(data []byte, old Version) (Inspection, error) {
 			continue
 		}
 		counts[asset.Name]++
+		if !validDigest(asset.Digest) {
+			return Inspection{}, errors.New("release requires SHA256 asset digests")
+		}
 		// The metadata must point at the exact tag and repository. CDN locations
-		// are only accepted as redirects from this authenticated GitHub URL.
+		// are only accepted as redirects from this fixed HTTPS GitHub URL.
 		expected := "https://github.com/" + Repository + "/releases/download/" + r.Tag + "/" + asset.Name
 		if asset.URL != expected {
 			return Inspection{}, errors.New("release asset URL does not match repository/tag/name")
@@ -217,17 +232,21 @@ func inspectRelease(data []byte, old Version) (Inspection, error) {
 				return Inspection{}, errors.New("executable exceeds size limit")
 			}
 			candidate.executableURL, candidate.size = asset.URL, asset.Size
+			candidate.executableDigest = asset.Digest
 		} else {
 			if asset.Size > checksumLimit {
 				return Inspection{}, errors.New("checksums exceed size limit")
 			}
 			candidate.checksumURL = asset.URL
+			candidate.checksumDigest, candidate.checksumSize = asset.Digest, asset.Size
 		}
 	}
 	if counts[ExecutableAsset] != 1 || counts[ChecksumsAsset] != 1 {
 		return Inspection{}, errors.New("release requires exactly one portable executable and checksum asset")
 	}
-	result.Candidate = candidate
+	if v.NewerThan(old) {
+		result.Candidate = candidate
+	}
 	return result, nil
 }
 
@@ -265,12 +284,16 @@ func parseChecksum(text string) ([32]byte, error) {
 // publisher, PE architecture/version and the helper protocol remain mandatory.
 func (c *Client) Download(ctx context.Context, candidate Candidate, out io.Writer) ([32]byte, error) {
 	var zero [32]byte
-	if candidate.executableURL == "" || candidate.checksumURL == "" || candidate.size <= 0 {
+	if candidate.executableURL == "" || candidate.checksumURL == "" || candidate.size <= 0 || candidate.checksumSize <= 0 || !validDigest(candidate.executableDigest) || !validDigest(candidate.checksumDigest) {
 		return zero, errors.New("no checked candidate")
 	}
 	var checksums strings.Builder
 	if err := c.get(ctx, candidate.checksumURL, checksumLimit, &checksums); err != nil {
 		return zero, err
+	}
+	sum := sha256.Sum256([]byte(checksums.String()))
+	if int64(checksums.Len()) != candidate.checksumSize || "sha256:"+hex.EncodeToString(sum[:]) != candidate.checksumDigest {
+		return zero, errors.New("checksum asset digest/size mismatch")
 	}
 	expected, err := parseChecksum(checksums.String())
 	if err != nil {
@@ -286,7 +309,7 @@ func (c *Client) Download(ctx context.Context, candidate Candidate, out io.Write
 	}
 	var actual [32]byte
 	copy(actual[:], hash.Sum(nil))
-	if actual != expected {
+	if actual != expected || "sha256:"+hex.EncodeToString(actual[:]) != candidate.executableDigest {
 		return zero, errors.New("portable executable SHA256 mismatch")
 	}
 	return actual, nil

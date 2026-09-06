@@ -16,7 +16,7 @@ func (f checkFunc) Inspect(ctx context.Context, v string) (portableupdate.Inspec
 }
 func TestWebRPCRejectsUpdatesEvenWithNativeService(t *testing.T) {
 	session := &webSession{app: &App{updates: newUpdateService()}}
-	for _, method := range []string{"GetUpdateStatus", "CheckForUpdate", "InstallUpdate", "CancelUpdate", "BeginNativeExportLease", "EndNativeExportLease"} {
+	for _, method := range []string{"GetUpdateStatus", "CheckForUpdate", "CheckForUpdateStartup", "InstallUpdate", "CancelUpdate", "BeginNativeExportLease", "EndNativeExportLease"} {
 		if _, err := dispatchWebRPC(session, method, nil); err == nil {
 			t.Fatalf("web exposed %s", method)
 		}
@@ -107,6 +107,70 @@ func TestCurrentAndOlderChangelogNeverBecomeInstallCandidates(t *testing.T) {
 	}
 }
 
+type startupCheckFunc struct{ manual, startup checkFunc }
+
+func (f startupCheckFunc) Inspect(ctx context.Context, v string) (portableupdate.Inspection, error) {
+	return f.manual(ctx, v)
+}
+func (f startupCheckFunc) InspectStartup(ctx context.Context, v string) (portableupdate.Inspection, error) {
+	return f.startup(ctx, v)
+}
+func TestStartupPathFreshIDsAndInstallGate(t *testing.T) {
+	u := newUpdateService()
+	manual, startup := 0, 0
+	result := portableupdate.Inspection{Version: "0.5.0", Candidate: &portableupdate.Candidate{}}
+	u.client = startupCheckFunc{
+		manual:  func(context.Context, string) (portableupdate.Inspection, error) { manual++; return result, nil },
+		startup: func(context.Context, string) (portableupdate.Inspection, error) { startup++; return result, nil },
+	}
+	a := &App{ctx: context.Background(), updates: u}
+	first, err := a.CheckForUpdateStartup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := a.CheckForUpdateStartup()
+	if err != nil || first.CandidateID == "" || first.CandidateID == second.CandidateID {
+		t.Fatal("reused candidate ID", first, second, err)
+	}
+	_, err = a.CheckForUpdate()
+	if err != nil || manual != 1 || startup != 2 {
+		t.Fatal("incorrect check routing", manual, startup, err)
+	}
+	u.installing = true
+	u.status.Phase = "downloading"
+	before := u.status
+	generation := u.generation
+	if _, err = a.CheckForUpdateStartup(); err == nil || u.status != before || u.generation != generation || startup != 2 {
+		t.Fatal("startup interrupted install gate", err)
+	}
+}
+func TestStartupCancellationCannotReviveCandidate(t *testing.T) {
+	u := newUpdateService()
+	entered, release := make(chan struct{}), make(chan struct{})
+	u.client = startupCheckFunc{startup: func(context.Context, string) (portableupdate.Inspection, error) {
+		close(entered)
+		<-release
+		return portableupdate.Inspection{Candidate: &portableupdate.Candidate{}}, nil
+	}}
+	a := &App{ctx: context.Background(), updates: u}
+	done := make(chan error, 1)
+	go func() { _, err := a.CheckForUpdateStartup(); done <- err }()
+	<-entered
+	if _, err := a.CheckForUpdate(); err == nil {
+		t.Fatal("manual overlapped startup")
+	}
+	if err := a.CancelUpdate(); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	s, _ := a.GetUpdateStatus()
+	if s.CandidateID != "" || s.Phase != "idle" || u.candidate != nil {
+		t.Fatal("late cache result revived candidate", s)
+	}
+}
 func TestMetadataChecksCoexistWithWork(t *testing.T) {
 	u := newUpdateService()
 	u.client = checkFunc(func(context.Context, string) (portableupdate.Inspection, error) {

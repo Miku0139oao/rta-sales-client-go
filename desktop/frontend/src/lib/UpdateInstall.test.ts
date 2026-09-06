@@ -11,7 +11,7 @@ afterEach(() => { cleanup(); configureBackend(undefined); });
 
 it('requires the explicit dialog confirmation and supports declining without download', async () => {
   const install = vi.fn(); const check = vi.fn(); const onBusy = vi.fn();
-  configureBackend({ methods: { GetUpdateStatus: async () => available, InstallUpdate: install, CheckForUpdate: check } });
+  configureBackend({ methods: { GetUpdateStatus: async () => available, InstallUpdate: install, CheckForUpdate: check, CheckForUpdateStartup: check } });
   render(UpdateNotice, { settings, details: true, onChange: vi.fn(), onBusyChange: onBusy });
   await fireEvent.click(await screen.findByRole('button', { name: 'Download and restart…' }));
   expect(screen.getByRole('dialog')).toHaveTextContent('Unsaved reports and previews will be lost');

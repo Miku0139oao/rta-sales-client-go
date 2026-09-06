@@ -18,7 +18,19 @@ The supported distribution is `RTA-Excel-Filler-portable.exe` (Windows 64-bit, n
 
 ---
 
-## What's new in 0.4.8
+## Update metadata migration
+
+New builds read version and changelog metadata from a fixed [GitHub Pages manifest](https://miku0139oao.github.io/rta-sales-client-go/updates/latest.json); verified executable/checksum downloads remain on GitHub Releases. No user login, GitHub token, or separate update server is required. Startup checks use a one-hour validated cache and bounded retry backoff; manual checks request revalidation. Downloads still require explicit consent.
+
+**0.4.8 and earlier API-based clients need a one-time manual upgrade to a Pages-enabled release.** Finish work, close the app, keep a backup, then replace it at the same path and filename. Old clients cannot learn this endpoint automatically and may encounter GitHub API rate limits. See [update safety and deployment](docs/portable-updates.md).
+
+## What's new in 0.4.9
+
+Version metadata and changelogs now come from GitHub Pages, without a login, token or anonymous GitHub API quota. Startup caching and failure backoff reduce requests. Executables remain signed GitHub Release assets.
+
+**Users of 0.4.8 or older affected by API rate limits should download 0.4.9 manually once.** [Release notes and migration instructions (Traditional Chinese)](docs/releases/v0.4.9.zh-TW.md).
+
+## Fullscreen and changelog improvements in 0.4.8
 
 Fullscreen update and Settings cards now share the same centered width. A version-labelled Changelog reads GitHub Release notes even when the app is already up to date.
 

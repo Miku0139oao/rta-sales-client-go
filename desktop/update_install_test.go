@@ -111,7 +111,7 @@ func TestAllPublicWorkEntrypointsRejectUpdateReservation(t *testing.T) {
 	a, _ := installFixture()
 	a.updateReserved = true
 	// All other public methods must fail before touching dependencies or paths.
-	exempt := map[string]bool{"CheckRuntime": true, "Cancel": true, "CancelSalesAnalysis": true, "GetUpdateStatus": true, "CheckForUpdate": true, "InstallUpdate": true, "CancelUpdate": true, "EndNativeExportLease": true, "ServiceStartup": true, "ServiceShutdown": true}
+	exempt := map[string]bool{"CheckRuntime": true, "Cancel": true, "CancelSalesAnalysis": true, "GetUpdateStatus": true, "CheckForUpdate": true, "CheckForUpdateStartup": true, "InstallUpdate": true, "CancelUpdate": true, "EndNativeExportLease": true, "ServiceStartup": true, "ServiceShutdown": true}
 	value := reflect.ValueOf(a)
 	typ := value.Type()
 	for i := 0; i < typ.NumMethod(); i++ {

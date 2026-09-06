@@ -22,8 +22,8 @@ func response(body string) *http.Response {
 func fixture() release {
 	base := "https://github.com/" + Repository + "/releases/download/v0.5.0/"
 	return release{Tag: "v0.5.0", Body: "<script>notes are text</script>", Assets: []releaseAsset{
-		{Name: ExecutableAsset, URL: base + ExecutableAsset, Size: 4},
-		{Name: ChecksumsAsset, URL: base + ChecksumsAsset, Size: 100},
+		{Name: ExecutableAsset, URL: base + ExecutableAsset, Size: 4, Digest: "sha256:" + strings.Repeat("a", 64)},
+		{Name: ChecksumsAsset, URL: base + ChecksumsAsset, Size: 100, Digest: "sha256:" + strings.Repeat("b", 64)},
 	}}
 }
 func TestVersion(t *testing.T) {
@@ -53,6 +53,9 @@ func TestReleaseValidation(t *testing.T) {
 		{"missing", func(r *release) { r.Assets = r.Assets[:1] }},
 		{"wrong repo", func(r *release) { r.Assets[0].URL = strings.Replace(r.Assets[0].URL, Repository, "attacker/repo", 1) }},
 		{"wrong size", func(r *release) { r.Assets[0].Size = 0 }},
+		{"missing digest", func(r *release) { r.Assets[0].Digest = "" }},
+		{"wrong digest", func(r *release) { r.Assets[1].Digest = "sha256:bad" }},
+		{"oversized checksum", func(r *release) { r.Assets[1].Size = checksumLimit + 1 }},
 		{"oversized", func(r *release) { r.Assets[0].Size = executableLimit + 1 }},
 	}
 	for _, tc := range cases {
@@ -82,13 +85,13 @@ func TestReleaseValidation(t *testing.T) {
 	}
 }
 func TestHostPolicy(t *testing.T) {
-	for _, raw := range []string{"http://github.com/x", "https://github.com.evil.test/x", "https://github.com:444/x", "https://user@github.com/x", "https://github.com/x#fragment", "https://127.0.0.1/x", "file:///tmp/x"} {
+	for _, raw := range []string{"http://github.com/x", "https://github.com.evil.test/x", "https://github.com:444/x", "https://user@github.com/x", "https://github.com/x#fragment", "https://127.0.0.1/x", "https://api.github.com/repos/" + Repository + "/releases/latest", "file:///tmp/x"} {
 		u, _ := url.Parse(raw)
 		if allowedURL(u) == nil {
 			t.Errorf("accepted %s", raw)
 		}
 	}
-	for _, host := range []string{"api.github.com", "github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"} {
+	for _, host := range []string{"github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"} {
 		u, _ := url.Parse("https://" + host + "/x")
 		if err := allowedURL(u); err != nil {
 			t.Fatal(err)
@@ -228,7 +231,8 @@ func TestDownloadFailures(t *testing.T) {
 				exeCalls++
 				return response(tc.exe), nil
 			})
-			cand := Candidate{executableURL: "https://github.com/" + ExecutableAsset, checksumURL: "https://github.com/" + ChecksumsAsset, size: tc.size}
+			checksumHash := sha256.Sum256([]byte(tc.checksums))
+			cand := Candidate{executableURL: "https://github.com/" + ExecutableAsset, checksumURL: "https://github.com/" + ChecksumsAsset, size: tc.size, checksumSize: int64(len(tc.checksums)), executableDigest: fmt.Sprintf("sha256:%x", sum), checksumDigest: fmt.Sprintf("sha256:%x", checksumHash)}
 			var out bytes.Buffer
 			_, err := c.Download(context.Background(), cand, &out)
 			if (err != nil) != tc.wantErr {
@@ -236,6 +240,48 @@ func TestDownloadFailures(t *testing.T) {
 			}
 			if _, checksumErr := parseChecksum(tc.checksums); checksumErr != nil && exeCalls != 0 {
 				t.Fatal("download before checksum validation")
+			}
+		})
+	}
+}
+func TestDownloadedAssetDigestsAreMandatory(t *testing.T) {
+	sum := sha256.Sum256([]byte("test"))
+	checksums := fmt.Sprintf("%x  %s\n", sum, ExecutableAsset)
+	checksumHash := sha256.Sum256([]byte(checksums))
+	base := Candidate{executableURL: "https://github.com/" + ExecutableAsset, checksumURL: "https://github.com/" + ChecksumsAsset, size: 4, checksumSize: int64(len(checksums)), executableDigest: fmt.Sprintf("sha256:%x", sum), checksumDigest: fmt.Sprintf("sha256:%x", checksumHash)}
+	for _, kind := range []string{"missing executable digest", "missing checksum digest", "checksum mismatch", "executable mismatch", "checksum size"} {
+		t.Run(kind, func(t *testing.T) {
+			cand := base
+			switch kind {
+			case "missing executable digest":
+				cand.executableDigest = ""
+			case "missing checksum digest":
+				cand.checksumDigest = ""
+			case "checksum mismatch":
+				cand.checksumDigest = "sha256:" + strings.Repeat("0", 64)
+			case "executable mismatch":
+				cand.executableDigest = "sha256:" + strings.Repeat("0", 64)
+			case "checksum size":
+				cand.checksumSize++
+			}
+			calls, exeCalls := 0, 0
+			c := NewClient()
+			c.http.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if strings.HasSuffix(r.URL.Path, ChecksumsAsset) {
+					return response(checksums), nil
+				}
+				exeCalls++
+				return response("test"), nil
+			})
+			if _, err := c.Download(context.Background(), cand, io.Discard); err == nil {
+				t.Fatal("accepted invalid digest")
+			}
+			if strings.HasPrefix(kind, "missing") && calls != 0 {
+				t.Fatal("downloaded unchecked candidate")
+			}
+			if strings.HasPrefix(kind, "checksum") && exeCalls != 0 {
+				t.Fatal("downloaded before checksum asset verification")
 			}
 		})
 	}

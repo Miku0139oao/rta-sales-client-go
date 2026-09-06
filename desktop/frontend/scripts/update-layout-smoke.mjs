@@ -29,7 +29,7 @@ let status=idle;
 configureBackend({methods:new Proxy({}, {get:(_,name)=>async (...args)=>{
  window.fixtureCalls.push([name,args]);
  if(name==='GetUpdateStatus')return status;
- if(name==='CheckForUpdate')return status=checked;
+ if(name==='CheckForUpdate'||name==='CheckForUpdateStartup')return status=checked;
  if(name==='InstallUpdate')throw Error('Unexpected installation in isolated fixture');
  return [];
 }})});
@@ -90,7 +90,8 @@ try {
     await page.getByRole('button', { name: '設定', exact: true }).click();
     await summary.waitFor();
     const calls = await page.evaluate(() => window.fixtureCalls);
-    assert.equal(calls.filter(([name]) => name === 'CheckForUpdate').length, 1);
+    assert.equal(calls.filter(([name]) => name === 'CheckForUpdateStartup').length, 1);
+    assert.equal(calls.filter(([name]) => name === 'CheckForUpdate').length, 0);
     assert.equal(calls.filter(([name]) => name === 'InstallUpdate').length, 0);
     await context.close();
   }
@@ -112,7 +113,7 @@ try {
     await page.goto(`http://127.0.0.1:9358/__update-layout?latest=${latest}`);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByText('Current version: 0.4.7').waitFor();
-    assert.equal(await page.evaluate(() => window.fixtureCalls.filter(([name]) => name === 'CheckForUpdate').length), 0);
+    assert.equal(await page.evaluate(() => window.fixtureCalls.filter(([name]) => name === 'CheckForUpdate' || name === 'CheckForUpdateStartup').length), 0);
     await page.getByRole('button', { name: 'Check for updates', exact: true }).click();
     await page.getByText(`Changelog — Latest GitHub Release v${latest}`, { exact: true }).waitFor();
     if (latest === '0.4.6') assert.equal(await page.getByRole('button', { name: 'Download and restart…', exact: true }).count(), 0);

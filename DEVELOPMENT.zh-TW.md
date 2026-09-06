@@ -11,6 +11,14 @@ Windows 桌面程式的產品名稱、捷徑、開始功能表名稱都是 **RTA
 - 命令列：`go run ./cmd/rta-xlsx-fill`，不開視窗，做同一件填 Excel 的事
 - Go library：給別的程式呼叫
 
+## Pages 更新資訊
+
+新原生版固定從 `https://miku0139oao.github.io/rta-sales-client-go/updates/latest.json` 取得版本與更新日誌；執行檔及 SHA256SUMS 仍由 GitHub Releases 提供。程式不含 GitHub token、不要求登入、不回退 GitHub API，也不需要另設伺服器。啟動檢查使用一小時的已驗證公開資訊快取與持久化指數退避；手動檢查要求 HTTP 重新驗證，但仍遵守最長一小時的伺服器重試提示。取消不算失敗、沒有自動重試計時器，下載仍需明確同意。
+
+快取位於 `%APPDATA%/RTA-Excel-Filler/updates-v1.json`，不含候選 ID 或秘密；讀取有大小與格式驗證，寫入失敗改用記憶體。Pages workflow 每次都 checkout main，在 Windows 以 Actions token 解析最新正式版本，驗證兩個資產的摘要／大小、checksum、可信簽章／參考發行者及 PE 版本／AMD64，重新核對最新版本與資產身分後才上傳完整 docs 並由 Ubuntu 部署。失敗不覆蓋既有 Pages；建置 release workflow 仍只產生草稿。
+
+離線驗證：`pwsh -NoProfile -File scripts/test-update-manifest.ps1`（PowerShell 7.5+）。合併及人工核對後才可執行 `gh workflow run pages.yml --repo Miku0139oao/rta-sales-client-go --ref main`。0.4.8 與更早的 API 客戶端需要一次手動升級；詳見 [更新安全與部署](docs/portable-updates.md)。
+
 ## 命令列怎麼叫
 
 根目錄放 `.env`（Git 會忽略）：

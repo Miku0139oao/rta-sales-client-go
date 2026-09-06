@@ -11,6 +11,16 @@ The same repo also has:
 - a CLI, `go run ./cmd/rta-xlsx-fill`, for the workbook job without a window
 - a Go library other programs can import
 
+## Pages update metadata
+
+The native updater reads only `https://miku0139oao.github.io/rta-sales-client-go/updates/latest.json` for version/notes; executable and checksum assets remain on GitHub Releases. No API fallback, user login, token in the app, or separate server exists. `Inspect` / `CheckForUpdate` request HTTP cache revalidation; `InspectStartup` / `CheckForUpdateStartup` use validated public metadata for at most one hour plus persisted exponential failure backoff. Both paths preserve backend candidate IDs and installation gates; web RPC rejects both.
+
+`%APPDATA%/RTA-Excel-Filler/updates-v1.json` contains only bounded metadata/timestamps, never IDs or secrets. Cache reads are size-bound and revalidated; same-directory temporary-file replacement is best-effort. Unwritable storage falls back to in-memory state. Server retry hints cap at one hour and also apply to manual checks; cancellation does not count as failure. There are no background retry timers.
+
+The Pages workflow checks out `main` for every docs/manual/release run, verifies the authenticated latest stable Release on Windows, and uploads the complete docs site plus a generated (uncommitted) manifest before Ubuntu deployment. It checks both GitHub SHA256 digests, exact asset URLs/sizes, the unique executable checksum, Authenticode publisher against a hash-pinned v0.4.8 reference, AMD64/numeric PE version, and re-resolves latest/asset identities after downloads. Failed verification leaves deployed Pages unchanged. Release build CI remains drafts only.
+
+Offline validation (PowerShell 7.5+): `pwsh -NoProfile -File scripts/test-update-manifest.ps1`. The real generator is a release-artifact verification operation, not part of ordinary tests. After review and merging to main, authorized deployment is `gh workflow run pages.yml --repo Miku0139oao/rta-sales-client-go --ref main`; see [portable update deployment](docs/portable-updates.md). Existing 0.4.8 API clients require one manual upgrade; do not promise they can discover Pages automatically.
+
 ## Using the CLI
 
 Put this in a repo-root `.env` (Git ignores it):

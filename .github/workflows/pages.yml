@@ -1,42 +1,62 @@
-name: Deploy architecture diagram to GitHub Pages
+name: Deploy docs and verified update manifest to GitHub Pages
 
 on:
   push:
     branches: [main]
     paths:
       - ".github/workflows/pages.yml"
+      - "scripts/generate-update-manifest.ps1"
+      - "scripts/test-update-manifest.ps1"
       - "docs/**"
   workflow_dispatch:
+  release:
+    types: [published]
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+permissions: {}
 
 concurrency:
   group: github-pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout current docs and verifier (never release tag)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Test manifest validation offline
+        shell: pwsh
+        run: ./scripts/test-update-manifest.ps1
+      - name: Stage complete docs and generate verified latest stable metadata
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $site = Join-Path $env:RUNNER_TEMP 'pages-site'
+          New-Item -ItemType Directory -Force -Path $site | Out-Null
+          Copy-Item -Path docs/* -Destination $site -Recurse -Force
+          ./scripts/generate-update-manifest.ps1 -OutputDirectory (Join-Path $site 'updates')
+      - name: Upload complete Pages site only after verification
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ runner.temp }}/pages-site
   deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
-
-      - name: Upload docs site
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs
-
-      - name: Deploy to GitHub Pages
+      - name: Deploy verified Pages artifact
         id: deployment
         uses: actions/deploy-pages@v4

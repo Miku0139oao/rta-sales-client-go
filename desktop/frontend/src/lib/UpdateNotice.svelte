@@ -41,14 +41,14 @@
       const next = await updates.status();
       if (!alive) return;
       status = next;
-      if (!updateIsExclusive(next.phase) && settings.autoCheckUpdates !== false) await check();
+      if (!updateIsExclusive(next.phase) && settings.autoCheckUpdates !== false) await check(true);
     } catch { /* Startup/offline failures must not interrupt the user. */ }
   }
-  async function check() {
+  async function check(startup = false) {
     if (checking || exclusive || confirmCandidate) return;
     checking = true; error = '';
     if (status) status = { ...status, phase: 'checking', candidateId: '', availableVersion: '', releaseNotes: '', changelogVersion: '', changelogBody: '' };
-    try { const next = await updates.check(); if (alive) status = next; }
+    try { const next = await (startup ? updates.startup() : updates.check()); if (alive) status = next; }
     catch (cause) { if (alive) error = cause instanceof Error ? cause.message : String(cause); }
     finally { if (alive) checking = false; }
   }

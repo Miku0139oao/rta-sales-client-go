@@ -17,6 +17,7 @@ export const updateIsExclusive = (phase?: UpdateStatus['phase']) => Boolean(phas
 export const updates = {
   status: () => invokeNativeUpdate<UpdateStatus>('GetUpdateStatus'),
   check: () => invokeNativeUpdate<UpdateStatus>('CheckForUpdate'),
+  startup: () => invokeNativeUpdate<UpdateStatus>('CheckForUpdateStartup'),
   install: (request: InstallUpdateRequest) => invokeNativeUpdate<void>('InstallUpdate', [request]),
   cancel: () => invokeNativeUpdate<void>('CancelUpdate'),
 };

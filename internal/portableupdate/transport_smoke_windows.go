@@ -11,6 +11,9 @@ import (
 
 type smokeTransport struct{}
 
+// Isolated smoke builds must never read or write the user's production cache.
+func newUpdateCachePath() string { return "" }
+
 func newUpdateTransport() http.RoundTripper { return smokeTransport{} }
 func (smokeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	m, err := smokefixture.Load()

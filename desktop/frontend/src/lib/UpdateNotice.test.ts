@@ -11,10 +11,21 @@ afterEach(() => { cleanup(); configureBackend(undefined); state.web = false; loc
 function setup(check = vi.fn().mockResolvedValue({ ...status, phase: 'current' })) {
   const install = vi.fn();
   const get = vi.fn().mockResolvedValue(status);
-  configureBackend({ methods: { GetUpdateStatus: get, CheckForUpdate: check, InstallUpdate: install } });
+  configureBackend({ methods: { GetUpdateStatus: get, CheckForUpdate: check, CheckForUpdateStartup: check, InstallUpdate: install } });
   return { get, check, install };
 }
 describe('portable update notice', () => {
+  it('routes startup to cached metadata and manual clicks to fresh checks', async () => {
+    const startup = vi.fn().mockResolvedValue({ ...status, phase: 'current' });
+    const manual = vi.fn().mockResolvedValue({ ...status, phase: 'current' });
+    configureBackend({ methods: { GetUpdateStatus: async () => status, CheckForUpdateStartup: startup, CheckForUpdate: manual } });
+    render(UpdateNotice, { settings: { ...defaultSettings, locale: 'en' }, details: true, onChange: vi.fn() });
+    await waitFor(() => expect(startup).toHaveBeenCalledTimes(1));
+    expect(manual).not.toHaveBeenCalled();
+    await fireEvent.click(await screen.findByRole('button', { name: 'Check for updates' }));
+    await waitFor(() => expect(manual).toHaveBeenCalledTimes(1));
+    expect(startup).toHaveBeenCalledTimes(1);
+  });
   it('checks once, persists across detail navigation and never installs automatically', async () => {
     const methods = setup();
     const view = render(UpdateNotice, { settings: defaultSettings, details: false, onChange: vi.fn() });
@@ -111,7 +122,7 @@ describe('portable update notice', () => {
     const { container } = render(UpdateNotice, { settings: defaultSettings, details: true, onChange: vi.fn() });
     expect(container.textContent?.trim()).toBe('');
     const { updates } = await import('./updates');
-    for (const invoke of [updates.status, updates.check, updates.cancel, () => updates.install({ candidateId: 'candidate', confirmed: true })]) {
+    for (const invoke of [updates.status, updates.check, updates.startup, updates.cancel, () => updates.install({ candidateId: 'candidate', confirmed: true })]) {
       await expect(invoke()).rejects.toThrow('Windows native app');
     }
     await expect(beginNativeExportLease()).rejects.toThrow('unavailable on web');

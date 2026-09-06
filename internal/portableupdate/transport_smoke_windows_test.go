@@ -14,6 +14,9 @@ import (
 )
 
 func TestSmokeTransportExactURLsAndNonce(t *testing.T) {
+	if NewPersistentClient().cache.path != "" {
+		t.Fatal("smoke build accessed production metadata cache")
+	}
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -39,7 +42,7 @@ func TestSmokeTransportExactURLsAndNonce(t *testing.T) {
 			t.Fatal("empty fixture")
 		}
 	}
-	for _, url := range []string{"https://example.com/", latestURL + "?x=1", "https://github.com/other/repo/releases/latest"} {
+	for _, url := range []string{"https://example.com/", "https://api.github.com/repos/" + Repository + "/releases/latest", latestURL + "?x=1", "https://github.com/other/repo/releases/latest"} {
 		req, _ := http.NewRequest(http.MethodGet, url, nil)
 		if _, err := transport.RoundTrip(req); err == nil {
 			t.Fatalf("accepted %s", url)

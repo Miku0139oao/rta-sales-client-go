@@ -19,7 +19,7 @@ describe('desktop application shell', () => {
     const status = { currentVersion: '0.4.5', phase: 'available', candidateId: 'checked', availableVersion: '0.5.0', releaseNotes: 'release notes', installSupported: true, error: '' };
     const check = vi.fn(async () => status);
     const install = vi.fn();
-    configureBackend({ methods: { GetUpdateStatus: async () => status, CheckForUpdate: check, InstallUpdate: install } });
+    configureBackend({ methods: { GetUpdateStatus: async () => status, CheckForUpdate: check, CheckForUpdateStartup: check, InstallUpdate: install } });
     render(App);
     await waitFor(() => expect(check).toHaveBeenCalledTimes(1));
     await fireEvent.click(screen.getAllByRole('button', { name: /設定/ })[0]);

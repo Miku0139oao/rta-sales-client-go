@@ -58,7 +58,7 @@ try {
  $newHash = (Get-FileHash (Join-Path $root 'next.exe')).Hash.ToLowerInvariant()
  [IO.File]::WriteAllText((Join-Path $root 'SHA256SUMS.txt'),"$newHash  RTA-Excel-Filler-portable.exe`n")
  $base = 'https://github.com/Miku0139oao/rta-sales-client-go/releases/download/v0.4.7/'
- $release = @{tag_name='v0.4.7';draft=$false;prerelease=$false;body="Signed isolated smoke $nonce";assets=@(@{name='RTA-Excel-Filler-portable.exe';browser_download_url=($base+'RTA-Excel-Filler-portable.exe');size=(Get-Item (Join-Path $root 'next.exe')).Length},@{name='SHA256SUMS.txt';browser_download_url=($base+'SHA256SUMS.txt');size=(Get-Item (Join-Path $root 'SHA256SUMS.txt')).Length})}
+ $release = @{tag_name='v0.4.7';draft=$false;prerelease=$false;body="Signed isolated smoke $nonce";assets=@(@{name='RTA-Excel-Filler-portable.exe';browser_download_url=($base+'RTA-Excel-Filler-portable.exe');size=(Get-Item (Join-Path $root 'next.exe')).Length;digest=('sha256:'+$newHash)},@{name='SHA256SUMS.txt';browser_download_url=($base+'SHA256SUMS.txt');size=(Get-Item (Join-Path $root 'SHA256SUMS.txt')).Length;digest=('sha256:'+(Get-FileHash (Join-Path $root 'SHA256SUMS.txt')).Hash.ToLowerInvariant())})}
  [IO.File]::WriteAllText((Join-Path $root 'latest.json'),($release | ConvertTo-Json -Depth 10))
  $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0); $listener.Start(); $port=$listener.LocalEndpoint.Port; $listener.Stop()
  $manifest = @{root=$root;nonce=$nonce;port=$port;version='0.4.7';oldHash=$oldHash;newHash=$newHash}
