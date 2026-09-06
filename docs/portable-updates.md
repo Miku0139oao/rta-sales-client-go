@@ -28,6 +28,8 @@ Offline parser/orchestration validation: `pwsh -NoProfile -File scripts/test-upd
 gh workflow run pages.yml --repo Miku0139oao/rta-sales-client-go --ref main
 ```
 
+The repository's `github-pages` environment must permit both the `main` branch and `v*` tags: a release-triggered workflow retains its tag deployment identity even though checkout reads main. Preserve other environment protections. This repository has those two scoped rules configured; otherwise the build can succeed while deployment is rejected before steps start.
+
 Verify the resulting Pages manifest and architecture page before releasing a client that depends on it. Release CI stays **draft-only**. **0.4.8 and earlier API clients require a one-time manual upgrade to a Pages-enabled release**; existing binaries cannot learn the new endpoint. Finish work and close the app before replacing at the same path/name, retaining a backup. No deployment or signed/native installation trial is implied by local generator tests.
 
 ## Confirmed native installation and work ownership
