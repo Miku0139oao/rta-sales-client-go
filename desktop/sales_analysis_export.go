@@ -15,6 +15,11 @@ const maxSalesAnalysisPDFBytes = 64 << 20
 // ChooseSalesAnalysisPDFDirectory opens one native directory picker before
 // the frontend renders a separate PDF for each successful store.
 func (a *App) ChooseSalesAnalysisPDFDirectory() (string, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return "", admissionErr
+	}
+	defer releaseAdmission()
 	directory, err := a.dialogs.OpenDirectory(a.appContext(), fileDialogOptions{
 		Title: "Export reports / 匯出報告",
 	})
@@ -27,6 +32,11 @@ func (a *App) ChooseSalesAnalysisPDFDirectory() (string, error) {
 // WriteSalesAnalysisPDF stores one frontend-rendered PDF without overwriting
 // an existing report. The native layer owns path validation and file writes.
 func (a *App) WriteSalesAnalysisPDF(request SalesAnalysisPDFWriteRequest) (string, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return "", admissionErr
+	}
+	defer releaseAdmission()
 	directory, err := validPDFDirectory(request.Directory)
 	if err != nil {
 		return "", err
@@ -53,6 +63,11 @@ const maxSalesAnalysisTextBytes = 8 << 20
 // WriteSalesAnalysisTextExport stores a Markdown or JSON briefing without
 // overwriting an existing file. Used for Microsoft Copilot analysis packs.
 func (a *App) WriteSalesAnalysisTextExport(request SalesAnalysisPDFWriteRequest) (string, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return "", admissionErr
+	}
+	defer releaseAdmission()
 	directory, err := validPDFDirectory(request.Directory)
 	if err != nil {
 		return "", err

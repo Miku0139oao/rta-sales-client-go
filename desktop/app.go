@@ -44,12 +44,17 @@ type App struct {
 	events      eventSink
 	runtime     runtimeChecker
 	launcher    pathLauncher
+	updates     *updateService
 
 	contextMu              sync.RWMutex
 	ctx                    context.Context
 	profileMu              sync.Mutex
 	manCodeMu              sync.Mutex
 	operationMu            sync.Mutex
+	workAdmissions         int
+	updateReserved         bool
+	shuttingDown           bool
+	exportLeases           map[string]struct{}
 	active                 *operationState
 	profileMutationRunning bool
 	profileTestRunning     bool
@@ -123,6 +128,11 @@ func (a *App) CheckRuntime() RuntimeStatus {
 }
 
 func (a *App) OpenWorkbook() (string, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return "", admissionErr
+	}
+	defer releaseAdmission()
 	return a.dialogs.OpenFile(a.appContext(), fileDialogOptions{
 		Title:   "Open workbook / 開啟活頁簿",
 		Filters: []fileDialogFilter{{DisplayName: "Excel workbook (*.xlsx)", Pattern: "*.xlsx"}},
@@ -130,6 +140,11 @@ func (a *App) OpenWorkbook() (string, error) {
 }
 
 func (a *App) OpenMappingFile() (string, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return "", admissionErr
+	}
+	defer releaseAdmission()
 	return a.dialogs.OpenFile(a.appContext(), fileDialogOptions{
 		Title:   "Open store mapping / 開啟門店對照檔",
 		Filters: []fileDialogFilter{{DisplayName: "Store mapping (*.json;*.csv)", Pattern: "*.json;*.csv"}},
@@ -137,6 +152,11 @@ func (a *App) OpenMappingFile() (string, error) {
 }
 
 func (a *App) SaveWorkbook(request SaveWorkbookRequest) (string, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return "", admissionErr
+	}
+	defer releaseAdmission()
 	inputPath, err := existingWorkbookPath(request.InputPath)
 	if err != nil {
 		return "", err
@@ -176,6 +196,11 @@ func (a *App) SaveWorkbook(request SaveWorkbookRequest) (string, error) {
 }
 
 func (a *App) ScanWorkbook(request ScanWorkbookRequest) (WorkbookScan, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return WorkbookScan{}, admissionErr
+	}
+	defer releaseAdmission()
 	inputPath, err := existingWorkbookPath(request.InputPath)
 	if err != nil {
 		return WorkbookScan{}, err
@@ -225,6 +250,11 @@ func (a *App) ScanWorkbook(request ScanWorkbookRequest) (WorkbookScan, error) {
 }
 
 func (a *App) ListProfiles() ([]Profile, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return nil, admissionErr
+	}
+	defer releaseAdmission()
 	a.profileMu.Lock()
 	defer a.profileMu.Unlock()
 	return a.listProfilesLocked()
@@ -248,6 +278,11 @@ func (a *App) listProfilesLocked() ([]Profile, error) {
 }
 
 func (a *App) CreateOrUpdateProfile(request ProfileUpsertRequest) (Profile, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return Profile{}, admissionErr
+	}
+	defer releaseAdmission()
 	finishMutation, err := a.beginProfileMutation()
 	if err != nil {
 		return Profile{}, err
@@ -343,6 +378,11 @@ func (a *App) CreateOrUpdateProfile(request ProfileUpsertRequest) (Profile, erro
 }
 
 func (a *App) TestProfile(request TestProfileRequest) (ProfileTestResult, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return ProfileTestResult{}, admissionErr
+	}
+	defer releaseAdmission()
 	if !validProfileID(request.ProfileID) {
 		return ProfileTestResult{}, errors.New("invalid profile identifier")
 	}
@@ -405,6 +445,11 @@ func (a *App) TestProfile(request TestProfileRequest) (ProfileTestResult, error)
 }
 
 func (a *App) DeleteProfile(request ProfileIDRequest) error {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return admissionErr
+	}
+	defer releaseAdmission()
 	finishMutation, err := a.beginProfileMutation()
 	if err != nil {
 		return err
@@ -476,6 +521,11 @@ func (a *App) DeleteProfile(request ProfileIDRequest) error {
 }
 
 func (a *App) Reorder(request ReorderProfilesRequest) ([]Profile, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return nil, admissionErr
+	}
+	defer releaseAdmission()
 	finishMutation, err := a.beginProfileMutation()
 	if err != nil {
 		return nil, err
@@ -511,6 +561,11 @@ func (a *App) Reorder(request ReorderProfilesRequest) ([]Profile, error) {
 }
 
 func (a *App) Enable(request EnableProfileRequest) (Profile, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return Profile{}, admissionErr
+	}
+	defer releaseAdmission()
 	finishMutation, err := a.beginProfileMutation()
 	if err != nil {
 		return Profile{}, err
@@ -542,6 +597,11 @@ func (a *App) Enable(request EnableProfileRequest) (Profile, error) {
 }
 
 func (a *App) Analyze(request AnalyzeRequest) (AnalysisResult, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return AnalysisResult{}, admissionErr
+	}
+	defer releaseAdmission()
 	inputPath, err := existingWorkbookPath(request.InputPath)
 	if err != nil {
 		return AnalysisResult{}, err
@@ -648,6 +708,11 @@ func (a *App) Cancel(request OperationRequest) error {
 }
 
 func (a *App) RetryFailed(request OperationRequest) (AnalysisResult, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return AnalysisResult{}, admissionErr
+	}
+	defer releaseAdmission()
 	state, ctx, finish, err := a.beginExistingWork(request.OperationID)
 	if err != nil {
 		return AnalysisResult{}, err
@@ -670,6 +735,11 @@ func (a *App) RetryFailed(request OperationRequest) (AnalysisResult, error) {
 }
 
 func (a *App) Apply(request ApplyRequest) (ApplyResult, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return ApplyResult{}, admissionErr
+	}
+	defer releaseAdmission()
 	state, ctx, finish, err := a.beginExistingWork(request.OperationID)
 	if err != nil {
 		return ApplyResult{}, err
@@ -722,6 +792,10 @@ func (a *App) Apply(request ApplyRequest) (ApplyResult, error) {
 
 func (a *App) beginExistingWork(operationID string) (*operationState, context.Context, func(*enginePlan, error), error) {
 	a.operationMu.Lock()
+	if a.updateReserved {
+		a.operationMu.Unlock()
+		return nil, nil, nil, errUpdateReserved
+	}
 	if a.profileMutationRunning || a.profileTestRunning || a.salesAnalysisRunning {
 		a.operationMu.Unlock()
 		return nil, nil, nil, errors.New("another account operation is already running")
@@ -825,6 +899,10 @@ func (a *App) excelAnalysisProfile(profileID string) (profileRecord, error) {
 
 func (a *App) beginProfileMutation() (func(), error) {
 	a.operationMu.Lock()
+	if a.updateReserved {
+		a.operationMu.Unlock()
+		return nil, errUpdateReserved
+	}
 	if (a.active != nil && a.active.running) || a.profileMutationRunning || a.profileTestRunning || a.salesAnalysisRunning {
 		a.operationMu.Unlock()
 		return nil, errors.New("profiles cannot be changed while an account or workbook operation is running")
@@ -842,6 +920,9 @@ func (a *App) beginProfileMutation() (func(), error) {
 func (a *App) rejectWhileRunning() error {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
+	if a.updateReserved {
+		return errUpdateReserved
+	}
 	if (a.active != nil && a.active.running) || a.profileMutationRunning || a.profileTestRunning || a.salesAnalysisRunning {
 		return errors.New("another account or workbook operation is already running")
 	}

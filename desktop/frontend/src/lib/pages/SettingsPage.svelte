@@ -15,8 +15,8 @@
   let browsing = false;
   let mappingError = '';
 
-  $: if (settings.theme !== draft.theme) {
-    draft = { ...draft, theme: settings.theme };
+  $: if (settings.theme !== draft.theme || settings.autoCheckUpdates !== draft.autoCheckUpdates) {
+    draft = { ...draft, theme: settings.theme, autoCheckUpdates: settings.autoCheckUpdates };
   }
 
   function updateNumber(key: 'maxJobs' | 'accountConcurrency' | 'simulateStoreCount', event: Event) {

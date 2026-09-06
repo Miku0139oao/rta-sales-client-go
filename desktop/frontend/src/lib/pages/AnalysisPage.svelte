@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { backend } from '../backend';
+  import { beginNativeExportLease, endNativeExportLease, backend } from '../backend';
   import { errorMessage } from '../i18n';
   import { isWebRuntime } from '../runtime';
   import { loadWebAnalysisSnapshot } from '../webStorage';
@@ -223,7 +223,7 @@
   }
   $: busy = loadingProfiles || loadingStores || running || Boolean(result?.pending);
   $: visibleStores = filterStores(stores, storeQuery);
-  $: onBusyChange(running || exportingData || Boolean(result?.pending));
+  $: onBusyChange(running || exportingPDF || exportingData || Boolean(result?.pending));
   $: rangeInvalid = periodMode === 'range' && Boolean(from && to && from > to);
   $: reportPeriods = normalizePeriods(result);
   $: currentPeriod = periodByKey(reportPeriods, 'current') ?? reportPeriods[0];
@@ -963,7 +963,9 @@
     pdfExportTotal = 0;
     error = '';
     exportNotice = '';
+    let nativeExportLease = '';
     try {
+      if (!isWebRuntime()) nativeExportLease = await beginNativeExportLease();
       const directory = await backend.chooseSalesAnalysisPDFDirectory();
       if (!directory) return;
       const availableStores = listSuccessfulReportStores(result);
@@ -1121,6 +1123,10 @@
     } catch (caught) {
       error = errorMessage(settings.locale, caught);
     } finally {
+      if (nativeExportLease) {
+        try { await endNativeExportLease(nativeExportLease); }
+        catch (caught) { error = errorMessage(settings.locale, caught); }
+      }
       exportingPDF = false;
       exportDialog = false;
       if (result) void ensurePeriodItems(neededPeriodKeys);

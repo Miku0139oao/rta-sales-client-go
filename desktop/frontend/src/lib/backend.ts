@@ -1,4 +1,5 @@
 import { collectManCodes } from './manCodes';
+import { isWebRuntime } from './runtime';
 import { unpackSalesAnalysisItems } from './salesAnalysisItems';
 import type {
   AnalysisProgress,
@@ -145,6 +146,25 @@ async function invoke<T>(names: string[], args: unknown[], fallback: () => Promi
     if (import.meta.env.DEV && (!injection || unavailableBridge)) return fallback();
     throw asAppError(error);
   }
+}
+
+// Update calls never use demo fallbacks or the web RPC bridge.
+export async function invokeNativeUpdate<T>(name: 'GetUpdateStatus' | 'CheckForUpdate' | 'InstallUpdate' | 'CancelUpdate' | 'BeginNativeExportLease' | 'EndNativeExportLease', args: unknown[] = []): Promise<T> {
+  if (isWebRuntime()) throw new AppError('unsupported', 'Portable updates require the Windows native app');
+  const method = findMethod([name]);
+  if (!method) throw new AppError('backend_unavailable', 'Desktop update backend is unavailable');
+  try { return await method(...args) as T; } catch (error) { throw asAppError(error); }
+}
+
+// Export rendering lives in JS; hold one native lease across all its RPCs.
+// Demo-only fallback cannot enable updates because it has no native capability.
+export async function beginNativeExportLease(): Promise<string> {
+  if (isWebRuntime()) throw new AppError('unsupported', 'Native export leases are unavailable on web');
+  return invoke<string>(['BeginNativeExportLease'], [], async () => 'demo-export');
+}
+export async function endNativeExportLease(id: string): Promise<void> {
+  if (isWebRuntime()) throw new AppError('unsupported', 'Native export leases are unavailable on web');
+  await invoke<void>(['EndNativeExportLease'], [id], async () => undefined);
 }
 
 const sampleRows: PreviewRow[] = [

@@ -123,6 +123,11 @@ func firstNonEmpty(values ...string) string {
 // analysis kept in this process. RunSalesAnalysis omits those rows so the
 // Wails/WebView2 bridge does not marshal a multi-store dump in one call.
 func (a *App) GetSalesAnalysisItems(request SalesAnalysisItemsRequest) (SalesAnalysisPackedItems, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return SalesAnalysisPackedItems{}, admissionErr
+	}
+	defer releaseAdmission()
 	operationID := strings.TrimSpace(request.OperationID)
 	periodKey := strings.TrimSpace(request.PeriodKey)
 	if operationID == "" || periodKey == "" {
@@ -147,6 +152,11 @@ func (a *App) GetSalesAnalysisItems(request SalesAnalysisItemsRequest) (SalesAna
 // GetSalesAnalysisReportGlyphs returns the unique characters needed to subset
 // the report font without sending article rows to the webview.
 func (a *App) GetSalesAnalysisReportGlyphs(request OperationRequest) (string, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return "", admissionErr
+	}
+	defer releaseAdmission()
 	operationID := strings.TrimSpace(request.OperationID)
 	catalog := a.listedManCodeGroups()
 	a.salesResultMu.Lock()
@@ -223,6 +233,11 @@ func (a *App) rememberSalesAnalysis(result SalesAnalysisResult, packed map[strin
 // result screen. Packed rows stay available until this is called so PDF export
 // can still reload every period.
 func (a *App) ClearSalesAnalysis(request OperationRequest) error {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return admissionErr
+	}
+	defer releaseAdmission()
 	operationID := strings.TrimSpace(request.OperationID)
 	_ = a.CancelSalesAnalysis(OperationRequest{OperationID: operationID})
 	a.salesResultMu.Lock()

@@ -81,3 +81,8 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 	Start(a, ctx)
 	return nil
 }
+
+func (a *App) ServiceShutdown() error {
+	Stop(a)
+	return nil
+}

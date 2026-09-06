@@ -141,6 +141,11 @@ func rejectTrailingManCodeJSON(decoder *json.Decoder) error {
 }
 
 func (a *App) ListManCodeGroups() ([]ManCodeGroup, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return nil, admissionErr
+	}
+	defer releaseAdmission()
 	a.manCodeMu.Lock()
 	defer a.manCodeMu.Unlock()
 	return a.mancodes.List()
@@ -158,6 +163,11 @@ func (a *App) listedManCodeGroups() []ManCodeGroup {
 }
 
 func (a *App) SaveManCodeGroup(request SaveManCodeGroupRequest) (ManCodeGroup, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return ManCodeGroup{}, admissionErr
+	}
+	defer releaseAdmission()
 	name := strings.TrimSpace(request.Name)
 	if name == "" {
 		return ManCodeGroup{}, errors.New("group name is required")
@@ -200,6 +210,11 @@ func (a *App) SaveManCodeGroup(request SaveManCodeGroupRequest) (ManCodeGroup, e
 }
 
 func (a *App) DeleteManCodeGroup(id string) error {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return admissionErr
+	}
+	defer releaseAdmission()
 	a.manCodeMu.Lock()
 	defer a.manCodeMu.Unlock()
 	groups, err := a.mancodes.List()
@@ -221,6 +236,11 @@ func (a *App) DeleteManCodeGroup(id string) error {
 }
 
 func (a *App) ReplaceManCodeGroupCodes(request ReplaceManCodeGroupCodesRequest) (ManCodeGroup, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return ManCodeGroup{}, admissionErr
+	}
+	defer releaseAdmission()
 	a.manCodeMu.Lock()
 	defer a.manCodeMu.Unlock()
 	groups, err := a.mancodes.List()

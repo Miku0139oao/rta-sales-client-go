@@ -8,13 +8,13 @@
 
 ## 1. 安裝與開啟
 
-1. 至 [Releases](https://github.com/Miku0139oao/rta-sales-client-go/releases) 下載 **`RTA-Excel-Filler-setup.exe`**。
-2. 雙擊安裝。若 Windows 或 Edge 提示「不常下載」，選保留／仍要執行。
-3. 按 **Windows 鍵**，搜尋 **RTA 銷售分析** 開啟。
+1. 至 [Releases](https://github.com/Miku0139oao/rta-sales-client-go/releases) 下載 **`RTA-Excel-Filler-portable.exe`**，存入可寫入的本機資料夾。
+2. 確認數位簽章有效；不要略過簽章無效警告。
+3. 雙擊免安裝執行檔即可開啟 **RTA 銷售分析**。
 
 同一時間只能開一個視窗。若按了沒反應，先看工作列是否已在執行。
 
-可攜版 `RTA-Excel-Filler-portable.exe` 免安裝；若打不開，改用安裝檔。
+若缺少 Runtime，請從 Microsoft 官方網站手動安裝 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)。設定可檢查新版本、關閉啟動檢查。可信簽章的 Windows 免安裝版可明確確認「下載並重啟」；請先匯出工作，未儲存報表將遺失。若顯示不支援原因，請關閉程式後以同路徑同檔名手動更新並保留舊版備份。
 
 ---
 

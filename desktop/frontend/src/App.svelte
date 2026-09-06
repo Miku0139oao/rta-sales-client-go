@@ -5,6 +5,7 @@
   import ExcelPage from './lib/pages/ExcelPage.svelte';
   import ItemCodesPage from './lib/pages/ItemCodesPage.svelte';
   import SettingsPage from './lib/pages/SettingsPage.svelte';
+  import UpdateNotice from './lib/UpdateNotice.svelte';
   import { translator } from './lib/i18n';
   import { isWebRuntime } from './lib/runtime';
   import { loadSettings, saveSettings } from './lib/settings';
@@ -21,6 +22,7 @@
   let analysisBusy = false;
   let accountsBusy = false;
   let itemcodesBusy = false;
+  let updateBusy = false;
   let mainContent: HTMLElement;
   let webBannerVisible = isWebRuntime() && !readWebBannerAck();
   let analysisEpoch = 0;
@@ -28,7 +30,7 @@
   $: t = translator(settings.locale);
   $: resolvedTheme = resolveTheme(settings.theme, systemDark);
   $: applyTheme(resolvedTheme);
-  $: navigationBusy = activePage === 'excel' ? excelBusy : activePage === 'analysis' ? analysisBusy : activePage === 'accounts' ? accountsBusy : activePage === 'itemcodes' ? itemcodesBusy : false;
+  $: navigationBusy = updateBusy || (activePage === 'excel' ? excelBusy : activePage === 'analysis' ? analysisBusy : activePage === 'accounts' ? accountsBusy : activePage === 'itemcodes' ? itemcodesBusy : false);
   $: if (typeof document !== 'undefined') {
     document.documentElement.lang = settings.locale === 'en' ? 'en' : 'zh-Hant';
     document.title = t('app.name');
@@ -162,6 +164,7 @@
     </aside>
 
     <main id="main-content" bind:this={mainContent} tabindex="-1" onwheel={relayMainWheel}>
+      <UpdateNotice {settings} details={activePage === 'settings'} busy={excelBusy || analysisBusy || accountsBusy || itemcodesBusy} onChange={updateSettings} onBusyChange={(busy) => (updateBusy = busy)} />
       {#if webBannerVisible}
         <div class="notice warning-notice web-preview-notice" role="status">
           <span class="material-symbols-rounded" aria-hidden="true">language</span>

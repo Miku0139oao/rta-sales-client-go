@@ -1,18 +1,15 @@
 name: release
 
-# Publishes a GitHub Release for tag v*.
-# Windows binaries from CI are unsigned. Sign locally with
-#   pwsh ./scripts/build-desktop.ps1 -RequireSign
-# then: gh release upload <tag> release/RTA-Excel-Filler-setup.exe release/RTA-Excel-Filler-portable.exe --clobber
-
+# CI builds unsigned Windows portable artifacts into a DRAFT only.
+# Publish signed artifacts locally with scripts/publish-portable.ps1.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing or new tag to publish (e.g. v0.4.4). Leave empty to build artifacts only."
-        required: false
+        description: "Existing stable tag to stage as draft (must match productVersion)"
+        required: true
         type: string
 
 concurrency:
@@ -28,156 +25,64 @@ env:
   WAILS_VERSION: "v3.0.0-beta.8"
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-      - run: go test -race ./...
-      - run: go vet ./...
-      - name: Verify Svelte frontend
-        working-directory: desktop/frontend
-        run: |
-          bun install --frozen-lockfile
-          bun run verify
-
-  desktop-windows:
-    needs: test
+  portable-draft:
     runs-on: windows-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-      - name: Install pinned Wails v3 CLI
-        shell: pwsh
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}
-      - name: Install NSIS
-        shell: pwsh
-        run: |
-          choco install nsis --version 3.12.0 --no-progress --yes
-          "${env:ProgramFiles(x86)}\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-      - name: Build unsigned portable exe and NSIS installer
-        shell: pwsh
-        env:
-          RTA_SIGN_SKIP: "1"
-        run: ./scripts/build-desktop.ps1
-      - name: Stage Windows artifacts
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist/windows | Out-Null
-          Copy-Item release/RTA-Excel-Filler-portable.exe dist/windows/RTA-Excel-Filler-windows-amd64-portable.exe
-          Copy-Item release/RTA-Excel-Filler-setup.exe dist/windows/RTA-Excel-Filler-windows-amd64-setup.exe
-          Copy-Item release/RTA-Excel-Filler-portable.exe dist/windows/RTA-Excel-Filler-portable.exe
-          Copy-Item release/RTA-Excel-Filler-setup.exe dist/windows/RTA-Excel-Filler-setup.exe
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: desktop-windows
-          path: dist/windows/*
-          if-no-files-found: error
-
-  desktop-linux:
-    needs: test
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-      - name: Install WebKitGTK
-        run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev
-      - name: Build Linux desktop
-        run: bash scripts/build-desktop.sh
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: desktop-linux
-          path: release/RTA-Excel-Filler-linux-amd64
-          if-no-files-found: error
-
-  desktop-macos:
-    needs: test
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-15
-            goarch: arm64
-          - os: macos-13
-            goarch: amd64
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-      - name: Build macOS desktop
-        env:
-          GOARCH: ${{ matrix.goarch }}
-        run: bash scripts/build-desktop.sh
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: desktop-darwin-${{ matrix.goarch }}
-          path: release/RTA-Excel-Filler-darwin-${{ matrix.goarch }}
-          if-no-files-found: error
-
-  publish:
-    if: ${{ github.event_name == 'push' || inputs.tag != '' }}
-    needs: [desktop-windows, desktop-linux, desktop-macos]
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 40
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          path: artifacts
-          merge-multiple: true
-      - name: Publish GitHub Release
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Validate tag and commit
+        shell: pwsh
+        env:
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          if ($env:TAG -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') { throw 'Not a stable tag' }
+          $version = (Get-Content cmd/rta-excel-filler/wails.json -Raw | ConvertFrom-Json).info.productVersion
+          if ($env:TAG -cne "v$version") { throw 'Tag/version mismatch' }
+          $tagCommit = git rev-parse --verify "$($env:TAG)^{commit}"
+          if ($LASTEXITCODE -ne 0) { throw 'Missing tag' }
+          $headCommit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $tagCommit -cne $headCommit) { throw 'Tag/HEAD mismatch' }
+      - run: go test ./...
+      - run: go vet ./...
+      - name: Verify frontend
+        working-directory: desktop/frontend
+        run: |
+          bun install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bun run verify
+      - name: Install pinned Wails CLI
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}
+      - name: Build unsigned portable artifact
+        shell: pwsh
+        env:
+          RTA_SIGN_SKIP: "1"
+        run: ./scripts/build-desktop.ps1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-portable-unsigned
+          path: |
+            release/RTA-Excel-Filler-portable.exe
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+      - name: Stage new draft only (never modify historical releases)
+        shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
-          set -euo pipefail
-          if [[ ! "$TAG" =~ ^v[0-9] ]]; then
-            echo "Refusing to publish without a v* tag (got '$TAG')"
-            exit 1
-          fi
-          version="${TAG#v}"
-          mkdir -p upload
-          find artifacts -type f -exec cp -t upload {} +
-          (
-            cd upload
-            sha256sum * | sort > SHA256SUMS.txt
-          )
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Updating existing release $TAG"
-          else
-            gh release create "$TAG" --title "RTA 銷售分析 $version" --generate-notes --verify-tag
-          fi
-          gh release upload "$TAG" upload/* --clobber
+          $existing = gh release view $env:TAG --repo Miku0139oao/rta-sales-client-go --json isDraft 2>$null
+          if ($LASTEXITCODE -eq 0) { throw 'Release already exists; refusing to modify it' }
+          gh release create $env:TAG release/RTA-Excel-Filler-portable.exe release/SHA256SUMS.txt --repo Miku0139oao/rta-sales-client-go --draft --verify-tag --title "RTA sales $env:TAG (unsigned draft)" --notes 'Unsigned CI staging only. Do not publish before local signed artifact validation.'
+          if ($LASTEXITCODE -ne 0) { throw 'Draft staging failed' }

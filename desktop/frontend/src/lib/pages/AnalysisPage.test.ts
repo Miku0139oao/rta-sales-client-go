@@ -436,10 +436,42 @@ describe('sales analysis page', () => {
     );
   });
 
+  it.each(['folder-cancel', 'lease-rejected'])('releases native export ownership safely on %s', async (mode) => {
+    const beginLease = vi.fn(async () => { if (mode === 'lease-rejected') throw new Error('update reserved'); return 'folder-lease'; });
+    const endLease = vi.fn(async () => undefined);
+    const choose = vi.fn(async () => '');
+    const write = vi.fn();
+    const busy = vi.fn();
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [{ id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true }]),
+      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      RunSalesAnalysis: vi.fn(async () => analysisResult),
+      ClearSalesAnalysis: vi.fn(async () => undefined),
+      BeginNativeExportLease: beginLease,
+      EndNativeExportLease: endLease,
+      ChooseSalesAnalysisPDFDirectory: choose,
+      WriteSalesAnalysisPDF: write,
+    } });
+    render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings, onBusyChange: busy } });
+    await screen.findByText('107 - Central');
+    await fireEvent.click(screen.getByText('開始分析'));
+    await screen.findByRole('heading', { name: '銷售額 Top 24' });
+    await confirmExport();
+    await waitFor(() => expect(beginLease).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(busy).toHaveBeenLastCalledWith(false);
+    expect(write).not.toHaveBeenCalled();
+    if (mode === 'folder-cancel') expect(endLease).toHaveBeenCalledWith('folder-lease');
+    else { expect(choose).not.toHaveBeenCalled(); expect(endLease).not.toHaveBeenCalled(); }
+  });
+
   it('shows a PDF-specific error when report rendering fails', async () => {
     const { generateSalesAnalysisPDF } = await import('../sales-report-pdf');
     vi.mocked(generateSalesAnalysisPDF).mockRejectedValueOnce(new Error('font exploded'));
+    const endLease = vi.fn(async () => undefined);
     configureBackend({ methods: {
+      BeginNativeExportLease: vi.fn(async () => 'failed-render-lease'),
+      EndNativeExportLease: endLease,
       ListProfiles: vi.fn(async () => [{
         id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
       }]),
@@ -462,6 +494,7 @@ describe('sales analysis page', () => {
     await confirmExport();
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('無法產生 PDF 報告，請再試一次。'));
     expect(screen.queryByText('發生未預期的錯誤，請再試一次。')).not.toBeInTheDocument();
+    expect(endLease).toHaveBeenCalledWith('failed-render-lease');
   });
 
   it('keeps the export dialog scrollable with stable actions and optional sections', async () => {
@@ -561,14 +594,20 @@ describe('sales analysis page', () => {
   });
 
   it('keeps selected promoter groups as a summary inside each target PDF', async () => {
+    const beginLease = vi.fn(async () => 'multi-pdf-lease');
+    const endLease = vi.fn(async () => undefined);
     const getSalesAnalysisReportMemo = vi.fn(async (_request: unknown) => reportMemo());
     const writeSalesAnalysisPDF = vi.fn(async (...args: unknown[]) => {
+      expect(beginLease).toHaveBeenCalledTimes(1);
+      expect(endLease).not.toHaveBeenCalled();
       const request = args[0] as { directory: string; filename: string };
       return `${request.directory}\\${request.filename}`;
     });
     const { generateSalesAnalysisPDF } = await import('../sales-report-pdf');
     vi.mocked(generateSalesAnalysisPDF).mockClear();
     configureBackend({ methods: {
+      BeginNativeExportLease: beginLease,
+      EndNativeExportLease: endLease,
       ListProfiles: vi.fn(async () => [{
         id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
       }]),
@@ -634,6 +673,7 @@ describe('sales analysis page', () => {
       expect.objectContaining({ filename: 'RTA-Sales-all-20260801-20260831.pdf' }),
     ]);
     expect(vi.mocked(generateSalesAnalysisPDF)).toHaveBeenCalledTimes(3);
+    expect(endLease).toHaveBeenCalledWith('multi-pdf-lease');
     for (const call of vi.mocked(generateSalesAnalysisPDF).mock.calls) {
       expect(call[7]).toEqual([
         expect.objectContaining({ scope: { groupId: 'g-skin', groupName: '我的護膚', itemCodes: ['552646'] } }),

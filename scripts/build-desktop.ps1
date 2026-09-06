@@ -1,30 +1,19 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Build the Windows portable exe and/or NSIS installer into release/.
-
-.PARAMETER SkipPortable
-    Do not produce RTA-Excel-Filler-portable.exe.
-
-.PARAMETER SkipInstaller
-    Do not produce RTA-Excel-Filler-setup.exe.
+    Build only the Windows portable exe into release/.
+    WebView2 must be installed manually if absent.
 
 .PARAMETER RequireSign
     Fail the build if Microsoft Trusted Signing is not available.
 #>
 [CmdletBinding()]
 param(
-    [switch]$SkipPortable,
-    [switch]$SkipInstaller,
     [switch]$RequireSign
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-
-if ($SkipPortable -and $SkipInstaller) {
-    throw 'Nothing to build: both -SkipPortable and -SkipInstaller were set.'
-}
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $AppDir = Join-Path $RepoRoot 'cmd\rta-excel-filler'
@@ -79,11 +68,22 @@ if (-not (Test-CommandExists 'go')) {
 if (-not (Test-CommandExists 'bun')) {
     throw 'Bun is not on PATH. Install Bun 1.3.14 or newer.'
 }
-if (-not $SkipInstaller -and -not (Test-CommandExists 'makensis')) {
-    throw 'NSIS (makensis) is not on PATH. Install NSIS 3.12, or pass -SkipInstaller.'
-}
 
 $WailsCommand = Get-Wails3Command
+$wailsInfo = Get-Content -LiteralPath (Join-Path $AppDir 'wails.json') -Raw | ConvertFrom-Json
+$Version = [string]$wailsInfo.info.productVersion
+if ($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+    throw 'wails.json must contain a stable numeric productVersion.'
+}
+$resourceInfo = Get-Content -LiteralPath (Join-Path $AppDir 'build\windows\info.json') -Raw | ConvertFrom-Json
+if ($resourceInfo.fixed.product_version -ne "$Version.0" -or
+    $resourceInfo.fixed.file_version -ne "$Version.0" -or
+    $resourceInfo.info.'0409'.ProductVersion -ne $Version) {
+    throw 'Windows resource versions must match wails.json.'
+}
+if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -cne "v$Version") {
+    throw 'Build tag does not match productVersion.'
+}
 
 function Invoke-AuthenticodeSign {
     param([Parameter(Mandatory = $true)][string[]]$Files)
@@ -135,7 +135,7 @@ try {
     )
 
     Invoke-Checked 'go build desktop' {
-        go build -tags production -trimpath -ldflags '-w -s -H windowsgui' -o $builtExe .
+        go build -tags production -trimpath -ldflags "-w -s -H windowsgui -X github.com/Miku0139oao/rta-sales-client-go/internal/buildinfo.Version=$Version" -o $builtExe .
     }
 }
 finally {
@@ -151,65 +151,10 @@ if (-not (Test-Path -LiteralPath $builtExe)) {
 
 Invoke-AuthenticodeSign -Files @($builtExe)
 
-if (-not $SkipPortable) {
-    Copy-Item -LiteralPath $builtExe -Destination (Join-Path $ReleaseDir 'RTA-Excel-Filler-portable.exe') -Force
-}
-
-if (-not $SkipInstaller) {
-    $nsisDir = Join-Path $AppDir 'build\windows\installer'
-    Invoke-Wails3 @('generate', 'webview2bootstrapper', '-dir', $nsisDir)
-    $generatedBootstrapper = Join-Path $nsisDir 'MicrosoftEdgeWebview2Setup.exe'
-    $bootstrapper = Join-Path $nsisDir 'tmp\MicrosoftEdgeWebview2Setup.exe'
-    New-Item -ItemType Directory -Force -Path (Split-Path $bootstrapper) | Out-Null
-    if (Test-Path -LiteralPath $generatedBootstrapper) {
-        Copy-Item -LiteralPath $generatedBootstrapper -Destination $bootstrapper -Force
-    }
-    if (-not (Test-Path -LiteralPath $bootstrapper)) {
-        throw "WebView2 bootstrapper was not generated at $bootstrapper"
-    }
-
-    $wailsInfo = Get-Content -LiteralPath (Join-Path $AppDir 'wails.json') -Raw | ConvertFrom-Json
-    $productName = [string]$wailsInfo.info.productName
-    $productVersion = [string]$wailsInfo.info.productVersion
-    if ([string]::IsNullOrWhiteSpace($productName) -or [string]::IsNullOrWhiteSpace($productVersion)) {
-        throw 'wails.json is missing info.productName or info.productVersion'
-    }
-
-    Push-Location $nsisDir
-    try {
-        Invoke-Checked 'makensis installer' {
-            makensis `
-                -DREQUEST_EXECUTION_LEVEL=user `
-                -DWAILS_INSTALL_SCOPE=user `
-                "-DARG_WAILS_AMD64_BINARY=$builtExe" `
-                "-DINFO_PRODUCTNAME=$productName" `
-                "-DINFO_PRODUCTVERSION=$productVersion" `
-                project.nsi
-        }
-    }
-    finally {
-        Pop-Location
-    }
-
-    $installer = @(Get-ChildItem -LiteralPath $BinDir -Filter '*-installer.exe' | Select-Object -First 1)
-    if ($installer.Count -eq 0) {
-        throw 'makensis did not produce an NSIS installer'
-    }
-    $setupPath = Join-Path $ReleaseDir 'RTA-Excel-Filler-setup.exe'
-    Copy-Item -LiteralPath $installer[0].FullName -Destination $setupPath -Force
-    Invoke-AuthenticodeSign -Files @($setupPath)
-}
-
-$checksums = @(
-    Get-ChildItem -LiteralPath $ReleaseDir -Filter '*.exe' |
-        Sort-Object Name |
-        ForEach-Object {
-            $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName
-            '{0}  {1}' -f $hash.Hash.ToLowerInvariant(), $_.Name
-        }
-)
-if ($checksums.Count -eq 0) {
-    throw "No executables were written to $ReleaseDir"
-}
-$checksums | Set-Content -LiteralPath (Join-Path $ReleaseDir 'SHA256SUMS.txt') -Encoding ascii
+$portablePath = Join-Path $ReleaseDir 'RTA-Excel-Filler-portable.exe'
+Copy-Item -LiteralPath $builtExe -Destination $portablePath -Force
+# Hash this build's exact output only, after signing. Ignore stale release files.
+$hash = Get-FileHash -Algorithm SHA256 -LiteralPath $portablePath
+('{0}  RTA-Excel-Filler-portable.exe' -f $hash.Hash.ToLowerInvariant()) |
+    Set-Content -LiteralPath (Join-Path $ReleaseDir 'SHA256SUMS.txt') -Encoding ascii
 Write-Host "Desktop artifacts written to $ReleaseDir"

@@ -7,14 +7,16 @@ import (
 	"os"
 
 	"github.com/Miku0139oao/rta-sales-client-go/desktop"
+	"github.com/Miku0139oao/rta-sales-client-go/internal/portableupdate"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
-const singleInstanceID = "miku0139oao-rta-excel-filler-2026"
-
 func main() {
-	desktopApp, err := desktop.NewNativeApp()
+	if handled, code := portableupdate.DispatchHelper(os.Args[1:]); handled {
+		os.Exit(code)
+	}
+	desktopApp, singleInstanceID, windowsOptions, err := bootstrap()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "RTA Excel Filler startup failed / 啟動失敗:", err)
 		os.Exit(1)
@@ -40,10 +42,10 @@ func main() {
 				mainWindow.Focus()
 			},
 		},
-		Windows: application.WindowsOptions{
-			WndClass: "RTAExcelFillerWindow",
-		},
+		Windows: windowsOptions,
 	})
+
+	desktop.ConfigureNativeUpdateLifecycle(desktopApp, app.Quit)
 
 	mainWindow = app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            "RTA 銷售分析",

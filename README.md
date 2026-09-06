@@ -14,17 +14,17 @@ The application can:
 4. **Write the day's sales amount and transaction count** into the company's existing Excel workbook
 
 The Start menu shortcut is named **RTA 銷售分析**.  
-The installer file remains `RTA-Excel-Filler-setup.exe`. This is a legacy filename; the file installs this application.
+The supported distribution is `RTA-Excel-Filler-portable.exe` (Windows 64-bit, no installer). Historical releases remain unchanged.
 
 ---
 
-## What's new in 0.4.5
+## What's new in 0.4.6
 
-Product details, sortable tables, saved-query shortcuts, full-page Excel exports, and reconciled store/category sales contributions, plus query-cancellation and long-ranking PDF fixes.
+GitHub Releases now powers in-app update checks, release notes and explicitly confirmed, verified downloads with backup and restart. Startup checks can be disabled; downloads never start automatically. Future Windows releases are portable-only, with no separate update server.
 
-[Release notes and four screenshots (Traditional Chinese)](docs/releases/v0.4.5.zh-TW.md). Screenshots use synthetic demonstration data.
+**Users of 0.4.5 and older must first download 0.4.6 manually.** Close the old app, retain a backup and replace it at the same path and filename to preserve settings. Subsequent upgrades can use the in-app updater.
 
-![0.4.5 sales overview and analysis tools with synthetic data](docs/images/v0.4.5/overview.png)
+[Release notes and update screenshots (Traditional Chinese)](docs/releases/v0.4.6.zh-TW.md). Screenshots show an isolated signed fixture pair; 0.4.7 is not a public release.
 
 ## Runtime architecture
 
@@ -42,15 +42,15 @@ Explore the repository's high-level runtime architecture, primary workbook path,
 - A network connection that can reach RTA
 - One or more RTA accounts with access to the stores you need to review
 
-On Windows the installer is the recommended distribution. Windows 10 and Windows 11 normally provide WebView2 with Microsoft Edge. On the few computers that do not have the runtime, the installer downloads it.
+Use the Windows portable executable. If Microsoft Edge WebView2 Runtime is missing, install it manually from Microsoft before launching.
 
 ---
 
 ## Install
 
 1. Download the latest files from [Releases](https://github.com/Miku0139oao/rta-sales-client-go/releases).
-2. Run **`RTA-Excel-Filler-setup.exe`**. If Windows or Edge still says the file is uncommon, choose Keep / Run anyway.
-3. Open the Start menu, search for **RTA 銷售分析**, and launch the application.
+2. Save **`RTA-Excel-Filler-portable.exe`** in a writable local folder. Verify its digital signature; do not bypass an invalid-signature warning.
+3. Double-click the executable to launch **RTA 銷售分析**.
 
 Only one window may run at a time. If a launch appears to do nothing, check the taskbar; the application may already be open.
 
@@ -64,13 +64,10 @@ A longer written guide (Traditional Chinese): [docs/tutorial.zh-TW.md](docs/tuto
 
 | File | When to use it |
 | --- | --- |
-| `RTA-Excel-Filler-setup.exe` | **Recommended on Windows** |
-| `RTA-Excel-Filler-portable.exe` | Runs without installation. If it does not start, install [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) or use the installer |
-| `RTA-Excel-Filler-linux-amd64` | Linux desktop binary |
-| `RTA-Excel-Filler-darwin-arm64` / `darwin-amd64` | macOS desktop binaries |
+| `RTA-Excel-Filler-portable.exe` | Windows 64-bit, no installation. Requires [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) |
 | `SHA256SUMS.txt` | Used by IT to verify that a file has not been altered. Everyday users may ignore it |
 
-A tagged release is built by [`.github/workflows/release.yml`](.github/workflows/release.yml). Push `v0.4.5` (or run the workflow and pass that tag) to publish unsigned Windows, Linux, and macOS files. Sign the Windows installer on this machine with `pwsh ./scripts/build-desktop.ps1 -RequireSign`, then `gh release upload <tag> release/RTA-Excel-Filler-setup.exe release/RTA-Excel-Filler-portable.exe --clobber`. Do not put the signer’s personal name in release notes.
+The release workflow stages unsigned Windows portable artifacts as a **draft only**. Signed publication requires explicit local validation with `scripts/publish-portable.ps1`; see [portable update safety and limitations](docs/portable-updates.md). Settings can check for newer stable releases (startup checks can be disabled); checks never download executables. Trusted signed Windows portable builds offer **Download and restart** after an explicit warning: finish/export your work first, because unsaved reports are lost on restart. Accounts/settings and the old executable backup are preserved. Development, unsigned or unsupported builds explain why installation is unavailable; update those manually with the app closed, preserving its path, filename and an old backup. An isolated signed fixture pair passed real Wails upgrade and settings-preservation checks. HTTP was fixture-backed; see the documented validation scope and limits.
 
 ---
 
@@ -233,7 +230,7 @@ After changing workload or mapping settings, click **Save**.
 ## Frequently asked questions
 
 **The application will not start, or the window flashes and disappears**  
-Windows 10 and Windows 11 normally already include Edge WebView2. If the portable build still does not start, use `RTA-Excel-Filler-setup.exe`; the installer handles the uncommon case in which the runtime is missing.
+Windows 10 and Windows 11 normally already include Edge WebView2. If it is missing, install [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) manually; the portable app does not install system components.
 
 **A second window closes immediately**  
 This is expected. Only one instance can run.

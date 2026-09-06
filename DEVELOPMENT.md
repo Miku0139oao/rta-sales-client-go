@@ -41,10 +41,10 @@ Other flags worth knowing: `-sheet` (default `Dairly`), `-overwrite`, `-allow-pa
 
 Stdout is a JSON report. `matched_rows` are rows for the date, `selected_rows` are ones this account may query, `skipped_store_rows` belong to other accounts. If nothing matches an authorized store, the command fails instead of writing an unchanged book. The report has row numbers and issue codes, not passwords or amounts.
 
-Verify an installer checksum:
+Verify a portable executable checksum:
 
 ```powershell
-(Get-FileHash -Algorithm SHA256 .\RTA-Excel-Filler-setup.exe).Hash.ToLowerInvariant()
+(Get-FileHash -Algorithm SHA256 .\RTA-Excel-Filler-portable.exe).Hash.ToLowerInvariant()
 Get-Content .\SHA256SUMS.txt
 ```
 
@@ -124,7 +124,7 @@ Install:
 - [Bun 1.3.14](https://bun.sh) — the frontend is pinned to Bun, not npm
 - Git and PowerShell
 - WebView2 (normally installed with Edge on Windows 10/11), or the desktop window will not start
-- NSIS 3.12 only if you want the installer: `choco install nsis --version 3.12.0`
+- Microsoft Edge WebView2 Runtime (install manually if absent); NSIS is not required.
 
 Wails is pinned at `v3.0.0-beta.8`. You do not have to install it yourself; the scripts `go run` that version. To install it globally:
 
@@ -176,19 +176,13 @@ Desktop with hot reload (UI reloads; Go binding changes restart the window):
 ./scripts/dev.ps1
 ```
 
-Ship an exe. Portable only, if you do not have NSIS:
-
-```powershell
-./scripts/build-desktop.ps1 -SkipInstaller
-```
-
-Portable plus installer:
+Build the Windows portable executable only:
 
 ```powershell
 ./scripts/build-desktop.ps1
 ```
 
-Output lands in `release\`. The script builds the frontend first (Vite empties `dist` so old hashed files are not embedded), then `go build`s the Wails v3 app, then signs the portable exe and NSIS installer with Microsoft Trusted Signing when `signtool`, `Azure.CodeSigning.Dlib.dll`, and `metadata.json` are on the machine. CI ships unsigned binaries unless those tools are present. Sign already-built files with `./scripts/sign-windows.ps1 -Required -Files release\RTA-Excel-Filler-setup.exe,release\RTA-Excel-Filler-portable.exe`. Portable fails if WebView2 is missing; the installer may download it.
+Output lands in `release\`. The script builds the frontend, injects `wails.json` productVersion into `internal/buildinfo.Version`, checks Windows resource versions, builds and signs the portable executable when signing tools are available, then hashes that exact output only. Use `-RequireSign` for signed builds. Ordinary `go build` uses `dev` and cannot update. CI stages unsigned artifacts as draft only. For explicit signed publication from a clean checkout, use `scripts/publish-portable.ps1 -Tag vX.Y.Z -Commit <full-sha> -PublisherReference <previous-trusted-portable.exe>`; it refuses historical published releases and validates downloaded draft copies before publishing. See [update safety and signed sandbox validation](docs/portable-updates.md). WebView2 installation is manual.
 
 Change the product name or version in `cmd/rta-excel-filler/wails.json` and `cmd/rta-excel-filler/build/windows/info.json`.
 

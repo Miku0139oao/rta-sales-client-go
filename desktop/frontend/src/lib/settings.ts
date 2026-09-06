@@ -11,6 +11,7 @@ export const RANKING_LIMIT_MAX = 100;
 export const DEFAULT_RANKING_LIMIT = 24;
 
 export const defaultSettings: AppSettings = {
+  autoCheckUpdates: true,
   locale: 'zh-TW',
   theme: 'system',
   maxJobs: 2000,
@@ -42,6 +43,7 @@ export function isPresetRankingLimit(value: number): boolean {
 
 export function normalizeSettings(value: Partial<AppSettings>): AppSettings {
   return {
+    autoCheckUpdates: value.autoCheckUpdates !== false,
     locale: value.locale === 'en' ? 'en' : 'zh-TW',
     theme: value.theme === 'light' || value.theme === 'dark' ? value.theme : 'system',
     maxJobs: clampInteger(value.maxJobs, defaultSettings.maxJobs, 1, 2000),

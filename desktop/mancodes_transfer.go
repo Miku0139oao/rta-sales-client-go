@@ -22,6 +22,11 @@ func writeManCodeTransferFile(path string, data []byte) error {
 }
 
 func (a *App) ExportManCodeCatalog() (ManCodeCatalogTransferResult, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return ManCodeCatalogTransferResult{}, admissionErr
+	}
+	defer releaseAdmission()
 	a.manCodeMu.Lock()
 	groups, err := a.mancodes.List()
 	if err != nil {
@@ -56,6 +61,11 @@ func (a *App) ExportManCodeCatalog() (ManCodeCatalogTransferResult, error) {
 }
 
 func (a *App) ImportManCodeCatalog() (ManCodeCatalogTransferResult, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return ManCodeCatalogTransferResult{}, admissionErr
+	}
+	defer releaseAdmission()
 	inputPath, err := a.dialogs.OpenFile(a.appContext(), fileDialogOptions{
 		Title:   "Import item codes / 匯入商品代碼",
 		Filters: []fileDialogFilter{{DisplayName: "Item code catalog (*.json)", Pattern: "*.json"}},

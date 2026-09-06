@@ -19,10 +19,15 @@ func NewNativeApp() (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newApp(appDependencies{
+	app, err := newApp(appDependencies{
 		profiles: profiles, mancodes: mancodes, credentials: native.Credentials,
 		cookies: nativeCookieStore{native: native}, clients: rtaClientFactory{},
 		engine: newXLSXEngine(), dialogs: wailsDialogService{}, events: wailsEventSink{},
 		runtime: nativeRuntimeChecker{},
 	})
+	if err != nil {
+		return nil, err
+	}
+	enableNativeUpdates(app)
+	return app, nil
 }

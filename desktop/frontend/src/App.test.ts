@@ -15,6 +15,24 @@ afterEach(() => {
 });
 
 describe('desktop application shell', () => {
+  it('keeps one startup check across navigation and locks navigation during update confirmation', async () => {
+    const status = { currentVersion: '0.4.5', phase: 'available', candidateId: 'checked', availableVersion: '0.5.0', releaseNotes: 'release notes', installSupported: true, error: '' };
+    const check = vi.fn(async () => status);
+    const install = vi.fn();
+    configureBackend({ methods: { GetUpdateStatus: async () => status, CheckForUpdate: check, InstallUpdate: install } });
+    render(App);
+    await waitFor(() => expect(check).toHaveBeenCalledTimes(1));
+    await fireEvent.click(screen.getAllByRole('button', { name: /設定/ })[0]);
+    await screen.findByText('目前版本: 0.4.5');
+    expect(check).toHaveBeenCalledTimes(1);
+    await fireEvent.click(screen.getByRole('button', { name: '下載並重啟…' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('未儲存的報表與預覽將遺失');
+    expect(screen.getAllByRole('button', { name: /帳號/ })[0]).toBeDisabled();
+    await fireEvent.click(screen.getByRole('button', { name: '暫時不要' }));
+    expect(install).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getAllByRole('button', { name: /帳號/ })[0]);
+    expect(check).toHaveBeenCalledTimes(1);
+  });
   it('starts in Traditional Chinese with the five primary destinations', () => {
     const { container } = render(App);
     expect(screen.getByRole('heading', { name: '銷售分析' })).toBeInTheDocument();

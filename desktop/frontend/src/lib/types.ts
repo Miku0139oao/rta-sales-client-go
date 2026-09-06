@@ -439,6 +439,7 @@ export interface SalesAnalysisPDFWriteRequest {
 }
 
 export interface AppSettings {
+  autoCheckUpdates?: boolean;
   locale: Locale;
   theme: ThemePreference;
   maxJobs: number;

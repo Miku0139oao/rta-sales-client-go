@@ -14,17 +14,17 @@
 4. **將當日銷售金額與交易次數**填入公司既有的 Excel 活頁簿
 
 開始功能表與捷徑名稱為 **RTA 銷售分析**。  
-安裝檔名稱仍為 `RTA-Excel-Filler-setup.exe`。此為沿用的舊檔名，安裝的即為本程式。
+目前支援 Windows 64 位元免安裝版 `RTA-Excel-Filler-portable.exe`。歷史發行檔案保持不變。
 
 ---
 
-## 0.4.5 改版重點
+## 0.4.6 改版重點
 
-新增商品詳情、表格排序、常用條件捷徑與完整 Excel 匯出；分析重點可核對門店／分類差額，並改善查詢取消與 PDF 長排行。
+新增 GitHub Releases 更新功能：在設定檢查新版與改版資訊，確認後驗證下載檔、備份舊版並重啟。啟動檢查可關閉，絕不自動下載。後續只提供 Windows 免安裝版，不需另外架設更新伺服器。
 
-[完整改版資訊與四張新版截圖](docs/releases/v0.4.5.zh-TW.md)（畫面使用合成示範資料）。
+**0.4.5 與更舊版本請先手動下載 0.4.6**；關閉舊版後以同路徑、同檔名替換，保留舊檔備份，之後即可使用程式內更新。
 
-![0.4.5 銷售概覽與分析工具，合成示範資料](docs/images/v0.4.5/overview.png)
+[完整改版資訊與更新畫面](docs/releases/v0.4.6.zh-TW.md)（截圖為隔離測試配對，0.4.7 不是已公開版本）。
 
 ## 執行階段架構
 
@@ -42,15 +42,15 @@
 - 可連線至 RTA 的網路
 - 一組（或多組）具有所需門店權限的 **RTA 帳號密碼**
 
-Windows 一般使用請安裝「安裝檔」。Windows 10／11 通常已隨 Microsoft Edge 提供 WebView2；少數缺少 Runtime 的電腦，安裝程式會協助下載。
+Windows 請使用免安裝版。Windows 10／11 通常已有 WebView2；若缺少 Runtime，請先從 Microsoft 官方網站手動安裝。
 
 ---
 
 ## 怎麼安裝
 
 1. 至 [Releases](https://github.com/Miku0139oao/rta-sales-client-go/releases) 下載最新版本。
-2. 在壓縮檔或資料夾中找到 **`RTA-Excel-Filler-setup.exe`**，雙擊安裝。若 Windows 或 Edge 仍提示「不常下載」，選保留／仍要執行即可。
-3. 安裝完成後，按鍵盤上的 **Windows 鍵**，搜尋 **RTA 銷售分析**，即可開啟。
+2. 將 **`RTA-Excel-Filler-portable.exe`** 存入可寫入的本機資料夾。確認數位簽章有效，不要略過簽章無效警告。
+3. 雙擊執行檔即可開啟 **RTA 銷售分析**，不需安裝。
 
 同一時間僅能開啟一個視窗。若啟動後沒有反應，請先檢查工作列是否已在執行。
 
@@ -64,13 +64,10 @@ Windows 一般使用請安裝「安裝檔」。Windows 10／11 通常已隨 Micr
 
 | 檔案 | 用途 |
 | --- | --- |
-| `RTA-Excel-Filler-setup.exe` | **Windows 一般使用此檔** |
-| `RTA-Excel-Filler-portable.exe` | 免安裝。若無法啟動，請安裝 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) 或改用安裝版 |
-| `RTA-Excel-Filler-linux-amd64` | Linux 桌面版 |
-| `RTA-Excel-Filler-darwin-arm64` / `darwin-amd64` | macOS 桌面版 |
+| `RTA-Excel-Filler-portable.exe` | Windows 64 位元免安裝版，需要 [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) |
 | `SHA256SUMS.txt` | 供資訊人員核對檔案是否遭竄改；一般使用可略過 |
 
-打 `v*` 標籤會由 [`.github/workflows/release.yml`](.github/workflows/release.yml) 建置並發佈未簽名的 Windows／Linux／macOS 檔。Windows 簽名版在本機執行 `pwsh ./scripts/build-desktop.ps1 -RequireSign`，再 `gh release upload <tag> release/RTA-Excel-Filler-setup.exe release/RTA-Excel-Filler-portable.exe --clobber`。發行說明不要寫簽署人的個人姓名。
+發佈工作流程只將未簽章的 Windows 免安裝檔暫存為 **草稿**，不會公開發佈。正式簽章發佈須明確執行本機 `scripts/publish-portable.ps1` 驗證；詳見[更新安全與限制](docs/portable-updates.md)。設定可手動檢查正式版，亦可關閉啟動檢查；檢查不會下載執行檔。可信簽章的 Windows 免安裝版可在明確確認警告後選擇「下載並重啟」；請先完成並匯出工作，重啟會失去未儲存的報表，帳號、設定及舊版備份會保留。開發、未簽章或不支援的版本會顯示停用原因，請關閉程式後以同路徑、同檔名手動更新並保留備份。已通過隔離簽章測試配對的真實 Wails 升級與設定保留驗證；HTTP 使用 fixture，詳見驗證範圍與限制。
 
 ---
 
@@ -233,7 +230,7 @@ C 欄若不是 RTA 門店編號，請到「設定」啟用本機對照檔（JSON
 ## 常見問題
 
 **程式無法開啟，或視窗閃一下即關閉**  
-Windows 10／11 通常已內建 Edge WebView2。若可攜版仍無法啟動，請改用 `RTA-Excel-Filler-setup.exe`；安裝程式會處理少數缺少 Runtime 的情況。
+Windows 10／11 通常已有 Edge WebView2。若缺少，請從 Microsoft 官方網站手動安裝 [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)；免安裝版不會安裝系統元件。
 
 **同時開啟兩個視窗時，後者會立即關閉**  
 此為預期行為，同時僅能執行一個執行個體。

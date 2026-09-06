@@ -44,7 +44,7 @@ go run ./cmd/rta-xlsx-fill `
 核對安裝檔雜湊：
 
 ```powershell
-(Get-FileHash -Algorithm SHA256 .\RTA-Excel-Filler-setup.exe).Hash.ToLowerInvariant()
+(Get-FileHash -Algorithm SHA256 .\RTA-Excel-Filler-portable.exe).Hash.ToLowerInvariant()
 Get-Content .\SHA256SUMS.txt
 ```
 
@@ -124,7 +124,7 @@ go test ./rtasales/
 - [Bun 1.3.14](https://bun.sh)（frontend 指定 Bun，別改用 npm）
 - Git、PowerShell
 - 本機要有 WebView2（Windows 10/11 通常已隨 Edge 安裝），不然視窗開不起來
-- 只有要做安裝檔時才需要 NSIS 3.12：`choco install nsis --version 3.12.0`
+- Microsoft Edge WebView2 Runtime（缺少時手動安裝）；不需要 NSIS。
 
 Wails 釘在 `v3.0.0-beta.8`。不必先手動裝，腳本找不到就會 `go run github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.8`。想先裝也可以：
 
@@ -176,19 +176,13 @@ go build -o rta-xlsx-fill.exe ./cmd/rta-xlsx-fill
 ./scripts/dev.ps1
 ```
 
-要給別人用的 exe。只出可攜版、沒裝 NSIS 時：
-
-```powershell
-./scripts/build-desktop.ps1 -SkipInstaller
-```
-
-可攜版加安裝檔：
+只建置 Windows 免安裝版：
 
 ```powershell
 ./scripts/build-desktop.ps1
 ```
 
-完成後看 `release\`。腳本會先編 frontend（Vite 會清掉舊的 dist，免得舊 js 被打進 exe），再用 Wails v3 `go build`，本機有 Microsoft Trusted Signing 時會簽 portable 與安裝檔。CI 預設仍是未簽名。已編好的檔可用 `./scripts/sign-windows.ps1 -Required -Files release\RTA-Excel-Filler-setup.exe,release\RTA-Excel-Filler-portable.exe` 補簽。可攜版遇到沒有 WebView2 只提示；安裝檔會下載 Runtime。
+完成後看 `release\`。腳本編譯 frontend，將 `wails.json` productVersion 注入 `internal/buildinfo.Version`、核對 Windows 資源版本，建置並在簽章工具可用時簽署免安裝檔，最後只對本次輸出計算 SHA256。正式簽章建置使用 `-RequireSign`；一般 `go build` 版本為 `dev`，無法更新。CI 未簽章檔只暫存為草稿。正式發佈須在乾淨 checkout 明確執行 `scripts/publish-portable.ps1 -Tag vX.Y.Z -Commit <完整-sha> -PublisherReference <先前可信免安裝檔>`；它會拒絕修改已公開版本，並重新下載草稿驗證後才發佈。詳見[更新安全與簽章沙箱驗證](docs/portable-updates.md)。WebView2 需手動安裝。
 
 產品名稱跟版本改 `cmd/rta-excel-filler/wails.json` 跟 `cmd/rta-excel-filler/build/windows/info.json`。
 

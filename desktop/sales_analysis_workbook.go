@@ -31,6 +31,11 @@ type AnalysisWorkbookRequest struct {
 
 // BuildSalesAnalysisWorkbook renders only the supplied screen snapshot. It never queries RTA.
 func (a *App) BuildSalesAnalysisWorkbook(request AnalysisWorkbookRequest) (string, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return "", admissionErr
+	}
+	defer releaseAdmission()
 	data, err := buildAnalysisWorkbook(request)
 	if err != nil {
 		return "", err
@@ -40,6 +45,11 @@ func (a *App) BuildSalesAnalysisWorkbook(request AnalysisWorkbookRequest) (strin
 
 // ExportSalesAnalysisWorkbook uses a native directory choice and never overwrites a file.
 func (a *App) ExportSalesAnalysisWorkbook(request AnalysisWorkbookRequest) (string, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return "", admissionErr
+	}
+	defer releaseAdmission()
 	name := strings.TrimSpace(request.Filename)
 	if name == "" || len(name) > 180 || strings.ContainsAny(name, `/\:*?"<>|`) || filepath.Base(name) != name || !strings.EqualFold(filepath.Ext(name), ".xlsx") {
 		return "", errors.New("invalid workbook filename")

@@ -33,6 +33,11 @@ var salesAnalysisRateLimitRetryDelays = [...]time.Duration{time.Second, 3 * time
 // every enabled profile when ProfileID is empty. Overlapping stores keep the
 // earlier profile in account priority order.
 func (a *App) ListSalesAnalysisStores(request ProfileIDRequest) ([]SalesAnalysisStore, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return nil, admissionErr
+	}
+	defer releaseAdmission()
 	operationID, err := newUUID()
 	if err != nil {
 		return nil, err
@@ -69,6 +74,11 @@ func (a *App) ListSalesAnalysisStores(request ProfileIDRequest) ([]SalesAnalysis
 // because RTA already aggregates it. Other periods and that trend run in the
 // background; each store's independent article report stays a separate query.
 func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResult, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return SalesAnalysisResult{}, admissionErr
+	}
+	defer releaseAdmission()
 	started := time.Now()
 	periods, err := normalizeSalesAnalysisPeriods(request)
 	if err != nil {
@@ -867,6 +877,10 @@ func (a *App) CancelSalesAnalysis(request OperationRequest) error {
 
 func (a *App) beginSalesAnalysisOperation(operationID string) (context.Context, func(), error) {
 	a.operationMu.Lock()
+	if a.updateReserved {
+		a.operationMu.Unlock()
+		return nil, nil, errUpdateReserved
+	}
 	if (a.active != nil && a.active.running) || a.profileMutationRunning || a.profileTestRunning || a.salesAnalysisRunning {
 		a.operationMu.Unlock()
 		return nil, nil, errors.New("another account or workbook operation is already running")

@@ -32,6 +32,11 @@ var (
 // GetSalesAnalysisReportMemo returns ranking and category totals for one PDF
 // without sending article rows across the WebView bridge.
 func (a *App) GetSalesAnalysisReportMemo(request SalesAnalysisReportMemoRequest) (SalesAnalysisReportMemo, error) {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return SalesAnalysisReportMemo{}, admissionErr
+	}
+	defer releaseAdmission()
 	operationID := strings.TrimSpace(request.OperationID)
 	if operationID == "" {
 		return SalesAnalysisReportMemo{}, errors.New("operationId is required")

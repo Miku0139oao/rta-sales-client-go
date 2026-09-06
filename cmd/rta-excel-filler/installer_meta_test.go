@@ -4,75 +4,79 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"testing"
 )
 
-func TestInstallerProductMetadataMatchesWailsJSON(t *testing.T) {
-	_, thisFile, _, ok := runtime.Caller(0)
+func TestPortableProductMetadataMatchesWailsJSON(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
 	if !ok {
-		t.Fatal("locate test file")
+		t.Fatal("locate test")
 	}
-	appDir := filepath.Dir(thisFile)
-	wailsPath := filepath.Join(appDir, "wails.json")
-	nshPath := filepath.Join(appDir, "build", "windows", "installer", "wails_tools.nsh")
-	scriptPath := filepath.Join(appDir, "..", "..", "scripts", "build-desktop.ps1")
-
-	raw, err := os.ReadFile(wailsPath)
-	if err != nil {
-		t.Fatal(err)
+	appDir := filepath.Dir(file)
+	read := func(path string) []byte {
+		t.Helper()
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
 	}
-	var info struct {
+	var config struct {
 		Info struct {
 			ProductName    string `json:"productName"`
 			ProductVersion string `json:"productVersion"`
 		} `json:"info"`
 	}
-	if err := json.Unmarshal(raw, &info); err != nil {
+	if err := json.Unmarshal(read(filepath.Join(appDir, "wails.json")), &config); err != nil {
 		t.Fatal(err)
 	}
-	if info.Info.ProductName != "RTA 銷售分析" {
-		t.Fatalf("wails.json productName = %q, want RTA 銷售分析", info.Info.ProductName)
+	var resource struct {
+		Fixed struct {
+			File    string `json:"file_version"`
+			Product string `json:"product_version"`
+		} `json:"fixed"`
+		Info map[string]struct {
+			Version string `json:"ProductVersion"`
+			Name    string `json:"ProductName"`
+		} `json:"info"`
 	}
-	if info.Info.ProductVersion == "" || info.Info.ProductVersion == "0.1.0" {
-		t.Fatalf("wails.json productVersion = %q, want a shipped 0.2.x+ version", info.Info.ProductVersion)
-	}
-
-	nsh, err := os.ReadFile(nshPath)
-	if err != nil {
+	if err := json.Unmarshal(read(filepath.Join(appDir, "build", "windows", "info.json")), &resource); err != nil {
 		t.Fatal(err)
 	}
-	name := nshDefine(t, string(nsh), "INFO_PRODUCTNAME")
-	version := nshDefine(t, string(nsh), "INFO_PRODUCTVERSION")
-	if name != info.Info.ProductName {
-		t.Fatalf("wails_tools.nsh INFO_PRODUCTNAME = %q, want %q from wails.json (Start menu uses this)", name, info.Info.ProductName)
+	if config.Info.ProductName != "RTA 銷售分析" || config.Info.ProductVersion == "" {
+		t.Fatal("invalid product metadata")
 	}
-	if version != info.Info.ProductVersion {
-		t.Fatalf("wails_tools.nsh INFO_PRODUCTVERSION = %q, want %q from wails.json", version, info.Info.ProductVersion)
+	if resource.Fixed.File != config.Info.ProductVersion+".0" || resource.Fixed.Product != config.Info.ProductVersion+".0" || resource.Info["0409"].Version != config.Info.ProductVersion || resource.Info["0409"].Name != config.Info.ProductName {
+		t.Fatal("resource/config versions differ")
 	}
-
-	script, err := os.ReadFile(scriptPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, flag := range []string{`-DINFO_PRODUCTNAME=`, `-DINFO_PRODUCTVERSION=`} {
-		if !strings.Contains(string(script), flag) {
-			t.Fatalf("build-desktop.ps1 must pass %s so a regenerated nsh cannot ship stale defaults", flag)
+	script := string(read(filepath.Join(appDir, "..", "..", "scripts", "build-desktop.ps1")))
+	for _, required := range []string{"sign-windows.ps1", "internal/buildinfo.Version=$Version", "Get-FileHash -Algorithm SHA256 -LiteralPath $portablePath"} {
+		if !strings.Contains(script, required) {
+			t.Errorf("missing %s", required)
 		}
 	}
-	if !strings.Contains(string(script), "sign-windows.ps1") {
-		t.Fatal("build-desktop.ps1 must sign the exe and installer with scripts/sign-windows.ps1")
+	for _, banned := range []string{"makensis", "SkipInstaller", "SkipPortable", "-Filter '*.exe'", "RTA-Excel-Filler-setup.exe"} {
+		if strings.Contains(script, banned) {
+			t.Errorf("portable build contains %s", banned)
+		}
 	}
-}
-
-func nshDefine(t *testing.T, source, key string) string {
-	t.Helper()
-	pattern := regexp.MustCompile(`!define\s+` + regexp.QuoteMeta(key) + `\s+"([^"]+)"`)
-	match := pattern.FindStringSubmatch(source)
-	if len(match) != 2 {
-		t.Fatalf("missing !define %s in wails_tools.nsh", key)
+	publish := string(read(filepath.Join(appDir, "..", "..", "scripts", "publish-portable.ps1")))
+	for _, required := range []string{"$info.ProductVersionRaw.ToString()", "$info.FileVersionRaw.ToString()", "Unsigned CI staging only", "--draft=false --latest"} {
+		if !strings.Contains(publish, required) {
+			t.Errorf("publisher missing safeguard %s", required)
+		}
 	}
-	return match[1]
+	if strings.Contains(publish, "--notes ") || strings.Contains(publish, "--title ") {
+		t.Error("publisher must preserve curated draft title and release notes")
+	}
+	ci := string(read(filepath.Join(appDir, "..", "..", ".github", "workflows", "ci.yml")))
+	if !strings.Contains(ci, "$info.ProductVersionRaw.ToString()") {
+		t.Error("CI must check numeric resource version independently of localized string lookup")
+	}
+	release := string(read(filepath.Join(appDir, "..", "..", ".github", "workflows", "release.yml")))
+	if !strings.Contains(release, "--draft --verify-tag") || strings.Contains(release, "--clobber") || strings.Contains(release, "desktop-linux") || strings.Contains(release, "desktop-macos") {
+		t.Fatal("CI must only stage new unsigned Windows drafts")
+	}
 }

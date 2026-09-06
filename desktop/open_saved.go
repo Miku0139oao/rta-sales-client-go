@@ -30,6 +30,11 @@ func (a *App) pathLauncher() pathLauncher {
 // application. The path must already exist; this never creates or overwrites
 // a workbook.
 func (a *App) OpenSavedWorkbook(request PathRequest) error {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return admissionErr
+	}
+	defer releaseAdmission()
 	path, err := existingWorkbookPath(request.Path)
 	if err != nil {
 		return err
@@ -43,6 +48,11 @@ func (a *App) OpenSavedWorkbook(request PathRequest) error {
 // RevealSavedWorkbook selects a previously written .xlsx file in the system
 // file manager. The path must already exist.
 func (a *App) RevealSavedWorkbook(request PathRequest) error {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return admissionErr
+	}
+	defer releaseAdmission()
 	path, err := existingWorkbookPath(request.Path)
 	if err != nil {
 		return err
@@ -55,6 +65,11 @@ func (a *App) RevealSavedWorkbook(request PathRequest) error {
 
 // OpenSavedFolder opens an existing directory in the system file manager.
 func (a *App) OpenSavedFolder(request PathRequest) error {
+	releaseAdmission, admissionErr := a.admitWork()
+	if admissionErr != nil {
+		return admissionErr
+	}
+	defer releaseAdmission()
 	path, err := existingDirectoryPath(request.Path)
 	if err != nil {
 		return err
