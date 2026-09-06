@@ -43,6 +43,29 @@ describe('portable update notice', () => {
     expect(screen.getByText(/Automatic installation is unavailable for this build/) ).toBeInTheDocument();
     expect(methods.install).not.toHaveBeenCalled();
   });
+  it('keeps notes collapsed, labelled and keyboard-scrollable, and hides details in the compact notice', async () => {
+    setup(vi.fn().mockResolvedValue({ ...status, phase: 'available', availableVersion: '0.5.0', releaseNotes: 'Long release notes' }));
+    const view = render(UpdateNotice, { settings: { ...defaultSettings, locale: 'en' }, details: true, onChange: vi.fn() });
+    await screen.findByText('Long release notes');
+    const disclosure = view.container.querySelector('details')!;
+    expect(disclosure.open).toBe(false);
+    disclosure.open = true;
+    expect(screen.getByRole('region', { name: 'Release notes' })).toHaveAttribute('tabindex', '0');
+    await view.rerender({ details: false });
+    expect(view.container.querySelector('details')).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(view.container.querySelector('.update-card')).toHaveClass('compact');
+  });
+  it('labels the startup switch and updates only the preference', async () => {
+    setup();
+    const onChange = vi.fn();
+    const settings = { ...defaultSettings, locale: 'en' as const, autoCheckUpdates: false };
+    render(UpdateNotice, { settings, details: true, onChange });
+    const toggle = screen.getByRole('checkbox', { name: 'Check for updates at startup (no automatic download)' });
+    expect(toggle).toHaveAccessibleDescription('Only release metadata is checked. Downloads always require your confirmation.');
+    await fireEvent.click(toggle);
+    expect(onChange).toHaveBeenCalledWith({ ...settings, autoCheckUpdates: true });
+  });
   it('does not disrupt startup with offline errors', async () => {
     const methods = setup(vi.fn().mockRejectedValue(new Error('offline')));
     render(UpdateNotice, { settings: defaultSettings, details: false, onChange: vi.fn() });

@@ -18,13 +18,19 @@ The supported distribution is `RTA-Excel-Filler-portable.exe` (Windows 64-bit, n
 
 ---
 
-## What's new in 0.4.6
+## What's new in 0.4.7
+
+Update controls now match the existing desktop Settings UI: version badges, switches, primary/secondary actions, collapsible release notes and a redesigned confirmation dialog, with light/dark and narrow-screen support.
+
+[Release notes and screenshots (Traditional Chinese)](docs/releases/v0.4.7.zh-TW.md). Users of 0.4.6 can upgrade from Settings → Check for updates.
+
+## Updates introduced in 0.4.6
 
 GitHub Releases now powers in-app update checks, release notes and explicitly confirmed, verified downloads with backup and restart. Startup checks can be disabled; downloads never start automatically. Future Windows releases are portable-only, with no separate update server.
 
 **Users of 0.4.5 and older must first download 0.4.6 manually.** Close the old app, retain a backup and replace it at the same path and filename to preserve settings. Subsequent upgrades can use the in-app updater.
 
-[Release notes and update screenshots (Traditional Chinese)](docs/releases/v0.4.6.zh-TW.md). Screenshots show an isolated signed fixture pair; 0.4.7 is not a public release.
+[Release notes and update screenshots (Traditional Chinese)](docs/releases/v0.4.6.zh-TW.md). Those screenshots show the earlier isolated signed fixture pair, not the final 0.4.7 UI.
 
 ## Runtime architecture
 
