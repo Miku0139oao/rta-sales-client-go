@@ -74,11 +74,6 @@
     updateThemePreference(resolvedTheme === 'dark' ? 'light' : 'dark');
   }
 
-  function navAriaLabel(item: (typeof navigation)[number]): string {
-    if (item.id === 'settings' && settingsDirty) return t('nav.settingsUnsaved');
-    return t(item.label);
-  }
-
   function relayMainWheel(event: WheelEvent) {
     if (event.deltaY === 0) return;
     const target = event.target as HTMLElement | null;
@@ -142,7 +137,7 @@
       class:active={activePage === item.id}
       class:dirty={item.id === 'settings' && settingsDirty}
       aria-current={activePage === item.id ? 'page' : undefined}
-      aria-label={navAriaLabel(item)}
+      aria-label={item.id === 'settings' && settingsDirty ? t('nav.settingsUnsaved') : t(item.label)}
       title={navigationBusy && item.id !== activePage ? t('nav.busy') : undefined}
       disabled={navigationBusy && item.id !== activePage}
       onclick={() => void navigateTo(item.id)}

@@ -10,7 +10,7 @@ describe('settings unsaved changes', () => {
   it('disables save until a persistable field changes', async () => {
     const onChange = vi.fn();
     const onDirtyChange = vi.fn();
-    const { container } = render(SettingsPage, {
+    const view = render(SettingsPage, {
       props: {
         t: translator('zh-TW'),
         settings: defaultSettings,
@@ -19,7 +19,7 @@ describe('settings unsaved changes', () => {
         onDirtyChange,
       },
     });
-    const save = [...container.querySelectorAll('md-filled-button')].find((button) => button.textContent?.includes('儲存'));
+    const save = [...view.container.querySelectorAll('md-filled-button')].find((button) => button.textContent?.includes('儲存'));
     expect(save).toHaveAttribute('disabled');
     expect(screen.queryByText('有尚未儲存的變更')).not.toBeInTheDocument();
 
@@ -30,6 +30,13 @@ describe('settings unsaved changes', () => {
 
     await fireEvent.click(save!);
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ maxJobs: 17, rankingLimit: defaultSettings.rankingLimit }));
+    await view.rerender({
+      t: translator('zh-TW'),
+      settings: onChange.mock.calls[0][0],
+      onChange,
+      onThemeChange: vi.fn(),
+      onDirtyChange,
+    });
     expect(screen.getByText('設定已儲存')).toBeInTheDocument();
     expect(save).toHaveAttribute('disabled');
   });
