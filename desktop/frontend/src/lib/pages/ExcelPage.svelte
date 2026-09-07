@@ -17,6 +17,7 @@
 
   export let t: Translator;
   export let settings: AppSettings;
+  export let catalogEpoch = 0;
   export let onGoToAccounts: () => void;
   export let onBusyChange: (busy: boolean) => void = () => undefined;
 
@@ -52,6 +53,8 @@
   let previewSection: HTMLElement | undefined;
   let successSection: HTMLElement | undefined;
   let errorNotice: HTMLElement | undefined;
+  let accountRefreshNotice = false;
+  let appliedCatalogEpoch = 0;
 
   $: previewRows = analysis?.preview ?? analysis?.rows ?? [];
   $: filteredRows = filter === 'all'
@@ -86,6 +89,10 @@
     (analysis.canApply || partialOverrideAllowed) &&
     (issueCount === 0 || partialOverrideAllowed)
   );
+  $: if (catalogEpoch > appliedCatalogEpoch) {
+    appliedCatalogEpoch = catalogEpoch;
+    if (catalogEpoch > 0 && scan && !analysis && !applyResult && !workflowBusy) accountRefreshNotice = true;
+  }
 
   onMount(() => {
     const cleanups = [
@@ -194,6 +201,7 @@
       });
       if (requestGeneration !== generation || inputPath !== requestedInput) return;
       scan = next;
+      accountRefreshNotice = false;
       sheetName = requestedSheet || next.sheetName || next.sheets[0]?.name || '';
       fromDate = next.dateMin || next.dates[0] || '';
       toDate = defaultWorkbookEndDate(fromDate, next.dateMax || next.dates.at(-1) || fromDate);
@@ -578,6 +586,11 @@
           <div class="notice warning-notice" role="status">
             <span class="material-symbols-rounded" aria-hidden="true">warning</span>
             <div><p>{t('excel.noAccounts')}</p><md-text-button onclick={onGoToAccounts}>{t('excel.manageAccounts')}</md-text-button></div>
+          </div>
+        {:else if accountRefreshNotice}
+          <div class="notice warning-notice" role="status">
+            <span class="material-symbols-rounded" aria-hidden="true">info</span>
+            <p>{t('excel.accountsChanged')}</p>
           </div>
         {/if}
 

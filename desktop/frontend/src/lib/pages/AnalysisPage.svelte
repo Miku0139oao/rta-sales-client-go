@@ -71,6 +71,7 @@
 
   export let t: Translator;
   export let settings: AppSettings;
+  export let catalogEpoch = 0;
   export let onBusyChange: (busy: boolean) => void = () => undefined;
   export let onSettingsChange: (next: AppSettings) => void = () => undefined;
   export let onGoToAccounts: () => void = () => undefined;
@@ -215,11 +216,18 @@
   let productSearch: HTMLInputElement | undefined;
   let rankingFocused = false;
   let rankingInput = String(settings.rankingLimit);
+  let appliedCatalogEpoch = 0;
+  let catalogRefreshGeneration = 0;
   const prefetchPeriodKeys = ['current', 'previous', 'previous2', 'yearAgo', 'yearAgoNext'];
+  const rankingViews: ReportView[] = ['overview', 'categories', 'focus'];
 
   $: if (!loadingProfiles && profileId && loadedSimulateCount !== settings.simulateStoreCount) {
     loadedSimulateCount = settings.simulateStoreCount;
     void loadStores();
+  }
+  $: if (!loadingProfiles && catalogEpoch > appliedCatalogEpoch) {
+    appliedCatalogEpoch = catalogEpoch;
+    if (catalogEpoch > 0) void refreshCatalog();
   }
   $: busy = loadingProfiles || loadingStores || running || Boolean(result?.pending);
   $: visibleStores = filterStores(stores, storeQuery);
@@ -397,6 +405,42 @@
     } finally {
       loadingProfiles = false;
     }
+  }
+
+  async function refreshCatalog() {
+    if (running || exportingPDF) return;
+    const generation = ++catalogRefreshGeneration;
+    try {
+      const [listedProfiles, listedGroups] = await Promise.all([
+        backend.listProfiles(),
+        backend.listManCodeGroups().catch(() => manCodeGroups),
+      ]);
+      if (generation !== catalogRefreshGeneration) return;
+      profiles = listedProfiles.filter((profile) => profile.enabled && profile.hasCredentials);
+      manCodeGroups = listedGroups;
+      if (profileId && !profiles.some((profile) => profile.id === profileId)) profileId = profiles[0]?.id ?? '';
+      else if (!profileId) profileId = profiles[0]?.id ?? '';
+      if (profileId) {
+        loadedSimulateCount = settings.simulateStoreCount;
+        await loadStores({ keepResult: Boolean(result) });
+        if (generation !== catalogRefreshGeneration) return;
+        restoreStoreSelectionFromReport();
+      } else {
+        stores = [];
+        if (!result) selectedStoreIds = new Set();
+      }
+    } catch (caught) {
+      if (generation !== catalogRefreshGeneration) return;
+      error = errorMessage(settings.locale, caught);
+    }
+  }
+
+  function restoreStoreSelectionFromReport() {
+    if (!result) return;
+    const wanted = appliedQuery?.storeIds ?? result.stores.map((store) => store.businessId);
+    const available = new Set(stores.map((store) => store.businessId));
+    const next = wanted.filter((id) => available.has(id));
+    selectedStoreIds = new Set(next.length ? next : stores.map((store) => store.businessId));
   }
 
   function captureQuery(): QueryDraft {
@@ -1840,6 +1884,11 @@
     <div class="empty-state surface-card">
       <span class="material-symbols-rounded" aria-hidden="true">manage_accounts</span>
       <h2>{t('analysis.noAccounts')}</h2>
+      <p>{t('analysis.noAccountsHint')}</p>
+      <ol class="empty-state-steps">
+        <li>{t('analysis.noAccountsStep1')}</li>
+        <li>{t('analysis.noAccountsStep2')}</li>
+      </ol>
       {#if isWebRuntime()}
         <p>{t('web.previewHint')}</p>
         <md-filled-button type="button" onclick={() => void loadWebPreview()} disabled={running}>
@@ -1984,7 +2033,7 @@
           {/each}
         </div>
         <div class="navigation-tools">
-          {@render rankingControl()}
+          {#if rankingViews.includes(activeView)}{@render rankingControl()}{/if}
           <button class="return-to-filters" type="button" aria-label={t('analysis.returnToFilters')} title={t('analysis.returnToFilters')} onclick={returnToFilters}><span class="material-symbols-rounded" aria-hidden="true">manage_search</span>{#if activeFilterCount}<b>{activeFilterCount}</b>{/if}</button>
         </div>
       </div>
@@ -2394,6 +2443,7 @@
 
 <style>
   .analysis-page { max-width: 1480px; }
+  .empty-state-steps { width: min(100%, 28rem); margin: 0 auto 16px; padding-left: 1.2em; text-align: left; color: var(--md-sys-color-on-surface-variant); font-size: 14px; line-height: 1.6; }
   .analysis-page.has-results { width: 100%; max-width: 1480px; }
   .analysis-page .page-heading { margin-bottom: 12px; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
   .analysis-page .page-heading h1 { font-size: clamp(24px, 2vw, 28px); letter-spacing: -.02em; }

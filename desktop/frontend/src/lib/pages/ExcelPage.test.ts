@@ -411,4 +411,25 @@ describe('Excel safety workflow', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: '檢查分析結果', level: 2 })).toBeInTheDocument());
     expect(container.textContent).not.toContain('重試失敗項目');
   });
+
+  it('prompts a rescan after the account catalog changes', async () => {
+    configureBackend({
+      methods: {
+        OpenWorkbook: vi.fn(async () => 'D:\\sales.xlsx'),
+        ScanWorkbook: vi.fn(async () => scan),
+      },
+    });
+    const view = render(ExcelPage, {
+      props: { t: translator('zh-TW'), settings: defaultSettings, onGoToAccounts: vi.fn(), catalogEpoch: 0 },
+    });
+    await openAndScan(view.container);
+    expect(screen.queryByText('若剛新增或啟用帳號，請重新掃描活頁簿。')).not.toBeInTheDocument();
+    await view.rerender({
+      t: translator('zh-TW'),
+      settings: defaultSettings,
+      onGoToAccounts: vi.fn(),
+      catalogEpoch: 1,
+    });
+    expect(screen.getByText('若剛新增或啟用帳號，請重新掃描活頁簿。')).toBeInTheDocument();
+  });
 });
