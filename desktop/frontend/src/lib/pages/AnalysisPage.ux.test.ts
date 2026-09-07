@@ -253,6 +253,44 @@ describe('analysis workspace interactions', () => {
     localStorage.removeItem('rta-sales-desktop-settings-v2');
   });
 
+  it('hides ranking size on weekly, product and store tabs', async () => {
+    await renderReport();
+    expect(screen.getByRole('group', { name: '排行筆數' })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('tab', { name: '商品' }));
+    expect(screen.queryByRole('group', { name: '排行筆數' })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('tab', { name: '門店' }));
+    expect(screen.queryByRole('group', { name: '排行筆數' })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('tab', { name: '每週變化' }));
+    expect(screen.queryByRole('group', { name: '排行筆數' })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('tab', { name: '關注' }));
+    expect(screen.getByRole('group', { name: '排行筆數' })).toBeInTheDocument();
+  });
+
+  it('refreshes accounts without discarding the report when the catalog changes', async () => {
+    const listProfiles = vi.fn(async () => [profile('profile-1', 'Production'), profile('profile-2', 'Second')]);
+    configureBackend({ methods: {
+      ListProfiles: listProfiles,
+      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      ListManCodeGroups: vi.fn(async () => [{ id: 'mask', name: '面膜組', codes: ['552646'] }]),
+      RunSalesAnalysis: vi.fn(async () => analysisResult()),
+      GetSalesAnalysisItems: vi.fn(async () => ({ periodKey: 'current', dict: [''], rows: [] })),
+      ClearSalesAnalysis: vi.fn(async () => undefined),
+      CancelSalesAnalysis: vi.fn(async () => undefined),
+    } });
+    const view = render(AnalysisPage, { props: { t: translator('zh-TW'), settings: { ...defaultSettings }, catalogEpoch: 0 } });
+    await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
+    await fireEvent.click(screen.getByText('開始分析'));
+    await screen.findByRole('heading', { name: '銷售額 Top 24' });
+    const before = listProfiles.mock.calls.length;
+    listProfiles.mockImplementation(async () => [profile('profile-1', 'Production'), profile('profile-3', 'New account')]);
+    await view.rerender({ t: translator('zh-TW'), settings: { ...defaultSettings }, catalogEpoch: 1 });
+    await waitFor(() => expect(listProfiles.mock.calls.length).toBeGreaterThan(before));
+    expect(screen.getByRole('heading', { name: '銷售額 Top 24' })).toBeInTheDocument();
+    await fireEvent.click(screen.getByText('調整條件'));
+    expect(screen.getByLabelText('帳號')).toHaveTextContent('New account');
+    expect(screen.queryByText('Second')).not.toBeInTheDocument();
+  });
+
   it('keeps the current depth on empty input and clamps custom bounds', async () => {
     await renderReport();
     const input = screen.getByRole('spinbutton', { name: '自訂' });

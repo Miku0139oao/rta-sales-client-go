@@ -47,6 +47,10 @@ describe('desktop application shell', () => {
       expect(entry.querySelector('.material-symbols-rounded')).not.toHaveTextContent('barcode');
       expect(entry.querySelector('.material-symbols-rounded')).not.toHaveTextContent('qr_code_2');
     });
+    expect(container.querySelector('.bottom-navigation')).toHaveTextContent('分析');
+    expect(container.querySelector('.bottom-navigation')).toHaveTextContent('代碼');
+    expect(container.querySelector('.bottom-navigation')).not.toHaveTextContent('商品代碼');
+    expect(container.querySelector('.navigation-rail')).toHaveTextContent('商品代碼');
     expect(container).not.toHaveTextContent('qr_code_2');
     expect(container).not.toHaveTextContent('barcode');
   });
@@ -101,7 +105,10 @@ describe('desktop application shell', () => {
     await fireEvent.click(container.querySelector('.profile-actions md-outlined-button')!);
 
     const excelNavigation = screen.getAllByRole('button', { name: /Excel 填入/ });
-    await waitFor(() => excelNavigation.forEach((button) => expect(button).toBeDisabled()));
+    await waitFor(() => excelNavigation.forEach((button) => {
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute('title', '請待目前工作完成後再切換頁面');
+    }));
     resolveTest({ success: true });
     await waitFor(() => excelNavigation.forEach((button) => expect(button).not.toBeDisabled()));
   });
@@ -177,4 +184,68 @@ describe('desktop application shell', () => {
     expect(document.documentElement.scrollTop).toBe(0);
     expect(document.activeElement).toBe(main);
   });
+
+  it('keeps a finished analysis report after visiting settings', async () => {
+    const totals = { saleQuantity: 2, saleAmount: 20, returnQuantity: 0, returnAmount: 0, netQuantity: 2, netSalesAmount: 20 };
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [{ id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true }]),
+      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      ListManCodeGroups: vi.fn(async () => []),
+      RunSalesAnalysis: vi.fn(async () => ({
+        operationId: 'keep-1', from: '2026-08-01', to: '2026-08-31', complete: true, pending: false,
+        selectedStores: 1, successfulStores: 1, totals,
+        stores: [{ businessId: '107', label: '107 - Central', totals }],
+        periods: [{
+          key: 'current', label: '本期', from: '2026-08-01', to: '2026-08-31', complete: true, successfulStores: 1, totals,
+          stores: [{ businessId: '107', label: '107 - Central', totals }],
+          items: [{
+            storeId: '107', storeLabel: '107 - Central', articleCode: '552646', articleName: 'Mask',
+            category1: 'A', category2: 'B', category2Code: 'A02', category3: 'C', category4: 'D', category5: 'E',
+            transactionCount: 1, saleQuantity: 2, saleAmount: 20, returnQuantity: 0, returnTransactionCount: 0, returnAmount: 0, netQuantity: 2, netSalesAmount: 20,
+          }],
+        }],
+        weeks: [], queryDurationMs: 10,
+      })),
+      GetSalesAnalysisItems: vi.fn(async () => ({ periodKey: 'current', dict: [''], rows: [] })),
+      ClearSalesAnalysis: vi.fn(async () => undefined),
+    } });
+    render(App);
+    await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
+    await fireEvent.click(screen.getByText('開始分析'));
+    await screen.findByRole('heading', { name: '銷售額 Top 24' });
+    await fireEvent.click(screen.getAllByRole('button', { name: /設定/ })[0]);
+    await waitFor(() => expect(screen.getByRole('heading', { name: '設定' })).toBeInTheDocument());
+    expect(screen.queryByRole('heading', { name: '銷售額 Top 24' })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getAllByRole('button', { name: /銷售分析/ })[0]);
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 24' })).toBeInTheDocument());
+  });
+
+  it('keeps a workbook scan after visiting accounts and asks to scan again', async () => {
+    const { container } = render(App);
+    await fireEvent.click(screen.getAllByRole('button', { name: /Excel 填入/ })[0]);
+    await waitFor(() => expect(screen.getByRole('heading', { name: '從活頁簿開始' })).toBeInTheDocument());
+    await fireEvent.click(container.querySelector('.file-drop-card md-filled-button')!);
+    await waitFor(() => expect(screen.getByRole('heading', { name: '掃描摘要' })).toBeInTheDocument());
+    expect((container.querySelector('#from-date') as HTMLInputElement).value).toBe('2026-08-01');
+    await fireEvent.click(screen.getAllByRole('button', { name: /^帳號$/ })[0]);
+    await waitFor(() => expect(screen.getByRole('heading', { name: '帳號設定檔' })).toBeInTheDocument());
+    await fireEvent.click(screen.getAllByRole('button', { name: /Excel 填入/ })[0]);
+    await waitFor(() => expect(screen.getByRole('heading', { name: '掃描摘要' })).toBeInTheDocument());
+    expect((container.querySelector('#from-date') as HTMLInputElement).value).toBe('2026-08-01');
+    expect(screen.getByText('若剛新增或啟用帳號，請重新掃描活頁簿。')).toBeInTheDocument();
+  });
+
+  it('keeps unsaved workload settings while switching pages', async () => {
+    render(App);
+    await fireEvent.click(screen.getAllByRole('button', { name: /設定/ })[0]);
+    const maxJobs = screen.getByRole('spinbutton', { name: '每次最多查詢工作' }) as HTMLInputElement;
+    await fireEvent.input(maxJobs, { target: { value: '17' } });
+    expect(screen.getByText('有尚未儲存的變更')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: '設定（有尚未儲存的變更）' }).length).toBeGreaterThan(0);
+    await fireEvent.click(screen.getAllByRole('button', { name: /銷售分析/ })[0]);
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售分析' })).toBeInTheDocument());
+    await fireEvent.click(screen.getAllByRole('button', { name: '設定（有尚未儲存的變更）' })[0]);
+    expect((screen.getByRole('spinbutton', { name: '每次最多查詢工作' }) as HTMLInputElement).value).toBe('17');
+  });
+
 });

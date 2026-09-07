@@ -23,9 +23,18 @@
   let accountsBusy = false;
   let itemcodesBusy = false;
   let updateBusy = false;
+  let settingsDirty = false;
   let mainContent: HTMLElement;
   let webBannerVisible = isWebRuntime() && !readWebBannerAck();
-  let analysisEpoch = 0;
+  let analysisCatalogEpoch = 0;
+  let excelCatalogEpoch = 0;
+  let mounted: Record<Page, boolean> = {
+    analysis: true,
+    excel: false,
+    accounts: false,
+    itemcodes: false,
+    settings: false,
+  };
 
   $: t = translator(settings.locale);
   $: resolvedTheme = resolveTheme(settings.theme, systemDark);
@@ -36,12 +45,12 @@
     document.title = t('app.name');
   }
 
-  const navigation: Array<{ id: Page; icon: string; label: string }> = [
-    { id: 'analysis', icon: 'query_stats', label: 'nav.analysis' },
-    { id: 'excel', icon: 'table_view', label: 'nav.excel' },
-    { id: 'accounts', icon: 'manage_accounts', label: 'nav.accounts' },
-    { id: 'itemcodes', icon: 'tag', label: 'nav.itemcodes' },
-    { id: 'settings', icon: 'settings', label: 'nav.settings' },
+  const navigation: Array<{ id: Page; icon: string; label: string; shortLabel: string }> = [
+    { id: 'analysis', icon: 'query_stats', label: 'nav.analysis', shortLabel: 'nav.analysisShort' },
+    { id: 'excel', icon: 'table_view', label: 'nav.excel', shortLabel: 'nav.excelShort' },
+    { id: 'accounts', icon: 'manage_accounts', label: 'nav.accounts', shortLabel: 'nav.accountsShort' },
+    { id: 'itemcodes', icon: 'tag', label: 'nav.itemcodes', shortLabel: 'nav.itemcodesShort' },
+    { id: 'settings', icon: 'settings', label: 'nav.settings', shortLabel: 'nav.settingsShort' },
   ];
 
   onMount(() => watchSystemTheme((dark) => {
@@ -63,6 +72,11 @@
 
   function toggleTheme() {
     updateThemePreference(resolvedTheme === 'dark' ? 'light' : 'dark');
+  }
+
+  function navAriaLabel(item: (typeof navigation)[number]): string {
+    if (item.id === 'settings' && settingsDirty) return t('nav.settingsUnsaved');
+    return t(item.label);
   }
 
   function relayMainWheel(event: WheelEvent) {
@@ -108,7 +122,10 @@
 
   async function navigateTo(page: Page) {
     if (navigationBusy && page !== activePage) return;
-    if (page === 'analysis' && activePage !== 'analysis') analysisEpoch += 1;
+    const leaving = activePage;
+    if (page === 'analysis' && (leaving === 'accounts' || leaving === 'itemcodes')) analysisCatalogEpoch += 1;
+    if (page === 'excel' && leaving === 'accounts') excelCatalogEpoch += 1;
+    mounted = { ...mounted, [page]: true };
     activePage = page;
     await tick();
     if (mainContent) mainContent.scrollTop = 0;
@@ -117,6 +134,25 @@
     mainContent?.focus({ preventScroll: true });
   }
 </script>
+
+{#snippet navButtons(short: boolean)}
+  {#each navigation as item}
+    <button
+      type="button"
+      class:active={activePage === item.id}
+      class:dirty={item.id === 'settings' && settingsDirty}
+      aria-current={activePage === item.id ? 'page' : undefined}
+      aria-label={navAriaLabel(item)}
+      title={navigationBusy && item.id !== activePage ? t('nav.busy') : undefined}
+      disabled={navigationBusy && item.id !== activePage}
+      onclick={() => void navigateTo(item.id)}
+    >
+      <span class="nav-icon material-symbols-rounded" aria-hidden="true">{item.icon}</span>
+      <span>{t(short ? item.shortLabel : item.label)}</span>
+      {#if item.id === 'settings' && settingsDirty}<span class="nav-dirty-dot" aria-hidden="true"></span>{/if}
+    </button>
+  {/each}
+{/snippet}
 
 <div class="app-shell">
   <header class="top-app-bar">
@@ -148,18 +184,7 @@
   <div class="shell-body">
     <aside class="navigation-rail">
       <nav aria-label={t('nav.main')}>
-        {#each navigation as item}
-          <button
-            type="button"
-            class:active={activePage === item.id}
-            aria-current={activePage === item.id ? 'page' : undefined}
-            disabled={navigationBusy && item.id !== activePage}
-            onclick={() => void navigateTo(item.id)}
-          >
-            <span class="nav-icon material-symbols-rounded" aria-hidden="true">{item.icon}</span>
-            <span>{t(item.label)}</span>
-          </button>
-        {/each}
+        {@render navButtons(false)}
       </nav>
     </aside>
 
@@ -181,45 +206,48 @@
           <md-outlined-button type="button" onclick={acknowledgeWebBanner}>{t('web.bannerAck')}</md-outlined-button>
         </div>
       {/if}
-      {#if activePage === 'excel'}
-        <ExcelPage
-          {t}
-          {settings}
-          onBusyChange={(busy) => (excelBusy = busy)}
-          onGoToAccounts={() => { if (!excelBusy) void navigateTo('accounts'); }}
-        />
-      {:else if activePage === 'analysis'}
-        {#key analysisEpoch}
-        <AnalysisPage
-          {t}
-          {settings}
-          onBusyChange={(busy) => (analysisBusy = busy)}
-          onSettingsChange={updateSettings}
-          onGoToAccounts={() => { if (!analysisBusy) void navigateTo('accounts'); }}
-        />
-        {/key}
-      {:else if activePage === 'accounts'}
-        <AccountsPage {t} locale={settings.locale} onBusyChange={(busy) => (accountsBusy = busy)} />
-      {:else if activePage === 'itemcodes'}
-        <ItemCodesPage {t} locale={settings.locale} onBusyChange={(busy) => (itemcodesBusy = busy)} />
-      {:else}
-        <SettingsPage {t} {settings} onChange={updateSettings} onThemeChange={updateThemePreference} />
+      {#if mounted.excel}
+        <div class="page-host" hidden={activePage !== 'excel'} inert={activePage !== 'excel' ? true : undefined}>
+          <ExcelPage
+            {t}
+            {settings}
+            catalogEpoch={excelCatalogEpoch}
+            onBusyChange={(busy) => (excelBusy = busy)}
+            onGoToAccounts={() => { if (!excelBusy) void navigateTo('accounts'); }}
+          />
+        </div>
+      {/if}
+      {#if mounted.analysis}
+        <div class="page-host" hidden={activePage !== 'analysis'} inert={activePage !== 'analysis' ? true : undefined}>
+          <AnalysisPage
+            {t}
+            {settings}
+            catalogEpoch={analysisCatalogEpoch}
+            onBusyChange={(busy) => (analysisBusy = busy)}
+            onSettingsChange={updateSettings}
+            onGoToAccounts={() => { if (!analysisBusy) void navigateTo('accounts'); }}
+          />
+        </div>
+      {/if}
+      {#if mounted.accounts}
+        <div class="page-host" hidden={activePage !== 'accounts'} inert={activePage !== 'accounts' ? true : undefined}>
+          <AccountsPage {t} locale={settings.locale} onBusyChange={(busy) => (accountsBusy = busy)} />
+        </div>
+      {/if}
+      {#if mounted.itemcodes}
+        <div class="page-host" hidden={activePage !== 'itemcodes'} inert={activePage !== 'itemcodes' ? true : undefined}>
+          <ItemCodesPage {t} locale={settings.locale} onBusyChange={(busy) => (itemcodesBusy = busy)} />
+        </div>
+      {/if}
+      {#if mounted.settings}
+        <div class="page-host" hidden={activePage !== 'settings'} inert={activePage !== 'settings' ? true : undefined}>
+          <SettingsPage {t} {settings} onChange={updateSettings} onThemeChange={updateThemePreference} onDirtyChange={(dirty) => (settingsDirty = dirty)} />
+        </div>
       {/if}
     </main>
   </div>
 
   <nav class="bottom-navigation" aria-label={t('nav.main')}>
-    {#each navigation as item}
-      <button
-        type="button"
-        class:active={activePage === item.id}
-        aria-current={activePage === item.id ? 'page' : undefined}
-        disabled={navigationBusy && item.id !== activePage}
-        onclick={() => void navigateTo(item.id)}
-      >
-        <span class="material-symbols-rounded" aria-hidden="true">{item.icon}</span>
-        <span>{t(item.label)}</span>
-      </button>
-    {/each}
+    {@render navButtons(true)}
   </nav>
 </div>
