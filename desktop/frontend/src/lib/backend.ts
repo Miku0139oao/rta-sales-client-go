@@ -29,9 +29,11 @@ import type {
   SalesAnalysisReportMemoRequest,
   SalesAnalysisRequest,
   SalesAnalysisResult,
+  SalesAnalysisSnapshot,
   SalesAnalysisStore,
   SalesAnalysisTotals,
   WorkbookScan,
+  WorkbookSession,
 } from './types';
 import { AppError } from './types';
 
@@ -540,6 +542,9 @@ export const backend: BackendApi = {
     accounts: 2,
   })),
 
+  loadLastWorkbook: () =>
+    invoke<WorkbookSession>(['LoadLastWorkbook'], [], async () => ({ inputPath: '', sheetName: '' })),
+
   listProfiles: () => invoke(['ListProfiles'], [], async () => [...mockProfiles]),
 
   saveProfile: (request: ProfileUpsertRequest) =>
@@ -635,6 +640,14 @@ export const backend: BackendApi = {
     lastArticleNames = {};
     rememberArticleNamesFromResult(result);
     return result;
+  },
+
+  async loadSalesAnalysisSnapshot() {
+    const snapshot = await invoke<SalesAnalysisSnapshot>(
+      ['LoadSalesAnalysisSnapshot'], [], async () => ({ result: null, profileId: '', savedAt: '' }),
+    );
+    if (snapshot?.result) rememberArticleNamesFromResult(snapshot.result);
+    return snapshot ?? { result: null, profileId: '', savedAt: '' };
   },
 
   async getSalesAnalysisItems(request: SalesAnalysisItemsRequest) {

@@ -938,6 +938,9 @@ describe('sales analysis page', () => {
     } });
     render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
     await waitFor(() => expect(screen.getByRole('heading', { name: '沒有可用帳號' })).toBeInTheDocument());
+    expect(screen.getByText('新增並測試帳號後，即可在此查詢銷售。')).toBeInTheDocument();
+    expect(screen.getByText('到帳號頁新增 RTA 帳號，並按「測試並啟用」。')).toBeInTheDocument();
+    expect(screen.getByText('回到本頁選擇門店與期間，開始分析。')).toBeInTheDocument();
     expect(screen.getByText('管理帳號')).toBeInTheDocument();
   });
 

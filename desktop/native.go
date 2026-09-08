@@ -19,11 +19,15 @@ func NewNativeApp() (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	reportCache, err := newReportCacheStore(native.Root)
+	if err != nil {
+		return nil, err
+	}
 	app, err := newApp(appDependencies{
 		profiles: profiles, mancodes: mancodes, credentials: native.Credentials,
 		cookies: nativeCookieStore{native: native}, clients: rtaClientFactory{},
 		engine: newXLSXEngine(), dialogs: wailsDialogService{}, events: wailsEventSink{},
-		runtime: nativeRuntimeChecker{},
+		runtime: nativeRuntimeChecker{}, reportCache: reportCache,
 	})
 	if err != nil {
 		return nil, err

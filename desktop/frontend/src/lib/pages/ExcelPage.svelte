@@ -13,10 +13,12 @@
     PreviewFilter,
     PreviewRow,
     WorkbookScan,
+    WorkbookSession,
   } from '../types';
 
   export let t: Translator;
   export let settings: AppSettings;
+  export let catalogEpoch = 0;
   export let onGoToAccounts: () => void;
   export let onBusyChange: (busy: boolean) => void = () => undefined;
 
@@ -52,6 +54,9 @@
   let previewSection: HTMLElement | undefined;
   let successSection: HTMLElement | undefined;
   let errorNotice: HTMLElement | undefined;
+  let accountRefreshNotice = false;
+  let appliedCatalogEpoch = 0;
+  let restoredWorkbook = false;
 
   $: previewRows = analysis?.preview ?? analysis?.rows ?? [];
   $: filteredRows = filter === 'all'
@@ -86,6 +91,10 @@
     (analysis.canApply || partialOverrideAllowed) &&
     (issueCount === 0 || partialOverrideAllowed)
   );
+  $: if (catalogEpoch > appliedCatalogEpoch) {
+    appliedCatalogEpoch = catalogEpoch;
+    if (catalogEpoch > 0 && scan && !analysis && !applyResult && !workflowBusy) accountRefreshNotice = true;
+  }
 
   onMount(() => {
     const cleanups = [
@@ -96,8 +105,28 @@
         void acceptDroppedWorkbook(paths);
       }),
     ];
+    if (!isWebRuntime() && !inputPath) void restoreLastWorkbook();
     return () => cleanups.forEach((cleanup) => cleanup());
   });
+
+  // Rescan instead of trusting a stored scan so the summary always reflects
+  // the workbook as it is on disk right now.
+  async function restoreLastWorkbook() {
+    const requestGeneration = ++generation;
+    let session: WorkbookSession | undefined;
+    try {
+      session = await backend.loadLastWorkbook();
+    } catch {
+      return;
+    }
+    if (requestGeneration !== generation || inputPath || workflowBusy) return;
+    const selected = session?.inputPath?.trim() ?? '';
+    if (!selected || !isXlsxPath(selected)) return;
+    inputPath = selected;
+    sheetName = session?.sheetName?.trim() ?? '';
+    restoredWorkbook = true;
+    await scanWorkbook(sheetName, requestGeneration);
+  }
 
   async function reveal(getElement: () => HTMLElement | undefined) {
     await tick();
@@ -170,6 +199,7 @@
     }
     inputPath = selected;
     sheetName = '';
+    restoredWorkbook = false;
     await scanWorkbook('', requestGeneration);
   }
 
@@ -194,12 +224,14 @@
       });
       if (requestGeneration !== generation || inputPath !== requestedInput) return;
       scan = next;
+      accountRefreshNotice = false;
       sheetName = requestedSheet || next.sheetName || next.sheets[0]?.name || '';
       fromDate = next.dateMin || next.dates[0] || '';
       toDate = defaultWorkbookEndDate(fromDate, next.dateMax || next.dates.at(-1) || fromDate);
     } catch (error) {
       if (requestGeneration === generation) {
         scan = undefined;
+        restoredWorkbook = false;
         await showOperationError(errorMessage(settings.locale, error));
       }
     } finally {
@@ -531,6 +563,7 @@
         <span id="source-title" class="label">{t('excel.source')}</span>
         <strong>{scan?.fileName ?? inputPath.split(/[\\/]/).pop()}</strong>
         <span class="path-text" title={inputPath}>{inputPath}</span>
+        {#if restoredWorkbook && scan && workflowStep === 1}<span class="restored-brief">{t('excel.restoredWorkbook')}</span>{/if}
         {#if workflowStep > 1}<span class="selection-brief">{sheetName} · {fromDate}{fromDate === toDate ? '' : ` → ${toDate}`}</span>{/if}
       </div>
       <md-outlined-button onclick={openWorkbook} disabled={workflowBusy}>{t('excel.changeFile')}</md-outlined-button>
@@ -578,6 +611,11 @@
           <div class="notice warning-notice" role="status">
             <span class="material-symbols-rounded" aria-hidden="true">warning</span>
             <div><p>{t('excel.noAccounts')}</p><md-text-button onclick={onGoToAccounts}>{t('excel.manageAccounts')}</md-text-button></div>
+          </div>
+        {:else if accountRefreshNotice}
+          <div class="notice warning-notice" role="status">
+            <span class="material-symbols-rounded" aria-hidden="true">info</span>
+            <p>{t('excel.accountsChanged')}</p>
           </div>
         {/if}
 

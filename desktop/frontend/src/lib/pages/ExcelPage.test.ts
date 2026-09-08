@@ -56,6 +56,37 @@ describe('Excel safety workflow', () => {
     expect(screen.getByText('檢查結果').closest('li')).not.toHaveAttribute('aria-current');
   });
 
+  it('reopens and rescans the workbook from the previous session', async () => {
+    const scanWorkbook = vi.fn(async () => scan);
+    configureBackend({
+      methods: {
+        LoadLastWorkbook: vi.fn(async () => ({ inputPath: 'D:\\sales.xlsx', sheetName: 'August' })),
+        ScanWorkbook: scanWorkbook,
+      },
+    });
+    render(ExcelPage, {
+      props: { t: translator('zh-TW'), settings: defaultSettings, onGoToAccounts: vi.fn() },
+    });
+    await waitFor(() => expect(screen.getByText('掃描摘要')).toBeInTheDocument());
+    expect(scanWorkbook).toHaveBeenCalledTimes(1);
+    expect(scanWorkbook).toHaveBeenCalledWith(expect.objectContaining({ inputPath: 'D:\\sales.xlsx', sheetName: 'August' }));
+    expect(screen.getByText('sales.xlsx')).toBeInTheDocument();
+    expect(screen.getByText('已自動重新開啟上次使用的活頁簿。')).toBeInTheDocument();
+    expect(screen.queryByText('拖放 .xlsx 到這裡')).not.toBeInTheDocument();
+  });
+
+  it('stays on the drop zone when no previous workbook is remembered', async () => {
+    const scanWorkbook = vi.fn(async () => scan);
+    const load = vi.fn(async () => ({ inputPath: '', sheetName: '' }));
+    configureBackend({ methods: { LoadLastWorkbook: load, ScanWorkbook: scanWorkbook } });
+    render(ExcelPage, {
+      props: { t: translator('zh-TW'), settings: defaultSettings, onGoToAccounts: vi.fn() },
+    });
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('拖放 .xlsx 到這裡')).toBeInTheDocument();
+    expect(scanWorkbook).not.toHaveBeenCalled();
+  });
+
   it('scans a dropped .xlsx workbook and rejects unsupported drops', async () => {
     let dropListener: ((paths: string[]) => void) | undefined;
     const scanWorkbook = vi.fn(async (input: unknown) => {
@@ -410,5 +441,26 @@ describe('Excel safety workflow', () => {
     await fireEvent.click(button(container, '開始分析'));
     await waitFor(() => expect(screen.getByRole('heading', { name: '檢查分析結果', level: 2 })).toBeInTheDocument());
     expect(container.textContent).not.toContain('重試失敗項目');
+  });
+
+  it('prompts a rescan after the account catalog changes', async () => {
+    configureBackend({
+      methods: {
+        OpenWorkbook: vi.fn(async () => 'D:\\sales.xlsx'),
+        ScanWorkbook: vi.fn(async () => scan),
+      },
+    });
+    const view = render(ExcelPage, {
+      props: { t: translator('zh-TW'), settings: defaultSettings, onGoToAccounts: vi.fn(), catalogEpoch: 0 },
+    });
+    await openAndScan(view.container);
+    expect(screen.queryByText('若剛新增或啟用帳號，請重新掃描活頁簿。')).not.toBeInTheDocument();
+    await view.rerender({
+      t: translator('zh-TW'),
+      settings: defaultSettings,
+      onGoToAccounts: vi.fn(),
+      catalogEpoch: 1,
+    });
+    expect(screen.getByText('若剛新增或啟用帳號，請重新掃描活頁簿。')).toBeInTheDocument();
   });
 });

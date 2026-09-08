@@ -9,15 +9,33 @@
   export let settings: AppSettings;
   export let onChange: (settings: AppSettings) => void;
   export let onThemeChange: (theme: ThemePreference) => void;
+  export let onDirtyChange: (dirty: boolean) => void = () => undefined;
 
   let draft: AppSettings = { ...settings };
   let saved = false;
   let browsing = false;
   let mappingError = '';
 
-  $: if (settings.theme !== draft.theme || settings.autoCheckUpdates !== draft.autoCheckUpdates) {
-    draft = { ...draft, theme: settings.theme, autoCheckUpdates: settings.autoCheckUpdates };
+  $: if (
+    settings.theme !== draft.theme
+    || settings.autoCheckUpdates !== draft.autoCheckUpdates
+    || settings.locale !== draft.locale
+    || settings.rankingLimit !== draft.rankingLimit
+  ) {
+    draft = {
+      ...draft,
+      theme: settings.theme,
+      autoCheckUpdates: settings.autoCheckUpdates,
+      locale: settings.locale,
+      rankingLimit: settings.rankingLimit,
+    };
   }
+  $: dirty = draft.maxJobs !== settings.maxJobs
+    || draft.accountConcurrency !== settings.accountConcurrency
+    || draft.useLocalMapping !== settings.useLocalMapping
+    || draft.mappingPath !== settings.mappingPath
+    || draft.simulateStoreCount !== settings.simulateStoreCount;
+  $: onDirtyChange(dirty);
 
   function updateNumber(key: 'maxJobs' | 'accountConcurrency' | 'simulateStoreCount', event: Event) {
     draft = { ...draft, [key]: Number((event.currentTarget as HTMLInputElement | HTMLSelectElement).value) };
@@ -25,6 +43,7 @@
   }
 
   function save() {
+    if (!dirty) return;
     if (draft.useLocalMapping && !draft.mappingPath.trim()) {
       mappingError = t('settings.mappingRequired');
       return;
@@ -34,8 +53,16 @@
       return;
     }
     mappingError = '';
-    draft = normalizeSettings(draft);
-    onChange(draft);
+    const next = normalizeSettings({
+      ...settings,
+      maxJobs: draft.maxJobs,
+      accountConcurrency: draft.accountConcurrency,
+      useLocalMapping: draft.useLocalMapping,
+      mappingPath: draft.mappingPath,
+      simulateStoreCount: draft.simulateStoreCount,
+    });
+    draft = next;
+    onChange(next);
     saved = true;
   }
 
@@ -70,7 +97,12 @@
     <h1 id="settings-title">{t('settings.title')}</h1>
   </div>
 
-  {#if saved}
+  {#if dirty}
+    <div class="notice warning-notice" role="status">
+      <span class="material-symbols-rounded" aria-hidden="true">edit_note</span>
+      <span>{t('settings.unsaved')}</span>
+    </div>
+  {:else if saved}
     <div class="notice success-notice" role="status">
       <span class="material-symbols-rounded" aria-hidden="true">check_circle</span>
       <span>{t('settings.saved')}</span>
@@ -199,7 +231,7 @@
 
     <div class="form-actions sticky-actions">
       <md-text-button type="button" onclick={reset}>{t('settings.reset')}</md-text-button>
-      <md-filled-button type="button" onclick={save}><span class="material-symbols-rounded" slot="icon">save</span>{t('common.save')}</md-filled-button>
+      <md-filled-button type="button" onclick={save} disabled={dirty ? undefined : true}><span class="material-symbols-rounded" slot="icon">save</span>{t('common.save')}</md-filled-button>
     </div>
   </form>
 </section>

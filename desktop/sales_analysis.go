@@ -143,7 +143,7 @@ func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResul
 	analysis.Pending = len(followJobs) > 0
 	analysis.Complete = !analysis.Pending && len(analysis.Issues) == 0
 	analysis.QueryDurationMS = time.Since(started).Milliseconds()
-	remembered := a.rememberSalesAnalysis(analysis, packed)
+	remembered := a.rememberSalesAnalysisFor(request.ProfileID, analysis, packed)
 	if len(followJobs) == 0 {
 		if err := run.wait(); err != nil {
 			return SalesAnalysisResult{}, err
@@ -621,7 +621,9 @@ func (a *App) failSalesAnalysisSupplement(operationID string, runErr error, dura
 	}
 	slim := slimSalesAnalysis(current)
 	a.salesResult = &slim
+	a.salesSavedAt = time.Now()
 	a.salesResultMu.Unlock()
+	a.persistSalesReport()
 	a.events.Emit(a.appContext(), salesAnalysisUpdateEventName, slim)
 }
 
@@ -787,7 +789,9 @@ func (a *App) mergeSalesAnalysisSupplement(
 	slim := slimSalesAnalysis(current)
 	a.salesResult = &slim
 	a.salesPacked = packed
+	a.salesSavedAt = time.Now()
 	a.salesResultMu.Unlock()
+	a.persistSalesReport()
 	a.events.Emit(a.appContext(), salesAnalysisUpdateEventName, slim)
 }
 
