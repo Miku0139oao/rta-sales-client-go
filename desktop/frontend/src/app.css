@@ -899,6 +899,11 @@ main:focus {
   font-weight: 680;
 }
 
+.restored-brief {
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 12px;
+}
+
 .loading-state {
   display: flex;
   min-height: 180px;

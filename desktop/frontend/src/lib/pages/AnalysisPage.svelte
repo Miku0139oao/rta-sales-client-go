@@ -208,6 +208,7 @@
   let beforePresetQuery: QueryDraft | undefined;
   let presetWarning = '';
   let reportAccount = '';
+  let restoredAt = '';
   let filtersOpen = false;
   let facetSearch = '';
   let reportWorkspace: HTMLDivElement | undefined;
@@ -380,12 +381,26 @@
       manCodeGroups = listedGroups;
       profileId = profiles[0]?.id ?? '';
       loadedSimulateCount = settings.simulateStoreCount;
+      // Saved reports do not carry an account identity unless the desktop cache
+      // recorded one. Never attribute them to the first account by default.
+      reportAccount = '';
       if (isWebRuntime()) {
         const saved = loadWebAnalysisSnapshot();
         if (saved?.pending) {
           await backend.clearSalesAnalysis(saved.operationId).catch(() => undefined);
         } else if (saved) {
           result = saved;
+        }
+      } else {
+        const snapshot = await backend.loadSalesAnalysisSnapshot().catch(() => undefined);
+        if (snapshot?.result && !snapshot.result.pending) {
+          const owner = profiles.find((profile) => profile.id === snapshot.profileId);
+          if (owner) {
+            profileId = owner.id;
+            reportAccount = owner.displayName;
+          }
+          restoredAt = snapshot.savedAt;
+          result = snapshot.result;
         }
       }
       if (profileId) await loadStores({ keepResult: Boolean(result) });
@@ -397,8 +412,6 @@
         selectedStoreIds = new Set(result.stores.map((store) => store.businessId));
         lastRunKey = currentQueryKey();
         appliedQuery = captureQuery();
-        // Saved reports do not carry an account identity. Never attribute them to the first account.
-        reportAccount = '';
       }
     } catch (caught) {
       error = errorMessage(settings.locale, caught);
@@ -433,6 +446,12 @@
       if (generation !== catalogRefreshGeneration) return;
       error = errorMessage(settings.locale, caught);
     }
+  }
+
+  function formatRestoredAt(value: string): string {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return value;
+    return parsed.toLocaleString(settings.locale, { dateStyle: 'medium', timeStyle: 'short' });
   }
 
   function restoreStoreSelectionFromReport() {
@@ -662,6 +681,7 @@
     resetHydration();
     const operationId = result?.operationId;
     result = undefined;
+    restoredAt = '';
     lastRunKey = '';
     appliedQuery = undefined;
     queryOpen = false;
@@ -2003,6 +2023,15 @@
 
   {#if result && currentPeriod}
     <section class="analysis-results">
+      {#if restoredAt && !result.pending}
+        <div class="notice restored-notice" role="status">
+          <span class="material-symbols-rounded" aria-hidden="true">history</span>
+          <span class="restored-notice-copy">{t('analysis.restoredReport', { time: formatRestoredAt(restoredAt) })}</span>
+          <md-icon-button type="button" aria-label={t('common.close')} onclick={() => (restoredAt = '')}>
+            <span class="material-symbols-rounded" aria-hidden="true">close</span>
+          </md-icon-button>
+        </div>
+      {/if}
       {#if result.pending}
         <section class="analysis-supplement" aria-live="polite">
           <div class="analysis-supplement-copy">
@@ -2455,6 +2484,8 @@
   .heading-meta .report-status, .heading-meta .period-disclosure summary { white-space: nowrap; }
   .analysis-page :is(button, summary, input, select):focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 3px; }
   .analysis-page :is(button, input, select):disabled { cursor: not-allowed; opacity: .55; }
+  .restored-notice { align-items: center; margin: 0; }
+  .restored-notice-copy { flex: 1; min-width: 0; }
   .export-notice { display: flex; align-items: center; gap: 12px; }
   .export-notice-copy { display: grid; min-width: 0; flex: 1; gap: 2px; }
   .export-notice-copy code { overflow: hidden; color: var(--md-sys-color-on-surface-variant); font-family: "Cascadia Code", ui-monospace, monospace; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }

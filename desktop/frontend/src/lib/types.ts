@@ -28,6 +28,11 @@ export interface WorkbookScan {
   warnings?: string[];
 }
 
+export interface WorkbookSession {
+  inputPath: string;
+  sheetName: string;
+}
+
 export interface ScanWorkbookRequest {
   inputPath: string;
   sheetName?: string;
@@ -395,6 +400,12 @@ export interface SalesAnalysisResult {
   queryDurationMs: number;
 }
 
+export interface SalesAnalysisSnapshot {
+  result: SalesAnalysisResult | null;
+  profileId: string;
+  savedAt: string;
+}
+
 export interface SalesAnalysisWeek {
   from: string;
   to: string;
@@ -456,6 +467,7 @@ export interface BackendApi {
   openMappingFile(): Promise<string>;
   saveWorkbook(request: SaveWorkbookRequest): Promise<string>;
   scanWorkbook(request: ScanWorkbookRequest): Promise<WorkbookScan>;
+  loadLastWorkbook(): Promise<WorkbookSession>;
   listProfiles(): Promise<Profile[]>;
   saveProfile(request: ProfileUpsertRequest): Promise<Profile>;
   testProfile(profileId: string): Promise<ProfileTestResult>;
@@ -472,6 +484,7 @@ export interface BackendApi {
   listSalesAnalysisStores(profileId: string, simulateStoreCount?: number): Promise<SalesAnalysisStore[]>;
   listManCodeGroups(): Promise<ManCodeGroup[]>;
   runSalesAnalysis(request: SalesAnalysisRequest): Promise<SalesAnalysisResult>;
+  loadSalesAnalysisSnapshot(): Promise<SalesAnalysisSnapshot>;
   getSalesAnalysisItems(request: SalesAnalysisItemsRequest): Promise<SalesAnalysisPackedItems>;
   getSalesAnalysisReportGlyphs(operationId: string): Promise<string>;
   getSalesAnalysisReportMemo(request: SalesAnalysisReportMemoRequest): Promise<SalesAnalysisReportMemo>;

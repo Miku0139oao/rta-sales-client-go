@@ -177,6 +177,59 @@ describe('analysis workspace interactions', () => {
     expect(screen.getByText('條件已變更，尚未重新分析')).toBeInTheDocument();
   });
 
+  it('restores the desktop report cache with its account and time, then clears the hint on rerun', async () => {
+    const load = vi.fn(async () => ({ result: analysisResult(), profileId: 'profile-2', savedAt: '2026-09-08T09:12:00+08:00' }));
+    const run = vi.fn(async () => ({ ...analysisResult(), operationId: 'fresh-1' }));
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [profile('profile-1', 'Production'), profile('profile-2', 'Second')]),
+      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      LoadSalesAnalysisSnapshot: load,
+      RunSalesAnalysis: run,
+      ClearSalesAnalysis: vi.fn(async () => undefined),
+    } });
+    const { container } = render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
+    await screen.findByRole('heading', { name: '銷售額 Top 24' });
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(run).not.toHaveBeenCalled();
+    expect(container.querySelector('.report-context')).toHaveTextContent('Second · 2026-08-01 — 2026-08-21');
+    expect(screen.getByText(/已載入上次的報表（.*2026.*）/)).toBeInTheDocument();
+    expect(screen.queryByText('條件已變更，尚未重新分析')).not.toBeInTheDocument();
+
+    await fireEvent.click(screen.getByText('調整條件'));
+    expect(screen.getByLabelText('帳號')).toHaveValue('profile-2');
+    await fireEvent.click(screen.getByText('開始分析'));
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    await screen.findByRole('heading', { name: '銷售額 Top 24' });
+    expect(screen.queryByText(/已載入上次的報表/)).not.toBeInTheDocument();
+  });
+
+  it('dismisses the restored-report hint and never attributes the report to a missing account', async () => {
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [profile('profile-1', 'Production')]),
+      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      LoadSalesAnalysisSnapshot: vi.fn(async () => ({ result: analysisResult(), profileId: 'deleted', savedAt: '2026-09-08T09:12:00+08:00' })),
+    } });
+    const { container } = render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
+    await screen.findByRole('heading', { name: '銷售額 Top 24' });
+    expect(container.querySelector('.report-context')).toHaveTextContent('已儲存報表 · 2026-08-01 — 2026-08-21');
+    const hint = screen.getByText(/已載入上次的報表/);
+    await fireEvent.click(hint.parentElement!.querySelector('md-icon-button[aria-label="關閉"]')!);
+    expect(screen.queryByText(/已載入上次的報表/)).not.toBeInTheDocument();
+  });
+
+  it('shows the query form when the desktop cache is empty', async () => {
+    const load = vi.fn(async () => ({ result: null, profileId: '', savedAt: '' }));
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [profile('profile-1', 'Production')]),
+      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      LoadSalesAnalysisSnapshot: load,
+    } });
+    render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
+    await waitFor(() => expect(screen.getByText('開始分析')).toBeInTheDocument());
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/已載入上次的報表/)).not.toBeInTheDocument();
+  });
+
   it('reveals filters, searches facet options, removes chips and clears scope without querying', async () => {
     const { container, run } = await renderReport();
     const toggle = screen.getByRole('button', { name: '篩選' });

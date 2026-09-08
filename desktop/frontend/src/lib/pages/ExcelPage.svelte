@@ -13,6 +13,7 @@
     PreviewFilter,
     PreviewRow,
     WorkbookScan,
+    WorkbookSession,
   } from '../types';
 
   export let t: Translator;
@@ -55,6 +56,7 @@
   let errorNotice: HTMLElement | undefined;
   let accountRefreshNotice = false;
   let appliedCatalogEpoch = 0;
+  let restoredWorkbook = false;
 
   $: previewRows = analysis?.preview ?? analysis?.rows ?? [];
   $: filteredRows = filter === 'all'
@@ -103,8 +105,28 @@
         void acceptDroppedWorkbook(paths);
       }),
     ];
+    if (!isWebRuntime() && !inputPath) void restoreLastWorkbook();
     return () => cleanups.forEach((cleanup) => cleanup());
   });
+
+  // Rescan instead of trusting a stored scan so the summary always reflects
+  // the workbook as it is on disk right now.
+  async function restoreLastWorkbook() {
+    const requestGeneration = ++generation;
+    let session: WorkbookSession | undefined;
+    try {
+      session = await backend.loadLastWorkbook();
+    } catch {
+      return;
+    }
+    if (requestGeneration !== generation || inputPath || workflowBusy) return;
+    const selected = session?.inputPath?.trim() ?? '';
+    if (!selected || !isXlsxPath(selected)) return;
+    inputPath = selected;
+    sheetName = session?.sheetName?.trim() ?? '';
+    restoredWorkbook = true;
+    await scanWorkbook(sheetName, requestGeneration);
+  }
 
   async function reveal(getElement: () => HTMLElement | undefined) {
     await tick();
@@ -177,6 +199,7 @@
     }
     inputPath = selected;
     sheetName = '';
+    restoredWorkbook = false;
     await scanWorkbook('', requestGeneration);
   }
 
@@ -208,6 +231,7 @@
     } catch (error) {
       if (requestGeneration === generation) {
         scan = undefined;
+        restoredWorkbook = false;
         await showOperationError(errorMessage(settings.locale, error));
       }
     } finally {
@@ -539,6 +563,7 @@
         <span id="source-title" class="label">{t('excel.source')}</span>
         <strong>{scan?.fileName ?? inputPath.split(/[\\/]/).pop()}</strong>
         <span class="path-text" title={inputPath}>{inputPath}</span>
+        {#if restoredWorkbook && scan && workflowStep === 1}<span class="restored-brief">{t('excel.restoredWorkbook')}</span>{/if}
         {#if workflowStep > 1}<span class="selection-brief">{sheetName} · {fromDate}{fromDate === toDate ? '' : ` → ${toDate}`}</span>{/if}
       </div>
       <md-outlined-button onclick={openWorkbook} disabled={workflowBusy}>{t('excel.changeFile')}</md-outlined-button>
