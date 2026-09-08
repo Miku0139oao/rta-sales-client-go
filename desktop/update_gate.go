@@ -3,6 +3,7 @@ package desktop
 import (
 	"errors"
 	"sync"
+	"time"
 )
 
 var errUpdateReserved = errors.New("update/shutdown is reserved; finish or cancel the update before starting work / 更新或關閉中，無法開始工作")
@@ -104,5 +105,8 @@ func Stop(a *App) {
 			u.cancel()
 		}
 		u.mu.Unlock()
+	}
+	if a.reportCache != nil {
+		a.reportCache.waitIdle(2 * time.Second)
 	}
 }

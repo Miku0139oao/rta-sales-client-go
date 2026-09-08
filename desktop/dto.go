@@ -417,6 +417,21 @@ type SalesAnalysisResult struct {
 	QueryDurationMS  int64                       `json:"queryDurationMs"`
 }
 
+// SalesAnalysisSnapshot is the last finished report restored for the frontend
+// after a restart. Result is nil when nothing is cached.
+type SalesAnalysisSnapshot struct {
+	Result    *SalesAnalysisResult `json:"result"`
+	ProfileID string               `json:"profileId"`
+	SavedAt   string               `json:"savedAt"`
+}
+
+// WorkbookSession names the workbook the operator last scanned. InputPath is
+// empty when nothing usable is remembered.
+type WorkbookSession struct {
+	InputPath string `json:"inputPath"`
+	SheetName string `json:"sheetName"`
+}
+
 type SalesAnalysisWeek struct {
 	From   string                   `json:"from"`
 	To     string                   `json:"to"`

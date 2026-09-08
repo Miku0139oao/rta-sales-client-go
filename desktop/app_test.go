@@ -252,7 +252,12 @@ func (f *fakeEngine) Apply(ctx context.Context, plan *enginePlan, output string,
 
 func newTestApp(t *testing.T, engine batchEngine, clients clientFactory) (*App, string, *fakeEvents) {
 	t.Helper()
-	root := t.TempDir()
+	return newTestAppAt(t, t.TempDir(), engine, clients)
+}
+
+// newTestAppAt reuses an existing root so tests can simulate a restart.
+func newTestAppAt(t *testing.T, root string, engine batchEngine, clients clientFactory) (*App, string, *fakeEvents) {
+	t.Helper()
 	repository, err := NewFileProfileRepository(root)
 	if err != nil {
 		t.Fatal(err)
@@ -261,11 +266,15 @@ func newTestApp(t *testing.T, engine batchEngine, clients clientFactory) (*App, 
 	if err != nil {
 		t.Fatal(err)
 	}
+	reportCache, err := newReportCacheStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	events := new(fakeEvents)
 	app, err := newApp(appDependencies{
 		profiles: repository, mancodes: mancodes, credentials: securestore.NewMemoryCredentialStore(),
 		cookies: new(fakeCookies), clients: clients, engine: engine,
-		dialogs: new(fakeDialogs), events: events, runtime: fakeRuntime{},
+		dialogs: new(fakeDialogs), events: events, runtime: fakeRuntime{}, reportCache: reportCache,
 	})
 	if err != nil {
 		t.Fatal(err)

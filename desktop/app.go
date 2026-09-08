@@ -29,6 +29,8 @@ type appDependencies struct {
 	dialogs     dialogService
 	events      eventSink
 	runtime     runtimeChecker
+	// reportCache is optional; nil disables on-disk report persistence.
+	reportCache *reportCacheStore
 }
 
 // App is the Wails-bound desktop backend. All plans, providers, store routing,
@@ -45,6 +47,7 @@ type App struct {
 	runtime     runtimeChecker
 	launcher    pathLauncher
 	updates     *updateService
+	reportCache *reportCacheStore
 
 	contextMu              sync.RWMutex
 	ctx                    context.Context
@@ -66,6 +69,8 @@ type App struct {
 	salesResultMu          sync.Mutex
 	salesResult            *SalesAnalysisResult
 	salesPacked            map[string]SalesAnalysisPackedItems
+	salesProfileID         string
+	salesSavedAt           time.Time
 	salesAnalysisBackoff   func(context.Context, time.Duration) error
 }
 
@@ -98,6 +103,7 @@ func newApp(dependencies appDependencies) (*App, error) {
 		dialogs:              dependencies.dialogs,
 		events:               dependencies.events,
 		runtime:              dependencies.runtime,
+		reportCache:          dependencies.reportCache,
 		ctx:                  context.Background(),
 		salesAnalysisBackoff: waitForSalesAnalysisRetry,
 	}, nil
@@ -245,6 +251,7 @@ func (a *App) ScanWorkbook(request ScanWorkbookRequest) (WorkbookScan, error) {
 	}
 	scan.Rows, scan.Stores, scan.Jobs = scan.RowCount, scan.StoreCount, scan.JobCount
 	scan.Accounts = scan.AvailableProfiles
+	a.rememberWorkbookSession(inputPath, scan.SheetName)
 	a.emit(operationID, "scan", 1, 1, "Workbook scan complete / 活頁簿掃描完成")
 	return scan, nil
 }

@@ -9,6 +9,7 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
+	"time"
 
 	rtasales "github.com/Miku0139oao/rta-sales-client-go/rtasales"
 )
@@ -213,6 +214,10 @@ func (a *App) GetSalesAnalysisReportGlyphs(request OperationRequest) (string, er
 }
 
 func (a *App) rememberSalesAnalysis(result SalesAnalysisResult, packed map[string]SalesAnalysisPackedItems) SalesAnalysisResult {
+	return a.rememberSalesAnalysisFor("", result, packed)
+}
+
+func (a *App) rememberSalesAnalysisFor(profileID string, result SalesAnalysisResult, packed map[string]SalesAnalysisPackedItems) SalesAnalysisResult {
 	if packed == nil {
 		packed = make(map[string]SalesAnalysisPackedItems, len(result.Periods))
 		for _, period := range result.Periods {
@@ -224,7 +229,10 @@ func (a *App) rememberSalesAnalysis(result SalesAnalysisResult, packed map[strin
 	a.salesResultMu.Lock()
 	a.salesResult = &slim
 	a.salesPacked = packed
+	a.salesProfileID = strings.TrimSpace(profileID)
+	a.salesSavedAt = time.Now()
 	a.salesResultMu.Unlock()
+	a.persistSalesReport()
 	go debug.FreeOSMemory()
 	return slim
 }
@@ -241,11 +249,18 @@ func (a *App) ClearSalesAnalysis(request OperationRequest) error {
 	operationID := strings.TrimSpace(request.OperationID)
 	_ = a.CancelSalesAnalysis(OperationRequest{OperationID: operationID})
 	a.salesResultMu.Lock()
+	cleared := false
 	if a.salesResult != nil && (operationID == "" || a.salesResult.OperationID == operationID) {
 		a.salesResult = nil
 		a.salesPacked = nil
+		a.salesProfileID = ""
+		a.salesSavedAt = time.Time{}
+		cleared = true
 	}
 	a.salesResultMu.Unlock()
+	if cleared || operationID == "" {
+		a.clearPersistedSalesReport()
+	}
 	go debug.FreeOSMemory()
 	return nil
 }
