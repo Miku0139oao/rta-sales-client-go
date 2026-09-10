@@ -26,7 +26,7 @@ describe('categoryShare', () => {
 });
 
 describe('category comparison shares', () => {
-  it('inserts unsigned share columns beside each period amount', () => {
+  it('stacks share under each period amount on screen and keeps share columns for export', () => {
     const tables = buildAnalysisTables({
       items: [],
       performance: [],
@@ -42,14 +42,22 @@ describe('category comparison shares', () => {
     const table = tables.categories.find((entry) => entry.id === 'categories');
     expect(table?.columns.map((column) => [column.label, column.format])).toEqual([
       ['分類', 'text'],
+      ['本期', 'money'], ['上期', 'money'], ['前期', 'money'], ['去年同期', 'money'],
+      ['較上期', 'percent'], ['較去年同期', 'percent'],
+    ]);
+    expect(table?.rows[0]?.cells).toEqual(['保健', 80, 50, 40, 20, 0.6, 3]);
+    expect(table?.rows[0]?.secondary).toMatchObject({ 0: 'A01', 1: '80.0%', 2: '50.0%', 3: '40.0%', 4: '20.0%' });
+    expect(table?.exportColumns?.map((column) => [column.label, column.format])).toEqual([
+      ['分類', 'text'],
       ['本期', 'money'], ['本期佔比', 'share'],
       ['上期', 'money'], ['上期佔比', 'share'],
       ['前期', 'money'], ['前期佔比', 'share'],
       ['去年同期', 'money'], ['去年同期佔比', 'share'],
       ['較上期', 'percent'], ['較去年同期', 'percent'],
     ]);
-    expect(table?.rows[0]?.cells).toEqual(['保健', 80, 0.8, 50, 0.5, 40, 0.4, 20, 0.2, 0.6, 3]);
-    expect(table?.rows[1]?.cells).toEqual(['美容', 20, 0.2, 50, 0.5, 60, 0.6, 80, 0.8, -0.6, -0.75]);
+    expect(table?.rows[0]?.exportCells).toEqual(['保健', 80, 0.8, 50, 0.5, 40, 0.4, 20, 0.2, 0.6, 3]);
+    expect(table?.rows[1]?.cells).toEqual(['美容', 20, 50, 60, 80, -0.6, -0.75]);
+    expect(table?.rows[1]?.exportCells).toEqual(['美容', 20, 0.2, 50, 0.5, 60, 0.6, 80, 0.8, -0.6, -0.75]);
   });
   it('leaves share blank when a period has not loaded', () => {
     const tables = buildAnalysisTables({
@@ -61,10 +69,13 @@ describe('category comparison shares', () => {
       weekAligned: false,
       topSales: [], topQuantity: [], salesGroups: [], quantityGroups: [], focus: [],
     }, translator('zh-TW'), 'zh-TW', {});
-    const row = tables.categories.find((entry) => entry.id === 'categories')?.rows[0]?.cells;
-    expect(row?.[1]).toBe(80);
-    expect(row?.[2]).toBe(1);
-    expect(row?.[3]).toBeNull();
-    expect(row?.[4]).toBeNull();
+    const row = tables.categories.find((entry) => entry.id === 'categories')?.rows[0];
+    expect(row?.cells?.[1]).toBe(80);
+    expect(row?.secondary?.[1]).toBe('100.0%');
+    expect(row?.cells?.[2]).toBeNull();
+    expect(row?.secondary?.[2]).toBeUndefined();
+    expect(row?.exportCells?.[2]).toBe(1);
+    expect(row?.exportCells?.[3]).toBeNull();
+    expect(row?.exportCells?.[4]).toBeNull();
   });
 });

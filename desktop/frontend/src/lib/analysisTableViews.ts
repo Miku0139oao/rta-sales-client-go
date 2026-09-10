@@ -3,7 +3,7 @@ import type { SalesAnalysisItem, SalesAnalysisPeriodResult, SalesAnalysisTotals,
 import type { FocusGroup } from './analysisFocus';
 import { weeklySegmentRows, storeSegment } from './storeSegment';
 import { periodNeedsItemHydration } from './salesAnalysisItems';
-import { sortAnalysisTable, type AnalysisTable, type TableRow, type CellValue, type CellFormat, type TableSort } from './analysisTable';
+import { formatTableCell, sortAnalysisTable, type AnalysisTable, type TableRow, type CellValue, type CellFormat, type TableSort } from './analysisTable';
 
 type Ranked = { code: string; name: string; amount: number; quantity: number };
 interface Data {
@@ -53,25 +53,52 @@ export function buildAnalysisTables(data: Data, t: Translator, locale: string, s
   current: periodTotal('current'), previous: periodTotal('previous'),
   previous2: periodTotal('previous2'), yearAgo: periodTotal('yearAgo'),
  };
- const categories = table('categories', t('analysis.rolling'), [
+ const shareLabel = (value: number | undefined, total: number | undefined): string | undefined => {
+  const share = categoryShare(value, total);
+  return share === undefined ? undefined : formatTableCell(share, 'share', locale);
+ };
+ const categoryColumns: Array<[string, CellFormat]> = [
+  col('analysis.category','text'),
+  col('analysis.currentPeriod'), col('analysis.previousPeriod'), col('analysis.previous2Period'), col('analysis.yearAgoPeriod'),
+  col('analysis.vsPrevious','percent'), col('analysis.vsYearAgo','percent'),
+ ];
+ const categoryExportColumns: Array<[string, CellFormat]> = [
   col('analysis.category','text'),
   col('analysis.currentPeriod'), col('analysis.shareCurrent','share'),
   col('analysis.previousPeriod'), col('analysis.sharePrevious','share'),
   col('analysis.previous2Period'), col('analysis.sharePrevious2','share'),
   col('analysis.yearAgoPeriod'), col('analysis.shareYearAgo','share'),
   col('analysis.vsPrevious','percent'), col('analysis.vsYearAgo','percent'),
- ], data.categories.map((row) => {
+ ];
+ const categoryRows = data.categories.map((row) => {
   const current = categoryNumber(row.current,'current'), previous = categoryNumber(row.previous,'previous');
   const previous2 = categoryNumber(row.previous2,'previous2'), yearAgo = categoryNumber(row.yearAgo,'yearAgo');
-  return { cells: [
-    row.name,
-    num(current), num(categoryShare(current, totals.current)),
-    num(previous), num(categoryShare(previous, totals.previous)),
-    num(previous2), num(categoryShare(previous2, totals.previous2)),
-    num(yearAgo), num(categoryShare(yearAgo, totals.yearAgo)),
-    num(relativeChange(current,previous)), num(relativeChange(current,yearAgo)),
-  ], secondary: {0:row.code} };
- }));
+  const currentShare = categoryShare(current, totals.current), previousShare = categoryShare(previous, totals.previous);
+  const previous2Share = categoryShare(previous2, totals.previous2), yearAgoShare = categoryShare(yearAgo, totals.yearAgo);
+  const secondary: Record<number, string> = { 0: row.code };
+  const currentShareLabel = shareLabel(current, totals.current);
+  const previousShareLabel = shareLabel(previous, totals.previous);
+  const previous2ShareLabel = shareLabel(previous2, totals.previous2);
+  const yearAgoShareLabel = shareLabel(yearAgo, totals.yearAgo);
+  if (currentShareLabel) secondary[1] = currentShareLabel;
+  if (previousShareLabel) secondary[2] = previousShareLabel;
+  if (previous2ShareLabel) secondary[3] = previous2ShareLabel;
+  if (yearAgoShareLabel) secondary[4] = yearAgoShareLabel;
+  return {
+    cells: [row.name, num(current), num(previous), num(previous2), num(yearAgo), num(relativeChange(current,previous)), num(relativeChange(current,yearAgo))],
+    secondary,
+    exportCells: [
+      row.name,
+      num(current), num(currentShare), num(previous), num(previousShare),
+      num(previous2), num(previous2Share), num(yearAgo), num(yearAgoShare),
+      num(relativeChange(current,previous)), num(relativeChange(current,yearAgo)),
+    ],
+  };
+ });
+ const categories = {
+  ...table('categories', t('analysis.rolling'), categoryColumns, categoryRows),
+  exportColumns: categoryExportColumns.map(([label, format]) => ({ label, format })),
+ };
  const stores = table('stores', t('analysis.storeComparison'), [col('analysis.store','text'),col('analysis.currentPeriod'),col('analysis.previousPeriod'),col('analysis.yearAgoPeriod'),col('analysis.vsPrevious','percent'),col('analysis.vsYearAgo','percent'),col('analysis.transactions','number'),col('analysis.basket')], data.stores.map((row) => ({ cells: [row.id,num(row.current?.netSalesAmount),num(row.previous?.netSalesAmount),num(row.yearAgo?.netSalesAmount),num(relativeChange(row.current?.netSalesAmount,row.previous?.netSalesAmount)),num(relativeChange(row.current?.netSalesAmount,row.yearAgo?.netSalesAmount)),num(row.current?.transactionCount),num(row.current?.transactionCount && row.current.trendNetSalesAmount !== undefined ? row.current.trendNetSalesAmount/row.current.transactionCount : undefined)],secondary:{0:row.label} })));
  const weeklyRows = data.week ? weeklySegmentRows(data.week.stores ?? [], {store:(store)=>store.businessId||store.label||'',localTotal:t('analysis.localTotal'),touristTotal:t('analysis.touristTotal'),allStores:t('analysis.allStores')}).map((row):TableRow => ({ fixed:row.kind!=='store',group:storeSegment(row.values),secondary:row.kind==='store'?{0:row.values.label||''}:undefined,cells:[row.label,num(row.values.salesTw),num(row.values.salesLw),num(row.values.salesTw-row.values.salesLw),num(relativeChange(row.values.salesTw,row.values.salesLw)),num(relativeChange(row.values.weekdaySalesTw,row.values.weekdaySalesLw)),num(relativeChange(row.values.weekendSalesTw,row.values.weekendSalesLw)),num(relativeChange(row.values.customersTw,row.values.customersLw))] })) : [];
  const weekly = table('weekly',t('analysis.weeklyTitle'),[col('analysis.store','text'),col(data.weekAligned?'analysis.currentPeriod':'analysis.thisWeek'),col(data.weekAligned?'analysis.previousPeriod':'analysis.lastWeek'),col('analysis.variance'),col('analysis.variancePercent','percent'),col('analysis.weekday','percent'),col('analysis.weekend','percent'),col('analysis.customers','percent')],weeklyRows);

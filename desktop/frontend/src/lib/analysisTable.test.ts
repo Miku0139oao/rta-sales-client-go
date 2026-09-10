@@ -36,6 +36,11 @@ describe('analysis table snapshots',()=>{
   const source:AnalysisTable={id:'categories',name:'分類',columns:[{label:'佔比',format:'share'}],rows:[{cells:[0.25]}]};
   expect(analysisTableTSV(source)).toContain('25%');
  });
+ it('exports stacked share rows as separate numeric columns',()=>{
+  const source:AnalysisTable={id:'categories',name:'分類',columns:[{label:'本期',format:'money'}],exportColumns:[{label:'本期',format:'money'},{label:'本期佔比',format:'share'}],rows:[{cells:[80],secondary:{1:'80.0%'},exportCells:[80,0.8]}]};
+  expect(workbookSnapshot([source],[],'mix.xlsx').sheets[0]?.rows[0]).toEqual([80,0.8]);
+  expect(analysisTableTSV(source).split('\r\n')[1]).toBe('80\t80%');
+ });
  it('rejects an oversized export before dispatch',()=>{
   const source=table(); source.rows=Array.from({length:250001},()=>({cells:['1',1]}));
   expect(()=>workbookSnapshot([source],[],'huge.xlsx')).toThrow('table_limit');

@@ -40,6 +40,7 @@
   .numeric { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
   td strong { font-weight: 500; }
   .secondary { display: block; margin-top: 3px; font-size: 11px; color: var(--md-sys-color-on-surface-variant); }
+  .numeric .secondary { font-variant-numeric: tabular-nums; }
   .product-link { border: 0; padding: 4px 0; background: transparent; color: var(--md-sys-color-primary); text-align: left; font: inherit; font-weight: 650; line-height: 1.45; cursor: pointer; overflow-wrap: anywhere; }
   button:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 3px; }
   .table-scroll:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: -2px; }

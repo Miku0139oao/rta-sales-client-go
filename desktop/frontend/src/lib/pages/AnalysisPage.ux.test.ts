@@ -571,7 +571,7 @@ describe('sales analysis UX recovery', () => {
     const categoryTable = screen.getByRole('heading', { name: '三期分類比較' }).closest('section');
     const category = within(categoryTable!).getByText('BEAUTY CARE').closest('tr');
     expect(category).toHaveTextContent('HK$20.00');
-    expect(category).toHaveTextContent('100%');
+    expect(category).toHaveTextContent('100.0%');
     expect(category).not.toHaveTextContent('HK$0.00');
     expect(categoryTable).toHaveTextContent('佔比是本表篩選後');
 
