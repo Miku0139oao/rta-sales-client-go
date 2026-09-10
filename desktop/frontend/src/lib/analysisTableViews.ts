@@ -21,6 +21,8 @@ interface Data {
 }
 const num = (value: number | undefined): CellValue => value !== undefined && Number.isFinite(value) ? value : null;
 export const relativeChange = (value: number | undefined, base: number | undefined): number | undefined => value === undefined || base === undefined || base === 0 ? undefined : (value - base) / Math.abs(base);
+export const categoryShare = (value: number | undefined, total: number | undefined): number | undefined =>
+  value === undefined || total === undefined || total === 0 || !Number.isFinite(value) || !Number.isFinite(total) ? undefined : value / total;
 export function buildAnalysisTables(data: Data, t: Translator, locale: string, sorts: Record<string, TableSort>): Record<string, AnalysisTable[]> {
  const table = (id: string, name: string, columns: Array<[string, CellFormat]>, rows: TableRow[]): AnalysisTable => sortAnalysisTable({ id, name, columns: columns.map(([label, format]) => ({ label, format })), rows }, sorts[id], locale);
  const col = (key: string, format: CellFormat = 'money'): [string, CellFormat] => [t(key), format];
@@ -36,9 +38,39 @@ export function buildAnalysisTables(data: Data, t: Translator, locale: string, s
   cells: [item.storeId, item.category4 || item.category5 || t('analysis.uncategorized'), item.articleCode, item.articleName, num(item.transactionCount), num(item.saleAmount), num(item.returnAmount), num(item.netQuantity), num(item.netSalesAmount)],
   secondary: { 0: item.storeLabel, 1: item.category4Code || item.category5Code || '', 3: item.brandName || '' }, product: { column: 3, code: item.articleCode, name: item.articleName },
  })));
- const categories = table('categories', t('analysis.rolling'), [col('analysis.category','text'),col('analysis.currentPeriod'),col('analysis.previousPeriod'),col('analysis.previous2Period'),col('analysis.yearAgoPeriod'),col('analysis.vsPrevious','percent'),col('analysis.vsYearAgo','percent')], data.categories.map((row) => {
-  const current = categoryNumber(row.current,'current'), previous = categoryNumber(row.previous,'previous'), yearAgo = categoryNumber(row.yearAgo,'yearAgo');
-  return { cells: [row.name,num(current),num(previous),num(categoryNumber(row.previous2,'previous2')),num(yearAgo),num(relativeChange(current,previous)),num(relativeChange(current,yearAgo))], secondary: {0:row.code} };
+ const periodTotal = (key: 'current' | 'previous' | 'previous2' | 'yearAgo'): number | undefined => {
+  let total = 0;
+  let present = false;
+  for (const row of data.categories) {
+    const value = categoryNumber(row[key], key);
+    if (value === undefined) continue;
+    present = true;
+    total += value;
+  }
+  return present ? total : undefined;
+ };
+ const totals = {
+  current: periodTotal('current'), previous: periodTotal('previous'),
+  previous2: periodTotal('previous2'), yearAgo: periodTotal('yearAgo'),
+ };
+ const categories = table('categories', t('analysis.rolling'), [
+  col('analysis.category','text'),
+  col('analysis.currentPeriod'), col('analysis.shareCurrent','share'),
+  col('analysis.previousPeriod'), col('analysis.sharePrevious','share'),
+  col('analysis.previous2Period'), col('analysis.sharePrevious2','share'),
+  col('analysis.yearAgoPeriod'), col('analysis.shareYearAgo','share'),
+  col('analysis.vsPrevious','percent'), col('analysis.vsYearAgo','percent'),
+ ], data.categories.map((row) => {
+  const current = categoryNumber(row.current,'current'), previous = categoryNumber(row.previous,'previous');
+  const previous2 = categoryNumber(row.previous2,'previous2'), yearAgo = categoryNumber(row.yearAgo,'yearAgo');
+  return { cells: [
+    row.name,
+    num(current), num(categoryShare(current, totals.current)),
+    num(previous), num(categoryShare(previous, totals.previous)),
+    num(previous2), num(categoryShare(previous2, totals.previous2)),
+    num(yearAgo), num(categoryShare(yearAgo, totals.yearAgo)),
+    num(relativeChange(current,previous)), num(relativeChange(current,yearAgo)),
+  ], secondary: {0:row.code} };
  }));
  const stores = table('stores', t('analysis.storeComparison'), [col('analysis.store','text'),col('analysis.currentPeriod'),col('analysis.previousPeriod'),col('analysis.yearAgoPeriod'),col('analysis.vsPrevious','percent'),col('analysis.vsYearAgo','percent'),col('analysis.transactions','number'),col('analysis.basket')], data.stores.map((row) => ({ cells: [row.id,num(row.current?.netSalesAmount),num(row.previous?.netSalesAmount),num(row.yearAgo?.netSalesAmount),num(relativeChange(row.current?.netSalesAmount,row.previous?.netSalesAmount)),num(relativeChange(row.current?.netSalesAmount,row.yearAgo?.netSalesAmount)),num(row.current?.transactionCount),num(row.current?.transactionCount && row.current.trendNetSalesAmount !== undefined ? row.current.trendNetSalesAmount/row.current.transactionCount : undefined)],secondary:{0:row.label} })));
  const weeklyRows = data.week ? weeklySegmentRows(data.week.stores ?? [], {store:(store)=>store.businessId||store.label||'',localTotal:t('analysis.localTotal'),touristTotal:t('analysis.touristTotal'),allStores:t('analysis.allStores')}).map((row):TableRow => ({ fixed:row.kind!=='store',group:storeSegment(row.values),secondary:row.kind==='store'?{0:row.values.label||''}:undefined,cells:[row.label,num(row.values.salesTw),num(row.values.salesLw),num(row.values.salesTw-row.values.salesLw),num(relativeChange(row.values.salesTw,row.values.salesLw)),num(relativeChange(row.values.weekdaySalesTw,row.values.weekdaySalesLw)),num(relativeChange(row.values.weekendSalesTw,row.values.weekendSalesLw)),num(relativeChange(row.values.customersTw,row.values.customersLw))] })) : [];

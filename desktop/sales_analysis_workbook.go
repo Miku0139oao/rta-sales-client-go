@@ -85,7 +85,7 @@ func buildAnalysisWorkbook(request AnalysisWorkbookRequest) ([]byte, error) {
 			return nil, errors.New("workbook exceeds cell limit")
 		}
 		for _, col := range sheet.Columns {
-			if !validText(col.Label) || col.Label == "" || (col.Format != "text" && col.Format != "number" && col.Format != "money" && col.Format != "percent") {
+			if !validText(col.Label) || col.Label == "" || (col.Format != "text" && col.Format != "number" && col.Format != "money" && col.Format != "percent" && col.Format != "share") {
 				return nil, errors.New("invalid column")
 			}
 		}
@@ -128,7 +128,7 @@ func buildAnalysisWorkbook(request AnalysisWorkbookRequest) ([]byte, error) {
 		return nil, err
 	}
 	styles := map[string]int{}
-	for name, format := range map[string]string{"text": "@", "number": "#,##0.##", "money": "#,##0.00", "percent": "0.0%"} {
+	for name, format := range map[string]string{"text": "@", "number": "#,##0.##", "money": "#,##0.00", "percent": "0.0%", "share": "0.0%"} {
 		id, err := f.NewStyle(&excelize.Style{CustomNumFmt: &format})
 		if err != nil {
 			return nil, err

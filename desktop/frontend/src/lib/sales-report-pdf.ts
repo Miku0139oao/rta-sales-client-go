@@ -110,6 +110,7 @@ interface Labels {
   focusQuantity: string;
   categoryPerformance: string;
   category: string;
+  share: string;
   topSales: string;
   topQuantity: string;
   salesRanking: string;
@@ -1309,6 +1310,7 @@ function drawCategoryRankingPage(
   }
   const cardsPerPage = categoryRankingCardsPerPage(limit);
   const cards = expandCategoryRankingCards(groups, limit, categoryRankingCardRowLimit(limit));
+  const total = groups.reduce((sum, group) => sum + (metric === 'amount' ? group.amount : group.quantity), 0);
   for (let offset = 0; offset < cards.length; offset += cardsPerPage) {
     if (offset > 0) doc.addPage();
     drawPageHeader(doc, title, `${period.from} - ${period.to}`, storeId, storeLabel);
@@ -1317,7 +1319,10 @@ function drawCategoryRankingPage(
     pageGroups.forEach((group, index) => {
       const slot = slots[index];
       if (!slot) return;
-      drawCategoryCard(doc, slot.x, slot.y, slot.width, slot.height, group, metric, labels, locale, group.rankOffset ?? 0);
+      drawCategoryCard(
+        doc, slot.x, slot.y, slot.width, slot.height, group, metric, labels, locale, group.rankOffset ?? 0,
+        categoryShareOf(metric === 'amount' ? group.amount : group.quantity, total),
+      );
     });
   }
 }
@@ -1458,42 +1463,69 @@ function drawComparisonPanel(doc: jsPDF, x: number, y: number, width: number, he
 function drawCategoryPerformancePanel(doc: jsPDF, x: number, y: number, width: number, height: number, current: StorePeriod, previous: StorePeriod | undefined, yearAgo: StorePeriod | undefined, level: SalesReportCategoryLevel, labels: Labels, locale: Locale): void {
   card(doc, x, y, width, height);
   panelTitle(doc, x, y, width, labels.categoryPerformance);
-  const currentGroups = (current.amountGroups ?? categoryGroups(current.items, level, 'amount', labels.uncategorized)).slice(0, 6);
-  const previousMap = previous?.amountGroups
-    ? new Map(previous.amountGroups.map((group) => [group.id, group]))
-    : categoryGroupMap(previous?.items ?? [], level, labels.uncategorized);
-  const yearAgoMap = yearAgo?.amountGroups
-    ? new Map(yearAgo.amountGroups.map((group) => [group.id, group]))
-    : categoryGroupMap(yearAgo?.items ?? [], level, labels.uncategorized);
+  const allCurrent = current.amountGroups ?? categoryGroups(current.items, level, 'amount', labels.uncategorized);
+  const currentGroups = allCurrent.slice(0, 6);
+  const previousGroups = previous?.amountGroups
+    ?? (previous ? categoryGroups(previous.items, level, 'amount', labels.uncategorized) : []);
+  const yearAgoGroups = yearAgo?.amountGroups
+    ?? (yearAgo ? categoryGroups(yearAgo.items, level, 'amount', labels.uncategorized) : []);
+  const previousMap = new Map(previousGroups.map((group) => [group.id, group]));
+  const yearAgoMap = new Map(yearAgoGroups.map((group) => [group.id, group]));
+  const currentTotal = categoryAmountTotal(allCurrent);
+  const previousTotal = categoryAmountTotal(previousGroups);
+  const yearAgoTotal = categoryAmountTotal(yearAgoGroups);
   const innerX = x + 4;
   const tableY = y + 18;
   const innerWidth = width - 8;
-  const columns = [92, 38, 38, 32, 38, innerWidth - 238];
-  drawTableHeader(doc, innerX, tableY, columns, [labels.category, labels.current, labels.previous, labels.vsPrevious, labels.yearAgo, labels.vsYearAgo]);
+  const columns = [54, 32, 22, 32, 22, 26, 32, 22, innerWidth - 242];
+  drawTableHeader(doc, innerX, tableY, columns, [
+    labels.category, labels.current, labels.share, labels.previous, labels.share,
+    labels.vsPrevious, labels.yearAgo, labels.share, labels.vsYearAgo,
+  ]);
   currentGroups.forEach((group, index) => {
     const rowY = tableY + 9.4 + index * 8.6;
     if (index % 2 === 0) {
       setFill(doc, COLORS.surface);
       doc.roundedRect(innerX, rowY - 5, innerWidth, 8, 1.2, 1.2, 'F');
     }
-    setText(doc, COLORS.ink, 7.6, 'bold');
+    setText(doc, COLORS.ink, 7.4, 'bold');
     doc.text(fitText(doc, categoryLabel(group, locale), columns[0] - 4), innerX + 2, rowY);
     const previousAmount = previousMap.get(group.id)?.amount;
     const yearAgoAmount = yearAgoMap.get(group.id)?.amount;
     const values: Array<{ text: string; color: RGB; bold?: boolean }> = [
       { text: formatMoney(group.amount), color: COLORS.ink, bold: true },
+      shareCell(categoryShareOf(group.amount, currentTotal)),
       { text: previousAmount === undefined ? '-' : formatMoney(previousAmount), color: COLORS.slate },
+      shareCell(categoryShareOf(previousAmount, previousTotal)),
       percentCell(delta(group.amount, previousAmount)),
       { text: yearAgoAmount === undefined ? '-' : formatMoney(yearAgoAmount), color: COLORS.slate },
+      shareCell(categoryShareOf(yearAgoAmount, yearAgoTotal)),
       percentCell(delta(group.amount, yearAgoAmount)),
     ];
     let cellX = innerX + columns[0];
     values.forEach((value, valueIndex) => {
-      setText(doc, value.color, 7.1, value.bold ? 'bold' : 'normal');
+      setText(doc, value.color, 6.8, value.bold ? 'bold' : 'normal');
       doc.text(value.text, cellX + columns[valueIndex + 1] - 2, rowY, { align: 'right' });
       cellX += columns[valueIndex + 1];
     });
   });
+}
+
+function categoryAmountTotal(groups: CategoryGroup[]): number {
+  return groups.reduce((sum, group) => sum + group.amount, 0);
+}
+
+function categoryShareOf(value: number | undefined, total: number): number | undefined {
+  if (value === undefined || total === 0 || !Number.isFinite(value) || !Number.isFinite(total)) return undefined;
+  return value / total;
+}
+
+function formatShare(value: number): string {
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function shareCell(share: number | undefined): { text: string; color: RGB; bold?: boolean } {
+  return { text: share === undefined ? '-' : formatShare(share), color: COLORS.slate };
 }
 
 function percentCell(change: number | undefined): { text: string; color: RGB; bold?: boolean } {
@@ -1663,14 +1695,16 @@ function drawRankingPanel(
   });
 }
 
-function drawCategoryCard(doc: jsPDF, x: number, y: number, width: number, height: number, group: CategoryGroup, metric: Metric, labels: Labels, locale: Locale, rankOffset = 0): void {
+function drawCategoryCard(doc: jsPDF, x: number, y: number, width: number, height: number, group: CategoryGroup, metric: Metric, labels: Labels, locale: Locale, rankOffset = 0, share?: number): void {
   card(doc, x, y, width, height);
   setFill(doc, COLORS.tealSoft);
   doc.roundedRect(x, y, width, 11, 2, 2, 'F');
   setText(doc, COLORS.ink, 7.7, 'bold');
-  doc.text(fitText(doc, categoryLabel(group, locale), width - 31), x + 3, y + 7.1);
+  doc.text(fitText(doc, categoryLabel(group, locale), width - 48), x + 3, y + 7.1);
   setText(doc, COLORS.teal, 6.6, 'bold');
-  doc.text(metric === 'amount' ? compactMoney(group.amount) : formatQuantity(group.quantity), x + width - 3, y + 7.1, { align: 'right' });
+  const metricText = metric === 'amount' ? compactMoney(group.amount) : formatQuantity(group.quantity);
+  const right = share === undefined ? metricText : `${metricText}  ${formatShare(share)}`;
+  doc.text(fitText(doc, right, 44), x + width - 3, y + 7.1, { align: 'right' });
 
   const metrics = categoryCardRowMetrics(height);
   const innerX = x + 2.5;
@@ -1840,7 +1874,7 @@ function reportLabels(locale: Locale, rankingLimit: number = DEFAULT_RANKING_LIM
       vsPrevious: 'vs previous', vsYearAgo: 'vs year ago',
       focusTitle: 'Watch next', focusHealth: 'Health', focusSkin: 'Skin', focusPC: 'Personal care',
       focusSales: 'Top 10 by sales', focusQuantity: 'Top 10 by quantity',
-      categoryPerformance: 'Category performance', category: 'Category',
+      categoryPerformance: 'Category performance', category: 'Category', share: 'Share',
       topSales: `Top ${limit} by sales`, topQuantity: `Top ${limit} by quantity`, salesRanking: 'Category sales ranking',
       quantityRanking: 'Category quantity ranking', product: 'Product', amount: 'Sales', quantity: 'Qty', uncategorized: 'Uncategorized',
       allStores: 'All stores', localTotal: 'Local total', touristTotal: 'Tourist total',
@@ -1858,7 +1892,7 @@ function reportLabels(locale: Locale, rankingLimit: number = DEFAULT_RANKING_LIM
     vsPrevious: '較上期', vsYearAgo: '較去年同期',
     focusTitle: '接下來關注', focusHealth: '保健', focusSkin: '護膚', focusPC: '個護',
     focusSales: '銷售額 Top 10', focusQuantity: '銷量 Top 10',
-    categoryPerformance: '分類表現', category: '分類',
+    categoryPerformance: '分類表現', category: '分類', share: '佔比',
     topSales: `銷售額 Top ${limit}`, topQuantity: `銷量 Top ${limit}`, salesRanking: '分類商品銷售排行',
     quantityRanking: '分類商品銷量排行', product: '商品', amount: '銷售額', quantity: '銷量', uncategorized: '未分類',
     allStores: '全部門店', localTotal: '本地合計', touristTotal: '旅客合計',
