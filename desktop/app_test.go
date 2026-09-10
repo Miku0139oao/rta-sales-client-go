@@ -270,6 +270,11 @@ func newTestAppAt(t *testing.T, root string, engine batchEngine, clients clientF
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		// Background persist must finish before TempDir cleanup; Windows cannot
+		// remove a directory that still has open or newly written files.
+		reportCache.pending.Wait()
+	})
 	events := new(fakeEvents)
 	app, err := newApp(appDependencies{
 		profiles: repository, mancodes: mancodes, credentials: securestore.NewMemoryCredentialStore(),
