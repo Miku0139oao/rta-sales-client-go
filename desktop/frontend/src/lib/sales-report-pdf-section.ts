@@ -83,7 +83,7 @@ export function parseSummary(text: string) {
   const net = source.match(/淨銷售額\s+(HK\$[0-9,.]+)\s+(HK\$[0-9,.]+)\s+(HK\$[0-9,.]+)\s+([+\-][0-9.]+%)\s+([+\-][0-9.]+%)/);
   const qty = source.match(/淨銷售數量\s+([0-9,]+)\s+([0-9,]+)\s+([0-9,]+)\s+([+\-][0-9.]+%)\s+([+\-][0-9.]+%)/);
   const categories: Array<{ code: string; current?: number; previous?: number; yearAgo?: number }> = [];
-  const categoryRe = /\b([A-Z]\d{2})\s+\S+\s+(HK\$[0-9,.]+)\s+(HK\$[0-9,.]+)\s+[+\-][0-9.]+%\s+(HK\$[0-9,.]+)/g;
+  const categoryRe = /\b([A-Z]\d{2})\s+\S+\s+(HK\$[0-9,.]+)\s+(?:\d+\.\d+%|-)\s+(HK\$[0-9,.]+)\s+(?:\d+\.\d+%|-)\s+[+\-][0-9.]+%\s+(HK\$[0-9,.]+)/g;
   let match: RegExpExecArray | null;
   while ((match = categoryRe.exec(source))) {
     categories.push({

@@ -1,8 +1,8 @@
 export type CellValue = string | number | null;
-export type CellFormat = 'text' | 'number' | 'money' | 'percent';
+export type CellFormat = 'text' | 'number' | 'money' | 'percent' | 'share';
 export interface TableColumn { label: string; format: CellFormat }
-export interface TableRow { cells: CellValue[]; secondary?: Record<number, string>; product?: { column: number; code: string; name: string }; fixed?: boolean; group?: string }
-export interface AnalysisTable { id: string; name: string; columns: TableColumn[]; rows: TableRow[] }
+export interface TableRow { cells: CellValue[]; secondary?: Record<number, string>; product?: { column: number; code: string; name: string }; fixed?: boolean; group?: string; exportCells?: CellValue[] }
+export interface AnalysisTable { id: string; name: string; columns: TableColumn[]; rows: TableRow[]; exportColumns?: TableColumn[] }
 export interface TableSort { column: number; direction: 'ascending' | 'descending' }
 export interface AnalysisWorkbookRequest { filename: string; context: string[]; sheets: Array<{ name: string; columns: TableColumn[]; rows: CellValue[][] }> }
 export const MAX_TABLE_CELLS = 500000;
@@ -32,7 +32,8 @@ export function formatTableCell(value: CellValue, format: CellFormat, locale: st
   return new Intl.NumberFormat(locale, format === 'money'
     ? { style: 'currency', currency: 'HKD', maximumFractionDigits: 2 }
     : format === 'percent' ? { style: 'percent', signDisplay: 'always', maximumFractionDigits: 1 }
-      : { maximumFractionDigits: 2 }).format(value);
+      : format === 'share' ? { style: 'percent', minimumFractionDigits: 1, maximumFractionDigits: 1 }
+        : { maximumFractionDigits: 2 }).format(value);
 }
 function safeTSV(value: CellValue): string {
   if (value === null) return '';
@@ -41,13 +42,24 @@ function safeTSV(value: CellValue): string {
   // Spreadsheet paste must not turn product names into executable formulas.
   return /^[\s]*[=+@-]/.test(clean) || /^0\d+$/.test(clean) || /^\d{16,}$/.test(clean) ? `'${clean}` : clean;
 }
+function exportColumnsOf(table: AnalysisTable): TableColumn[] {
+  return table.exportColumns ?? table.columns;
+}
+function exportCellsOf(row: TableRow): CellValue[] {
+  return row.exportCells ?? row.cells;
+}
 export function analysisTableTSV(table: AnalysisTable): string {
-  return [table.columns.map((column) => safeTSV(column.label)).join('\t'),
-    ...table.rows.map((row) => row.cells.map((value, index) => table.columns[index]?.format === 'percent' && typeof value === 'number'
-      ? `${Number((value * 100).toFixed(4))}%` : safeTSV(value)).join('\t'))].join('\r\n');
+  const columns = exportColumnsOf(table);
+  return [columns.map((column) => safeTSV(column.label)).join('\t'),
+    ...table.rows.map((row) => exportCellsOf(row).map((value, index) => {
+      const format = columns[index]?.format;
+      return (format === 'percent' || format === 'share') && typeof value === 'number'
+        ? `${Number((value * 100).toFixed(4))}%` : safeTSV(value);
+    }).join('\t'))].join('\r\n');
 }
 export function workbookSnapshot(tables: AnalysisTable[], context: string[], filename: string): AnalysisWorkbookRequest {
-  if (!tables.length || tables.reduce((count, table) => count + table.rows.length * table.columns.length, 0) > MAX_TABLE_CELLS) throw new Error('table_limit');
+  const cells = tables.reduce((count, table) => count + table.rows.length * exportColumnsOf(table).length, 0);
+  if (!tables.length || cells > MAX_TABLE_CELLS) throw new Error('table_limit');
   return { filename, context: [...context], sheets: tables.map((table) => ({ name: table.name,
-    columns: table.columns.map((column) => ({ ...column })), rows: table.rows.map((row) => [...row.cells]) })) };
+    columns: exportColumnsOf(table).map((column) => ({ ...column })), rows: table.rows.map((row) => [...exportCellsOf(row)]) })) };
 }

@@ -21,7 +21,7 @@
   import ProductDetailsDialog from './ProductDetailsDialog.svelte';
   import AnalysisInsights from './AnalysisInsights.svelte';
   import { buildSalesInsights, salesInsightSheets } from '../salesInsights';
-  import { buildAnalysisTables } from '../analysisTableViews';
+  import { buildAnalysisTables, categoryShare } from '../analysisTableViews';
   import type { TableSort } from '../analysisTable';
   import { ANALYSIS_PRESETS_KEY, loadAnalysisPresets, analysisPresetShortcuts, markAnalysisPresetUsed, normalizePresetDraft, resolvePresetQuery, type AnalysisPreset, type AnalysisPresetDraft, type PresetFilters } from '../analysisPresets';
   import {
@@ -96,7 +96,7 @@
   };
   type TopItem = { id: string; code: string; name: string; brand: string; amount: number; quantity: number };
   type CategoryRankingGroup = {
-    id: string; code: string; name: string; amount: number; quantity: number; items: TopItem[];
+    id: string; code: string; name: string; amount: number; quantity: number; share?: number; items: TopItem[];
   };
   type StoreComparisonRow = {
     id: string; label: string; current?: SalesAnalysisTotals; previous?: SalesAnalysisTotals; yearAgo?: SalesAnalysisTotals;
@@ -1598,11 +1598,13 @@
       group.quantity += item.netQuantity;
       grouped.set(id, group);
     }
-    return [...grouped.entries()]
-      .map(([id, group]) => ({
-        id, code: group.code, name: group.name, amount: group.amount, quantity: group.quantity,
-        items: buildTopItems(group.items, sortBy).slice(0, limit),
-      }))
+    const groups = [...grouped.entries()].map(([id, group]) => ({
+      id, code: group.code, name: group.name, amount: group.amount, quantity: group.quantity,
+      items: buildTopItems(group.items, sortBy).slice(0, limit),
+    }));
+    const total = groups.reduce((sum, group) => sum + (sortBy === 'amount' ? group.amount : group.quantity), 0);
+    return groups
+      .map((group) => ({ ...group, share: categoryShare(sortBy === 'amount' ? group.amount : group.quantity, total) }))
       .sort((left, right) => (sortBy === 'amount' ? right.amount - left.amount : right.quantity - left.quantity) || left.id.localeCompare(right.id, settings.locale))
       .slice(0, 6);
   }
@@ -1729,6 +1731,11 @@
   function formatPercent(value: number | undefined): string {
     if (value === undefined || !Number.isFinite(value)) return '—';
     return new Intl.NumberFormat(settings.locale, { style: 'percent', signDisplay: 'always', maximumFractionDigits: 1 }).format(value);
+  }
+
+  function formatShare(value: number | undefined): string {
+    if (value === undefined || !Number.isFinite(value)) return '—';
+    return new Intl.NumberFormat(settings.locale, { style: 'percent', maximumFractionDigits: 1 }).format(value);
   }
 
   function deltaClass(value: number | undefined): string {
@@ -2244,6 +2251,7 @@
         <section class="comparison-card surface-card" aria-labelledby="category-title">
           <div class="comparison-heading"><h2 id="category-title">{t('analysis.rolling')}</h2><div class="group-tabs" role="radiogroup" aria-label={t('analysis.groupBy')}>{#each facets as facet}<button type="button" class:active={groupLevel === facet.key} role="radio" aria-checked={groupLevel === facet.key} onclick={() => { groupLevel = facet.key; }}>{t(facet.label)}</button>{/each}</div></div>
           <div class="category-table"><AnalysisDataTable table={dataTables.categories![0]!} {t} locale={settings.locale} sort={tableSorts.categories} onSort={sortData} /></div>
+          <p class="category-share-hint">{t('analysis.shareHint')}</p>
         </section>
 
         <section class="ranking-section surface-card" aria-labelledby="sales-ranking-title">
@@ -2258,7 +2266,7 @@
           <div class="ranking-grid">
             {#each salesRankingGroups as group (group.id)}
               <article class="ranking-group">
-                <header><div><strong>{group.name}</strong>{#if group.code}<span>{group.code}</span>{/if}</div><b>{formatMoney(group.amount)}</b></header>
+                <header><div><strong>{group.name}</strong>{#if group.code}<span>{group.code}</span>{/if}</div><div class="ranking-header-value"><b>{formatMoney(group.amount)}</b>{#if group.share !== undefined}<span>{formatShare(group.share)}</span>{/if}</div></header>
                 <ol>{#each group.items as item, index}<li><span class="rank">{index + 1}</span><div class="ranking-product">{@render productName(item.code, item.name, salesRankingPeriod?.key)}<span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div><div class="ranking-values"><b>{formatMoney(item.amount)}</b><span>{formatNumber(item.quantity)} {t('analysis.units')}</span></div></li>{/each}</ol>
               </article>
             {:else}<div class="ranking-empty">{itemEmptyLabel(salesRankingPeriod, hydrationFailures)}</div>{/each}
@@ -2277,7 +2285,7 @@
           <div class="ranking-grid">
             {#each quantityRankingGroups as group (group.id)}
               <article class="ranking-group">
-                <header><div><strong>{group.name}</strong>{#if group.code}<span>{group.code}</span>{/if}</div><b>{formatNumber(group.quantity)} {t('analysis.units')}</b></header>
+                <header><div><strong>{group.name}</strong>{#if group.code}<span>{group.code}</span>{/if}</div><div class="ranking-header-value"><b>{formatNumber(group.quantity)} {t('analysis.units')}</b>{#if group.share !== undefined}<span>{formatShare(group.share)}</span>{/if}</div></header>
                 <ol>{#each group.items as item, index}<li><span class="rank">{index + 1}</span><div class="ranking-product">{@render productName(item.code, item.name, quantityRankingPeriod?.key)}<span>{item.code}{item.brand ? ` · ${item.brand}` : ''}</span></div><div class="ranking-values"><b>{formatNumber(item.quantity)} {t('analysis.units')}</b><span>{formatMoney(item.amount)}</span></div></li>{/each}</ol>
               </article>
             {:else}<div class="ranking-empty">{itemEmptyLabel(quantityRankingPeriod, hydrationFailures)}</div>{/each}
@@ -2747,7 +2755,10 @@
   .ranking-group > header > div { display: grid; min-width: 0; gap: 2px; }
   .ranking-group > header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ranking-group > header span { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
+  .ranking-group > header .ranking-header-value { display: grid; justify-items: end; gap: 2px; }
+  .ranking-group > header .ranking-header-value span { font-variant-numeric: tabular-nums; }
   .ranking-group > header b { color: var(--app-summary-value); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .category-share-hint { margin: 0; padding: 4px 4px 2px; color: var(--md-sys-color-on-surface-variant); font-size: 12px; line-height: 1.45; }
   .ranking-group ol { display: grid; margin: 0; padding: 0 12px 8px; list-style: none; }
   .ranking-group li { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 52px; padding: 6px 0; border-top: 1px solid var(--app-table-border); }
   .ranking-group li:hover { background: var(--md-sys-color-surface-container-low); }

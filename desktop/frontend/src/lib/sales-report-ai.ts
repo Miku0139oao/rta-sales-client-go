@@ -203,28 +203,28 @@ export function buildSalesAnalysisAIMarkdown(input: SalesReportAIInput): string 
   if (categories.length === 0) {
     lines.push(copy.noRows, '');
   } else {
-    const headers = [copy.category, copy.current];
-    const aligns = ['---', '---:'];
+    const headers = [copy.category, copy.current, copy.share];
+    const aligns = ['---', '---:', '---:'];
     if (previous) {
-      headers.push(copy.previous, copy.vsPrevious);
-      aligns.push('---:', '---:');
+      headers.push(copy.previous, copy.share, copy.vsPrevious);
+      aligns.push('---:', '---:', '---:');
     }
     if (previous2) {
-      headers.push(copy.previous2, copy.vsPrevious2);
-      aligns.push('---:', '---:');
+      headers.push(copy.previous2, copy.share, copy.vsPrevious2);
+      aligns.push('---:', '---:', '---:');
     }
     if (yearAgo) {
-      headers.push(copy.yearAgo, copy.vsYearAgo);
-      aligns.push('---:', '---:');
+      headers.push(copy.yearAgo, copy.share, copy.vsYearAgo);
+      aligns.push('---:', '---:', '---:');
     }
     headers.push(copy.quantity);
     aligns.push('---:');
     lines.push(`| ${headers.join(' | ')} |`, `| ${aligns.join(' | ')} |`);
     for (const group of categories) {
-      const cells = [mdCell(group.code ? `${group.code} ${group.name}` : group.name), money(group.amount)];
-      if (previous) cells.push(money(group.previousAmount), percent(group.amount, group.previousAmount));
-      if (previous2) cells.push(money(group.previous2Amount), percent(group.amount, group.previous2Amount));
-      if (yearAgo) cells.push(money(group.yearAgoAmount), percent(group.amount, group.yearAgoAmount));
+      const cells = [mdCell(group.code ? `${group.code} ${group.name}` : group.name), money(group.amount), shareText(group.share)];
+      if (previous) cells.push(money(group.previousAmount), shareText(group.previousShare), percent(group.amount, group.previousAmount));
+      if (previous2) cells.push(money(group.previous2Amount), shareText(group.previous2Share), percent(group.amount, group.previous2Amount));
+      if (yearAgo) cells.push(money(group.yearAgoAmount), shareText(group.yearAgoShare), percent(group.amount, group.yearAgoAmount));
       cells.push(qty(group.quantity));
       lines.push(`| ${cells.join(' | ')} |`);
     }
@@ -347,16 +347,30 @@ function comparedCategories(
   const previousById = categoryMap(previous);
   const previous2ById = categoryMap(previous2);
   const yearAgoById = categoryMap(yearAgo);
-  return (current?.amountGroups ?? []).slice(0, 12).map((group) => ({
-    id: group.id,
-    code: group.code ?? '',
-    name: group.name,
-    amount: roundMoney(group.amount),
-    quantity: roundMoney(group.quantity),
-    previousAmount: previousById.get(group.id),
-    previous2Amount: previous2ById.get(group.id),
-    yearAgoAmount: yearAgoById.get(group.id),
-  }));
+  const currentTotal = categoryAmountTotal(current);
+  const previousTotal = categoryAmountTotal(previous);
+  const previous2Total = categoryAmountTotal(previous2);
+  const yearAgoTotal = categoryAmountTotal(yearAgo);
+  return (current?.amountGroups ?? []).slice(0, 12).map((group) => {
+    const amount = roundMoney(group.amount);
+    const previousAmount = previousById.get(group.id);
+    const previous2Amount = previous2ById.get(group.id);
+    const yearAgoAmount = yearAgoById.get(group.id);
+    return {
+      id: group.id,
+      code: group.code ?? '',
+      name: group.name,
+      amount,
+      quantity: roundMoney(group.quantity),
+      share: mixShare(amount, currentTotal),
+      previousAmount,
+      previousShare: mixShare(previousAmount, previousTotal),
+      previous2Amount,
+      previous2Share: mixShare(previous2Amount, previous2Total),
+      yearAgoAmount,
+      yearAgoShare: mixShare(yearAgoAmount, yearAgoTotal),
+    };
+  });
 }
 
 function presentPeriodKeys(memos: SalesAnalysisReportMemo[]): string[] {
@@ -422,6 +436,22 @@ function categoryMap(period: SalesAnalysisPeriodMemo | undefined): Map<string, n
   const byId = new Map<string, number>();
   for (const group of period?.amountGroups ?? []) byId.set(group.id, roundMoney(group.amount));
   return byId;
+}
+
+function categoryAmountTotal(period: SalesAnalysisPeriodMemo | undefined): number | undefined {
+  const groups = period?.amountGroups ?? [];
+  if (groups.length === 0) return undefined;
+  return groups.reduce((sum, group) => sum + group.amount, 0);
+}
+
+function mixShare(value: number | undefined, total: number | undefined): number | undefined {
+  if (value === undefined || total === undefined || total === 0 || !Number.isFinite(value) || !Number.isFinite(total)) return undefined;
+  return value / total;
+}
+
+function shareText(value: number | undefined): string {
+  if (value === undefined) return '—';
+  return `${(value * 100).toFixed(1)}%`;
 }
 
 function roundMoney(value: number): number {
@@ -512,6 +542,7 @@ function aiCopy(locale: Locale, rankingLimit: number = DEFAULT_RANKING_LIMIT) {
       noGroups: 'No promoter groups were selected. This file is the store-wide summary only.',
       categoryPerformance: 'Category performance',
       category: 'Category',
+      share: 'Share',
       quantity: 'Qty',
       noRows: 'No rows in this section.',
       topSales: 'Top products by sales',
@@ -580,6 +611,7 @@ function aiCopy(locale: Locale, rankingLimit: number = DEFAULT_RANKING_LIMIT) {
     noGroups: '沒有勾選 promoter group，這份檔只有全店總結。',
     categoryPerformance: '分類表現',
     category: '分類',
+    share: '佔比',
     quantity: '銷量',
     noRows: '這個區塊沒有資料。',
     topSales: '銷售額 Top 商品',

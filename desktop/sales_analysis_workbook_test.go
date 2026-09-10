@@ -13,7 +13,7 @@ import (
 )
 
 func tableWorkbookFixture() AnalysisWorkbookRequest {
-	return AnalysisWorkbookRequest{Filename: "RTA-screen.xlsx", Context: []string{"帳號：測試", "2026-08-01 — 2026-08-31", "HKD"}, Sheets: []AnalysisTableSheet{{Name: "商品/分析", Columns: []AnalysisTableColumn{{Label: "商品編碼", Format: "text"}, {Label: "金額", Format: "money"}, {Label: "變化", Format: "percent"}}, Rows: [][]any{{"00107", float64(42.5), float64(.25)}, {"=HYPERLINK(\"bad\")", float64(-4), nil}}}}}
+	return AnalysisWorkbookRequest{Filename: "RTA-screen.xlsx", Context: []string{"帳號：測試", "2026-08-01 — 2026-08-31", "HKD"}, Sheets: []AnalysisTableSheet{{Name: "商品/分析", Columns: []AnalysisTableColumn{{Label: "商品編碼", Format: "text"}, {Label: "金額", Format: "money"}, {Label: "變化", Format: "percent"}, {Label: "佔比", Format: "share"}}, Rows: [][]any{{"00107", float64(42.5), float64(.25), float64(.4)}, {"=HYPERLINK(\"bad\")", float64(-4), nil, nil}}}}}
 }
 func TestAnalysisWorkbookTypesAndFormulaSafety(t *testing.T) {
 	app := &App{}
@@ -56,6 +56,10 @@ func TestAnalysisWorkbookTypesAndFormulaSafety(t *testing.T) {
 	raw, _ := f.GetCellValue(sheet, "C2", excelize.Options{RawCellValue: true})
 	if raw != "0.25" {
 		t.Fatalf("percent=%q", raw)
+	}
+	share, _ := f.GetCellValue(sheet, "D2", excelize.Options{RawCellValue: true})
+	if share != "0.4" {
+		t.Fatalf("share=%q", share)
 	}
 	panes, err := f.GetPanes(sheet)
 	if err != nil || !panes.Freeze || panes.YSplit != 1 {

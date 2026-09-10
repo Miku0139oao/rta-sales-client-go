@@ -93,6 +93,8 @@ describe('sales analysis AI export', () => {
     expect(markdown).toContain('我的護膚');
     expect(markdown).toContain('HK$180.00');
     expect(markdown).toContain('+20.0%');
+    expect(markdown).toContain('佔比');
+    expect(markdown).toContain('100.0%');
     expect(markdown).toContain('只准使用這份檔案裡的數字');
     expect(markdown).toContain('不准發明商品');
     expect(markdown).toContain('```json');

@@ -369,6 +369,7 @@ describe('sales analysis page', () => {
 
     await fireEvent.click(screen.getByRole('tab', { name: '分類' }));
     expect(screen.getByRole('heading', { name: '三期分類比較' })).toBeInTheDocument();
+    expect(screen.getByText('佔比是本表篩選後，該期間各分類淨銷售額合計的比例，不是未篩選的全店佔比。')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '分類商品銷售排行' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '分類商品銷量排行' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: '去年下月' })).toBeInTheDocument();

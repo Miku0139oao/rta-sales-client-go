@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analysisTableTSV, sortAnalysisTable, workbookSnapshot, type AnalysisTable } from './analysisTable';
+import { analysisTableTSV, formatTableCell, sortAnalysisTable, workbookSnapshot, type AnalysisTable } from './analysisTable';
 const table = (): AnalysisTable => ({ id:'products',name:'商品',columns:[{label:'編碼',format:'text'},{label:'金額',format:'money'}],rows:[{cells:['0012',20]},{cells:['0002',null]},{cells:['0003',-4]},{cells:['0004',20]}] });
 describe('analysis table snapshots',()=>{
  it('sorts numerically and stably with missing data last in both directions',()=>{
@@ -26,6 +26,20 @@ describe('analysis table snapshots',()=>{
   const source=table();source.rows=Array.from({length:200000},(_,index)=>({cells:[String(index),index]}));
   const sorted=sortAnalysisTable(source,{column:1,direction:'descending'},'en');
   expect(sorted.rows).toHaveLength(200000);expect(sorted.rows[0]!.cells[1]).toBe(199999);expect(source.rows[0]!.cells[1]).toBe(0);
+ });
+ it('formats mix share without a forced sign and keeps change percents signed',()=>{
+  expect(formatTableCell(0.352,'share','en')).toBe('35.2%');
+  expect(formatTableCell(0.352,'share','en')).not.toMatch(/^\+/);
+  expect(formatTableCell(0.352,'percent','en')).toMatch(/^\+/);
+ });
+ it('copies share columns as percents in TSV',()=>{
+  const source:AnalysisTable={id:'categories',name:'分類',columns:[{label:'佔比',format:'share'}],rows:[{cells:[0.25]}]};
+  expect(analysisTableTSV(source)).toContain('25%');
+ });
+ it('exports stacked share rows as separate numeric columns',()=>{
+  const source:AnalysisTable={id:'categories',name:'分類',columns:[{label:'本期',format:'money'}],exportColumns:[{label:'本期',format:'money'},{label:'本期佔比',format:'share'}],rows:[{cells:[80],secondary:{1:'80.0%'},exportCells:[80,0.8]}]};
+  expect(workbookSnapshot([source],[],'mix.xlsx').sheets[0]?.rows[0]).toEqual([80,0.8]);
+  expect(analysisTableTSV(source).split('\r\n')[1]).toBe('80\t80%');
  });
  it('rejects an oversized export before dispatch',()=>{
   const source=table(); source.rows=Array.from({length:250001},()=>({cells:['1',1]}));
