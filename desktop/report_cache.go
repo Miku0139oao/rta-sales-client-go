@@ -94,11 +94,16 @@ func (s *reportCacheStore) loadSalesReport() (salesReportDocument, bool, error) 
 		}
 		return salesReportDocument{}, false, fmt.Errorf("open sales report cache: %w", err)
 	}
-	defer func() { _ = file.Close() }()
 	document, err := decodeSalesReport(file)
+	// Close before Remove: Windows refuses to delete a file that still has an
+	// open handle, so an unusable cache would otherwise survive the next launch.
+	closeErr := file.Close()
 	if err != nil {
 		_ = os.Remove(path)
 		return salesReportDocument{}, false, nil
+	}
+	if closeErr != nil {
+		return salesReportDocument{}, false, fmt.Errorf("close sales report cache: %w", closeErr)
 	}
 	return document, true, nil
 }
