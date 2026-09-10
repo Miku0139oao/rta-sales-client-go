@@ -29,9 +29,12 @@ const (
 // scanned workbook under the per-user application directory so the operator
 // returns to the same screen after restarting the desktop app.
 type reportCacheStore struct {
-	root    string
-	writeMu sync.Mutex
-	pending sync.WaitGroup
+	root     string
+	writeMu  sync.Mutex
+	stateMu  sync.Mutex
+	inflight int
+	closed   bool
+	idle     chan struct{}
 }
 
 func newReportCacheStore(root string) (*reportCacheStore, error) {
@@ -43,6 +46,40 @@ func newReportCacheStore(root string) (*reportCacheStore, error) {
 		return nil, fmt.Errorf("resolve report cache root: %w", err)
 	}
 	return &reportCacheStore{root: absolute}, nil
+}
+
+func (s *reportCacheStore) beginPersist() bool {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.closed {
+		return false
+	}
+	if s.inflight == 0 {
+		s.idle = make(chan struct{})
+	}
+	s.inflight++
+	return true
+}
+
+func (s *reportCacheStore) endPersist() {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	s.inflight--
+	if s.inflight == 0 {
+		close(s.idle)
+	}
+}
+
+func (s *reportCacheStore) close() {
+	s.stateMu.Lock()
+	s.closed = true
+	if s.inflight == 0 {
+		s.stateMu.Unlock()
+		return
+	}
+	idle := s.idle
+	s.stateMu.Unlock()
+	<-idle
 }
 
 type salesReportDocument struct {
@@ -187,13 +224,15 @@ func (s *reportCacheStore) clearWorkbookSession() error {
 
 // waitIdle blocks until background writes finish or the timeout elapses.
 func (s *reportCacheStore) waitIdle(timeout time.Duration) {
-	done := make(chan struct{})
-	go func() {
-		s.pending.Wait()
-		close(done)
-	}()
+	s.stateMu.Lock()
+	if s.inflight == 0 {
+		s.stateMu.Unlock()
+		return
+	}
+	idle := s.idle
+	s.stateMu.Unlock()
 	select {
-	case <-done:
+	case <-idle:
 	case <-time.After(timeout):
 	}
 }

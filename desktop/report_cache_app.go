@@ -33,9 +33,11 @@ func (a *App) persistSalesReport() {
 	if document.SavedAt.IsZero() {
 		document.SavedAt = time.Now()
 	}
-	store.pending.Add(1)
+	if !store.beginPersist() {
+		return
+	}
 	go func() {
-		defer store.pending.Done()
+		defer store.endPersist()
 		_ = store.saveSalesReport(document)
 	}()
 }

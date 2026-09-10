@@ -1028,7 +1028,7 @@ function drawSummaryPage(
   metrics.forEach((metric, index) => drawMetricCard(doc, 10 + index * (cardWidth + gap), 31, cardWidth, 24, metric.label, metric.value, metric.delta, labels.yearAgo));
 
   drawComparisonPanel(doc, 10, 59, 277, 48, current, previous, yearAgo, labels);
-  drawCategoryPerformancePanel(doc, 10, 111, 277, 75, current, previous, yearAgo, level, labels, locale);
+  drawCategoryPerformancePanel(doc, 10, 111, 277, 86, current, previous, yearAgo, level, labels, locale);
 }
 
 function weeksForReport(weeks: SalesAnalysisWeek[], storeId: string, combined: boolean): SalesAnalysisWeek[] {
@@ -1477,37 +1477,46 @@ function drawCategoryPerformancePanel(doc: jsPDF, x: number, y: number, width: n
   const innerX = x + 4;
   const tableY = y + 18;
   const innerWidth = width - 8;
-  const columns = [54, 32, 22, 32, 22, 26, 32, 22, innerWidth - 242];
+  const columns = [88, 42, 42, 32, 42, innerWidth - 246];
   drawTableHeader(doc, innerX, tableY, columns, [
-    labels.category, labels.current, labels.share, labels.previous, labels.share,
-    labels.vsPrevious, labels.yearAgo, labels.share, labels.vsYearAgo,
+    labels.category, labels.current, labels.previous, labels.vsPrevious, labels.yearAgo, labels.vsYearAgo,
   ]);
   currentGroups.forEach((group, index) => {
-    const rowY = tableY + 9.4 + index * 8.6;
+    const rowY = tableY + 10 + index * 10.6;
     if (index % 2 === 0) {
       setFill(doc, COLORS.surface);
-      doc.roundedRect(innerX, rowY - 5, innerWidth, 8, 1.2, 1.2, 'F');
+      doc.roundedRect(innerX, rowY - 5.2, innerWidth, 10, 1.2, 1.2, 'F');
     }
     setText(doc, COLORS.ink, 7.4, 'bold');
     doc.text(fitText(doc, categoryLabel(group, locale), columns[0] - 4), innerX + 2, rowY);
     const previousAmount = previousMap.get(group.id)?.amount;
     const yearAgoAmount = yearAgoMap.get(group.id)?.amount;
-    const values: Array<{ text: string; color: RGB; bold?: boolean }> = [
-      { text: formatMoney(group.amount), color: COLORS.ink, bold: true },
-      shareCell(categoryShareOf(group.amount, currentTotal)),
-      { text: previousAmount === undefined ? '-' : formatMoney(previousAmount), color: COLORS.slate },
-      shareCell(categoryShareOf(previousAmount, previousTotal)),
-      percentCell(delta(group.amount, previousAmount)),
-      { text: yearAgoAmount === undefined ? '-' : formatMoney(yearAgoAmount), color: COLORS.slate },
-      shareCell(categoryShareOf(yearAgoAmount, yearAgoTotal)),
-      percentCell(delta(group.amount, yearAgoAmount)),
+    const stacked = [
+      { amount: formatMoney(group.amount), share: shareText(categoryShareOf(group.amount, currentTotal)), color: COLORS.ink, bold: true },
+      { amount: previousAmount === undefined ? '-' : formatMoney(previousAmount), share: shareText(categoryShareOf(previousAmount, previousTotal)), color: COLORS.slate, bold: false },
     ];
     let cellX = innerX + columns[0];
-    values.forEach((value, valueIndex) => {
-      setText(doc, value.color, 6.8, value.bold ? 'bold' : 'normal');
-      doc.text(value.text, cellX + columns[valueIndex + 1] - 2, rowY, { align: 'right' });
-      cellX += columns[valueIndex + 1];
+    stacked.forEach((cell, valueIndex) => {
+      const columnWidth = columns[valueIndex + 1];
+      setText(doc, cell.color, 7.1, cell.bold ? 'bold' : 'normal');
+      doc.text(cell.amount, cellX + columnWidth - 2, rowY, { align: 'right' });
+      setText(doc, COLORS.slate, 5.8, 'normal');
+      doc.text(cell.share, cellX + columnWidth - 2, rowY + 3.6, { align: 'right' });
+      cellX += columnWidth;
     });
+    const vsPrevious = percentCell(delta(group.amount, previousAmount));
+    setText(doc, vsPrevious.color, 7.1, vsPrevious.bold ? 'bold' : 'normal');
+    doc.text(vsPrevious.text, cellX + columns[3] - 2, rowY, { align: 'right' });
+    cellX += columns[3];
+    const yearAgoWidth = columns[4];
+    setText(doc, COLORS.slate, 7.1, 'normal');
+    doc.text(yearAgoAmount === undefined ? '-' : formatMoney(yearAgoAmount), cellX + yearAgoWidth - 2, rowY, { align: 'right' });
+    setText(doc, COLORS.slate, 5.8, 'normal');
+    doc.text(shareText(categoryShareOf(yearAgoAmount, yearAgoTotal)), cellX + yearAgoWidth - 2, rowY + 3.6, { align: 'right' });
+    cellX += yearAgoWidth;
+    const vsYearAgo = percentCell(delta(group.amount, yearAgoAmount));
+    setText(doc, vsYearAgo.color, 7.1, vsYearAgo.bold ? 'bold' : 'normal');
+    doc.text(vsYearAgo.text, cellX + columns[5] - 2, rowY, { align: 'right' });
   });
 }
 
@@ -1524,8 +1533,8 @@ function formatShare(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function shareCell(share: number | undefined): { text: string; color: RGB; bold?: boolean } {
-  return { text: share === undefined ? '-' : formatShare(share), color: COLORS.slate };
+function shareText(share: number | undefined): string {
+  return share === undefined ? '-' : formatShare(share);
 }
 
 function percentCell(change: number | undefined): { text: string; color: RGB; bold?: boolean } {

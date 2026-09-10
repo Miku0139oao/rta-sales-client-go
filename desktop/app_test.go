@@ -271,9 +271,9 @@ func newTestAppAt(t *testing.T, root string, engine batchEngine, clients clientF
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		// Background persist must finish before TempDir cleanup; Windows cannot
-		// remove a directory that still has open or newly written files.
-		reportCache.pending.Wait()
+		// Finish or reject background persist before TempDir cleanup. Windows
+		// cannot remove a directory that still has open or newly written files.
+		reportCache.close()
 	})
 	events := new(fakeEvents)
 	app, err := newApp(appDependencies{

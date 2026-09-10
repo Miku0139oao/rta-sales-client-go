@@ -193,6 +193,15 @@ func TestLoadSalesAnalysisSnapshotDropsUnusableCache(t *testing.T) {
 	}
 }
 
+func TestReportCacheCloseWaitsForPersist(t *testing.T) {
+	app, root, _ := newTestApp(t, new(fakeEngine), fakeClients{byAccount: map[string]accountClient{}})
+	app.rememberSalesAnalysisFor("profile", SalesAnalysisResult{OperationID: "final-op", Complete: true}, nil)
+	app.reportCache.close()
+	if _, err := os.Stat(filepath.Join(root, salesReportCacheFile)); err != nil {
+		t.Fatalf("close should wait for the cache write, stat err=%v", err)
+	}
+}
+
 func TestPersistSalesReportSkipsPendingResults(t *testing.T) {
 	app, root, _ := newTestApp(t, new(fakeEngine), fakeClients{byAccount: map[string]accountClient{}})
 	app.rememberSalesAnalysisFor("profile", SalesAnalysisResult{OperationID: "pending-op", Pending: true}, nil)
