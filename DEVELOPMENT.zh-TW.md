@@ -19,6 +19,17 @@ Windows 桌面程式的產品名稱、捷徑、開始功能表名稱都是 **RTA
 
 離線驗證：`pwsh -NoProfile -File scripts/test-update-manifest.ps1`（PowerShell 7.5+）。合併及人工核對後才可執行 `gh workflow run pages.yml --repo Miku0139oao/rta-sales-client-go --ref main`。0.4.8 與更早的 API 客戶端需要一次手動升級；詳見 [更新安全與部署](docs/portable-updates.md)。
 
+## 原生報表與活頁簿還原
+
+原生桌面後端將工作階段檔案存於 `securestore.Native.Root`，Windows 預設為 `%APPDATA%\RTA Excel Filler`。此位置與上面的更新資訊快取目錄不同；網頁版不使用這份原生快取。
+
+- `sales-report.json.gz`（格式版本 1）：包含最後完成的銷售結果、封裝商品明細、帳號識別碼及保存時間。內容為 gzip 壓縮 JSON，**沒有加密**，應視為敏感業務資料，不能與密碼保管機制混為一談。
+- `workbook-session.json`（格式版本 1）：只有活頁簿路徑、工作表及保存時間，不含活頁簿內容或先前的分析／寫入結果。還原時先確認檔案存在，再由前端重新掃描。
+- 報表讀取限制為解壓後 256 MiB JSON；活頁簿工作階段超過 64 KiB 會被拒絕。無效、不相容或未完成的文件會被忽略並嘗試刪除。報表先關閉檔案再刪除，以符合 Windows 的檔案鎖定限制。
+- 完成報表在 `salesResultMu` 保護下擷取快照，再非同步寫入。寫入與明確清除共用寫入鎖。快取生命週期追蹤在 `close()` 後拒絕新背景寫入並等待已接受的工作；正式關閉路徑則使用 `waitIdle(2 * time.Second)`。有限等待不保證資料一定落盤；應用程式呼叫端目前忽略持久化錯誤，重要結果仍需匯出。
+
+測試位於 `desktop/report_cache_test.go`。發布前還需實測原生重啟、清除／重新查詢、帳號異動、活頁簿遺失／變更、損壞快取及寫入中關閉。還原報表應持續標明為已保存的查詢資料，而不是即時 RTA 資料。手動移除快取前請先關閉程式，避免背景寫入重新建立檔案。
+
 ## 命令列怎麼叫
 
 根目錄放 `.env`（Git 會忽略）：

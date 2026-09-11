@@ -21,6 +21,17 @@ The Pages workflow checks out `main` for every docs/manual/release run, verifies
 
 Offline validation (PowerShell 7.5+): `pwsh -NoProfile -File scripts/test-update-manifest.ps1`. The real generator is a release-artifact verification operation, not part of ordinary tests. After review and merging to main, authorized deployment is `gh workflow run pages.yml --repo Miku0139oao/rta-sales-client-go --ref main`; see [portable update deployment](docs/portable-updates.md). Existing 0.4.8 API clients require one manual upgrade; do not promise they can discover Pages automatically.
 
+## Native report and workbook restoration
+
+The native desktop backend stores session files under `securestore.Native.Root`, normally `%APPDATA%\RTA Excel Filler` on Windows. This is separate from the updater metadata directory above; the web edition does not use this native cache.
+
+- `sales-report.json.gz` (schema 1) contains the last completed sales result, packed item details, profile ID and save time. It is gzip-compressed JSON, **not encrypted**. Treat it as sensitive business data, not as credential storage.
+- `workbook-session.json` (schema 1) contains the workbook path, worksheet and save time, not workbook contents or previous analysis/write results. Restoration checks that the file exists and the frontend rescans it.
+- Report reads are limited to 256 MiB of decompressed JSON; workbook-session reads reject documents over 64 KiB. Invalid, incompatible or incomplete documents are ignored and removal is attempted. Report readers close the file before deletion so Windows can remove it.
+- Completed reports are snapshotted under `salesResultMu` and written asynchronously. Writes and explicit clears share a write mutex. Cache lifecycle tracking rejects new background writes after `close()` and waits for admitted writes; the production shutdown path instead uses `waitIdle(2 * time.Second)`. This bounded wait is not a durability guarantee. Persistence errors are currently ignored by the app callers; exports remain necessary for reliable retention.
+
+Tests live in `desktop/report_cache_test.go`. Before release, also exercise real native restart, clear/requery, account changes, missing/changed workbooks, corrupt caches and shutdown during persistence. Restored reports must remain identified as saved query data rather than fresh RTA data. To remove cache files manually, close the application first so background writes cannot recreate them.
+
 ## Using the CLI
 
 Put this in a repo-root `.env` (Git ignores it):

@@ -2,7 +2,7 @@
 
 English | [繁體中文](README.zh-TW.md)
 
-**RTA 銷售分析** (English name: **RTA Sales Analyzer**) is a desktop application for reviewing store sales, exporting PDF reports, and writing figures into the company's Excel workbook. A live web edition is at [rtasales.com](https://rtasales.com). Windows is the supported desktop; Linux and macOS desktop builds are also published.
+**RTA 銷售分析** (English name: **RTA Sales Analyzer**) is a desktop application for reviewing store sales, exporting PDF reports, and writing figures into the company's Excel workbook. A live web edition is at [rtasales.com](https://rtasales.com). Current desktop releases are Windows 64-bit portable-only; Linux and macOS desktop builds are no longer published.
 
 After installation, the application is operated with the mouse. Programming knowledge and command-line use are not required.
 
@@ -24,7 +24,18 @@ New builds read version and changelog metadata from a fixed [GitHub Pages manife
 
 **0.4.8 and earlier API-based clients need a one-time manual upgrade to a Pages-enabled release.** Finish work, close the app, keep a backup, then replace it at the same path and filename. Old clients cannot learn this endpoint automatically and may encounter GitHub API rate limits. See [update safety and deployment](docs/portable-updates.md).
 
-## What's new in 0.4.9
+## v0.4.10 — In preparation / Unreleased
+
+**v0.4.10 has not been released. v0.4.9 remains the current stable release.** The following describes the implementation being prepared, not features already available in the stable download or live web edition.
+
+- **Category share:** each category's net sales divided by the **sum of filtered category net sales for the same period**, not unfiltered whole-store sales or just the displayed Top N. Each period has its own denominator. Incomplete/missing period data, missing values, or a zero denominator leave the share blank (PDF uses `-`), not 0%. Valid negative net sales are not forced to zero.
+- **Display and export:** category comparison shares appear below amounts on screen and in the PDF category performance panel. Analysis-table Excel exports and copied TSV use separate amount/share columns: Excel stores numeric ratios with percentage formatting; TSV represents them as percentage text, separate from amounts. This is distinct from the daily Excel-fill workflow.
+- **Desktop report restore:** a finished sales report is saved asynchronously as **unencrypted gzip-compressed JSON**. With a usable cache, restarting restores the previous report and its saved-time notice; it is the old query result, **not a fresh RTA query**. Run analysis again for current figures. Pending reports are not saved, and a failed cache write or unusable cache can prevent restoration; export important work yourself.
+- **Excel and navigation:** desktop restart remembers only the workbook path and sheet selection and rescans the existing file. It does not restore pre-restart analysis previews or write results. Switching pages within the same session retains page state; this is not a promise to persist all state across restarts. Settings drafts remain when switching pages, and unsaved changes are marked on the Settings page and navigation; click **Save** to apply workload/mapping changes.
+
+[Planned v0.4.10 release notes (Traditional Chinese; unreleased)](docs/releases/v0.4.10.zh-TW.md).
+
+## What's new in 0.4.9 (current stable)
 
 Version metadata and changelogs now come from GitHub Pages, without a login, token or anonymous GitHub API quota. Startup caching and failure backoff reduce requests. Executables remain signed GitHub Release assets.
 
@@ -91,7 +102,7 @@ A longer written guide (Traditional Chinese): [docs/tutorial.zh-TW.md](docs/tuto
 | `RTA-Excel-Filler-portable.exe` | Windows 64-bit, no installation. Requires [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) |
 | `SHA256SUMS.txt` | Used by IT to verify that a file has not been altered. Everyday users may ignore it |
 
-The release workflow stages unsigned Windows portable artifacts as a **draft only**. Signed publication requires explicit local validation with `scripts/publish-portable.ps1`; see [portable update safety and limitations](docs/portable-updates.md). Settings can check for newer stable releases (startup checks can be disabled); checks never download executables. Trusted signed Windows portable builds offer **Download and restart** after an explicit warning: finish/export your work first, because unsaved reports are lost on restart. Accounts/settings and the old executable backup are preserved. Development, unsigned or unsupported builds explain why installation is unavailable; update those manually with the app closed, preserving its path, filename and an old backup. An isolated signed fixture pair passed real Wails upgrade and settings-preservation checks. HTTP was fixture-backed; see the documented validation scope and limits.
+The release workflow stages unsigned Windows portable artifacts as a **draft only**. Signed publication requires explicit local validation with `scripts/publish-portable.ps1`; see [portable update safety and limitations](docs/portable-updates.md). Settings can check for newer stable releases (startup checks can be disabled); checks never download executables. Trusted signed Windows portable builds offer **Download and restart** after an explicit warning: finish/export your work first. The v0.4.10 preparation build can restore a cached finished report, but pending work and Excel analysis/write results are not restored; do not rely on the cache as a backup. Accounts, saved settings and the old executable backup are preserved. Development, unsigned or unsupported builds explain why installation is unavailable; update those manually with the app closed, preserving its path, filename and an old backup. An isolated signed fixture pair passed real Wails upgrade and settings-preservation checks. HTTP was fixture-backed; see the documented validation scope and limits.
 
 ---
 
@@ -247,7 +258,7 @@ Open **Settings**.
 | Query concurrency | Default 160, for one account querying many stores at once. If the network is unstable, try 32 or 8 |
 | Local mapping | Required only if Excel store codes are not RTA store ids |
 
-After changing workload or mapping settings, click **Save**.
+After changing workload or mapping settings, click **Save**. In the v0.4.10 preparation build, unsaved drafts are retained across page switches and marked on both Settings and its navigation button; switching pages does not save them.
 
 ---
 
@@ -275,7 +286,7 @@ Do not edit the source workbook in Excel after analysis starts. Scan and analyze
 Uninstall retains accounts by design. To remove them, delete each profile on the Accounts page first.
 
 **Are passwords stored securely?**  
-They are stored by Windows Credential Manager. Sales figures and Excel previews remain in memory for the current session only.
+Passwords are stored by Windows Credential Manager. This does not encrypt sales report caches: the v0.4.10 desktop preparation build saves finished reports as unencrypted gzip JSON on disk. Excel analysis previews and write results are not saved for restoration after restart; only the workbook path and sheet selection are remembered.
 
 ---
 
@@ -285,7 +296,9 @@ Saved accounts and encrypted login state are stored here (the folder still uses 
 
 `C:\Users\<your user name>\AppData\Roaming\RTA Excel Filler`
 
-You do not need to edit this folder. To remove all local data from a computer, delete every account in the application, then delete the folder.
+The v0.4.10 desktop preparation build also stores `sales-report.json.gz` (finished report data, compressed but **not encrypted**) and `workbook-session.json` (workbook path, sheet and save metadata, not workbook contents or analysis/write results) in this folder. Treat it as sensitive business data; do not share it casually.
+
+To clear these local application data, **first delete every account on the Accounts page, then fully close the app, and only then delete this folder**. Deleting an account removes its credentials/login state, **not the saved sales report**. Closing first avoids background cache writes recreating files. Separately exported reports, source workbooks and saved Excel copies are outside this cleanup; remove those separately if needed.
 
 ---
 
