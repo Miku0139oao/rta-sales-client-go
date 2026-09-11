@@ -227,6 +227,10 @@ describe('analysis workspace interactions', () => {
     render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
     await waitFor(() => expect(screen.getByText('開始分析')).toBeInTheDocument());
     expect(load).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('heading', { name: '選擇查詢條件' })).toBeInTheDocument();
+    expect(screen.getByText('已預選本月與全部門店。確認後按開始分析。')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: '月份比較' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.queryByRole('heading', { name: '調整條件' })).not.toBeInTheDocument();
     expect(screen.queryByText(/已載入上次的報表/)).not.toBeInTheDocument();
   });
 

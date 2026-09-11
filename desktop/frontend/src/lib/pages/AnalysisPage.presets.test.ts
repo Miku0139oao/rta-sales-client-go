@@ -133,7 +133,7 @@ describe('saved analysis conditions', () => {
     await applySaved();
     expect(screen.getByLabelText('帳號')).toHaveValue('profile-2');
     expect(screen.getByLabelText('開始日期')).toHaveValue('2026-07-01');
-    expect(screen.getByLabelText('以星期比較')).toBeChecked();
+    expect(screen.getByRole('radio', { name: '以星期比較' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByText('已選 1 間門店')).toBeInTheDocument();
     expect(screen.getByLabelText('搜尋商品或編碼')).toHaveValue('Wipes');
     expect(container.querySelector('.report-context')).toHaveTextContent('Production');

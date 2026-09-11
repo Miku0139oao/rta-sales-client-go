@@ -60,14 +60,13 @@ function endOfCalendarMonth(month: string): string {
   return `${month}-${String(lastDay).padStart(2, '0')}`;
 }
 
+async function choosePeriod(name: '月份比較' | '日期範圍' | '以星期比較') {
+  await fireEvent.click(screen.getByRole('radio', { name }));
+}
+
 async function chooseRangeAndWeekCompare() {
-  const mode = screen.getByLabelText('分析期間') as HTMLSelectElement;
-  const weekOption = [...mode.options].find((option) => option.textContent?.includes('以星期比較'));
-  if (weekOption) await fireEvent.change(mode, { target: { value: weekOption.value } });
-  else await fireEvent.change(mode, { target: { value: 'range' } });
+  await choosePeriod('以星期比較');
   await waitFor(() => expect(screen.getByLabelText('開始日期')).toBeInTheDocument());
-  const toggle = screen.queryByRole('checkbox', { name: '以星期比較' }) as HTMLInputElement | null;
-  if (toggle && !toggle.checked) await fireEvent.click(toggle);
 }
 
 const analysisResult: SalesAnalysisResult = {
@@ -307,7 +306,7 @@ describe('sales analysis page', () => {
     expect(storeCheckboxes).toHaveLength(2);
     expect([...storeCheckboxes].every((checkbox) => (checkbox as HTMLInputElement).checked)).toBe(true);
     expect(screen.getByText('已選 2 間門店')).toBeInTheDocument();
-    await fireEvent.change(screen.getByLabelText('分析期間'), { target: { value: 'range' } });
+    await choosePeriod('日期範圍');
     await waitFor(() => expect(screen.getByLabelText('開始日期')).toBeInTheDocument());
     await fireEvent.input(screen.getByLabelText('開始日期'), { target: { value: '2026-08-01' } });
     await fireEvent.input(screen.getByLabelText('結束日期'), { target: { value: '2026-08-31' } });
@@ -977,6 +976,27 @@ describe('sales analysis page', () => {
     expect(periods[4]!.to).toBe(`${nextMonthLastYearEnd.getFullYear()}-${String(nextMonthLastYearEnd.getMonth() + 1).padStart(2, '0')}-${String(nextMonthLastYearEnd.getDate()).padStart(2, '0')}`);
   });
 
+  it('copies the selected month into the date range when switching period mode', async () => {
+    configureBackend({ methods: {
+      ListProfiles: vi.fn(async () => [{
+        id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true,
+      }]),
+      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+    } });
+    render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
+    await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
+    await fireEvent.input(screen.getByLabelText('月份'), { target: { value: '2026-07' } });
+    await choosePeriod('日期範圍');
+    expect(screen.getByLabelText('開始日期')).toHaveValue('2026-07-01');
+    expect(screen.getByLabelText('結束日期')).toHaveValue('2026-07-31');
+    await choosePeriod('以星期比較');
+    expect(screen.getByLabelText('開始日期')).toHaveValue('2026-07-01');
+    expect(screen.getByText('週末優先對上一段同週末，不是前幾個平日。')).toBeInTheDocument();
+    await choosePeriod('月份比較');
+    expect(screen.getByLabelText('月份')).toHaveValue('2026-07');
+    expect(screen.queryByLabelText('開始日期')).not.toBeInTheDocument();
+  });
+
   it('aligns range comparison periods by weekday when 以星期比較 is enabled', async () => {
     const runSalesAnalysis = vi.fn(async (..._args: unknown[]) => analysisResult);
     configureBackend({ methods: {
@@ -988,13 +1008,15 @@ describe('sales analysis page', () => {
     } });
     render(AnalysisPage, { props: { t: translator('zh-TW'), settings: defaultSettings } });
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
-    expect(screen.queryByLabelText('以星期比較')).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: '月份比較' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.queryByLabelText('開始日期')).not.toBeInTheDocument();
 
-    await fireEvent.change(screen.getByLabelText('分析期間'), { target: { value: 'range' } });
-    await waitFor(() => expect(screen.getByLabelText('以星期比較')).toBeInTheDocument());
+    await choosePeriod('以星期比較');
+    await waitFor(() => expect(screen.getByLabelText('開始日期')).toBeInTheDocument());
+    expect(screen.getByRole('radio', { name: '以星期比較' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByText('週末優先對上一段同週末，不是前幾個平日。')).toBeInTheDocument();
     await fireEvent.input(screen.getByLabelText('開始日期'), { target: { value: '2026-08-01' } });
     await fireEvent.input(screen.getByLabelText('結束日期'), { target: { value: '2026-08-03' } });
-    await fireEvent.click(screen.getByLabelText('以星期比較'));
     await fireEvent.click(screen.getByText('開始分析'));
     await waitFor(() => expect(runSalesAnalysis).toHaveBeenCalledOnce());
 

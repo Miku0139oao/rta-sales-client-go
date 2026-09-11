@@ -84,6 +84,7 @@ describe('Excel safety workflow', () => {
     });
     await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
     expect(screen.getByText('拖放 .xlsx 到這裡')).toBeInTheDocument();
+    expect(screen.getByText('先掃描活頁簿，再檢查結果，最後另存新檔。')).toBeInTheDocument();
     expect(scanWorkbook).not.toHaveBeenCalled();
   });
 

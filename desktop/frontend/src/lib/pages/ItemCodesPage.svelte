@@ -296,10 +296,12 @@
     </div>
   </div>
 
-  <div class="field-group itemcodes-search">
-    <label for="itemcodes-search">{t('itemcodes.search')}</label>
-    <input id="itemcodes-search" bind:value={search} autocomplete="off" />
-  </div>
+  {#if groups.length > 0}
+    <div class="field-group itemcodes-search">
+      <label for="itemcodes-search">{t('itemcodes.search')}</label>
+      <input id="itemcodes-search" bind:value={search} autocomplete="off" />
+    </div>
+  {/if}
 
   {#if error}
     <div class="notice error-notice" role="alert">
@@ -331,6 +333,7 @@
     <div class="empty-state surface-card">
       <span class="material-symbols-rounded" aria-hidden="true">tag</span>
       <h2>{t('itemcodes.emptyTitle')}</h2>
+      <p>{t('itemcodes.emptyHint')}</p>
       <md-filled-tonal-button onclick={openCreate}>{t('itemcodes.add')}</md-filled-tonal-button>
     </div>
   {:else if visibleGroups.length === 0}

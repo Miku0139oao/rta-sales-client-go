@@ -30,6 +30,8 @@ describe('item code management', () => {
     });
 
     await waitFor(() => expect(screen.getByText('尚未建立組別')).toBeInTheDocument());
+    expect(screen.getByText('組別是一組 Item Code，之後可在分析頁只看這些商品。沒有組別也能做全店分析。')).toBeInTheDocument();
+    expect(screen.queryByLabelText('搜尋組別或代碼')).not.toBeInTheDocument();
     expect(container.querySelector('.empty-state .material-symbols-rounded')).toHaveTextContent('tag');
     expect(container.querySelector('.empty-state .material-symbols-rounded')).not.toHaveTextContent('qr_code_2');
     expect(container.querySelector('.empty-state .material-symbols-rounded')).not.toHaveTextContent('barcode');

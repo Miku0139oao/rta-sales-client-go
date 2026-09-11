@@ -80,6 +80,7 @@
   type FacetSelections = Record<CategoryKey, Set<string>>;
   type ReportView = 'overview' | 'weekly' | 'focus' | 'categories' | 'products' | 'stores';
   type PeriodMode = 'month' | 'range';
+  type PeriodUi = PeriodMode | 'week';
   type QueryDraft = {
     profileId: string; periodMode: PeriodMode; month: string; from: string; to: string;
     weekCompare: boolean; storeIds: string[]; stores: SalesAnalysisStore[];
@@ -110,6 +111,11 @@
     { key: 'category5', label: 'analysis.category5' },
   ];
   const pageSize = 50;
+  const periodOptions: Array<{ value: PeriodUi; label: string }> = [
+    { value: 'month', label: 'analysis.monthMode' },
+    { value: 'range', label: 'analysis.rangeMode' },
+    { value: 'week', label: 'analysis.weekMode' },
+  ];
 
   let profiles: Profile[] = [];
   let profileId = '';
@@ -234,6 +240,7 @@
   $: visibleStores = filterStores(stores, storeQuery);
   $: onBusyChange(running || exportingPDF || exportingData || Boolean(result?.pending));
   $: rangeInvalid = periodMode === 'range' && Boolean(from && to && from > to);
+  $: periodUi = periodMode === 'month' ? 'month' : weekCompare ? 'week' : 'range';
   $: reportPeriods = normalizePeriods(result);
   $: currentPeriod = periodByKey(reportPeriods, 'current') ?? reportPeriods[0];
   $: currentReady = Boolean(
@@ -592,6 +599,21 @@
   function changeQuery() {
     dismissExportNotice();
     queryOpen = !queryOpen;
+  }
+
+  function setPeriodUi(next: PeriodUi) {
+    if (running) return;
+    if (next === 'month') {
+      periodMode = 'month';
+      weekCompare = false;
+      return;
+    }
+    if (periodMode === 'month') {
+      from = `${month}-01`;
+      to = month === localISOMonth() ? localISODate() : endOfMonth(month);
+    }
+    periodMode = 'range';
+    weekCompare = next === 'week';
   }
 
   async function selectReport(view: ReportView) {
@@ -1927,8 +1949,11 @@
   {:else if !result || queryOpen}
     <form id="analysis-query-form" class="analysis-query surface-card" class:compact={Boolean(result)} onsubmit={(event) => { event.preventDefault(); void runAnalysis(); }}>
       <div class="query-section-heading">
-        <span class="material-symbols-rounded" aria-hidden="true">tune</span>
-        <div><h2>{t('analysis.adjustQuery')}</h2>{#if result}<p>{t('analysis.editQueryHint')}</p>{/if}</div>
+        <span class="material-symbols-rounded" aria-hidden="true">{result ? 'tune' : 'query_stats'}</span>
+        <div>
+          <h2>{result ? t('analysis.adjustQuery') : t('analysis.setupQuery')}</h2>
+          <p>{result ? t('analysis.editQueryHint') : t('analysis.setupQueryHint')}</p>
+        </div>
       </div>
       <div class="analysis-query-grid">
         <div class="field-group">
@@ -1937,12 +1962,21 @@
             {#each profiles as profile}<option value={profile.id}>{profile.displayName}</option>{/each}
           </select>
         </div>
-        <div class="field-group">
-          <label for="analysis-mode">{t('analysis.periodMode')}</label>
-          <select id="analysis-mode" bind:value={periodMode} disabled={running}>
-            <option value="month">{t('analysis.monthMode')}</option>
-            <option value="range">{t('analysis.rangeMode')}</option>
-          </select>
+        <div class="field-group period-mode-field">
+          <span id="analysis-mode-label">{t('analysis.periodMode')}</span>
+          <div class="period-mode-options" role="radiogroup" aria-labelledby="analysis-mode-label">
+            {#each periodOptions as option}
+              <button
+                type="button"
+                role="radio"
+                aria-checked={periodUi === option.value}
+                class:active={periodUi === option.value}
+                disabled={running}
+                onclick={() => setPeriodUi(option.value)}
+              >{t(option.label)}</button>
+            {/each}
+          </div>
+          {#if periodUi === 'week'}<small id="analysis-week-hint">{t('analysis.weekModeHint')}</small>{/if}
         </div>
         {#if periodMode === 'month'}
           <div class="field-group">
@@ -1952,15 +1986,6 @@
         {:else}
           <div class="field-group"><label for="analysis-from">{t('excel.from')}</label><input id="analysis-from" type="date" bind:value={from} aria-invalid={rangeInvalid} disabled={running} /></div>
           <div class="field-group"><label for="analysis-to">{t('excel.to')}</label><input id="analysis-to" type="date" bind:value={to} aria-invalid={rangeInvalid} disabled={running} /></div>
-          {#if periodMode === 'range'}
-            <div class="field-group week-compare-field">
-              <label class="week-compare-toggle" for="analysis-week-compare">
-                <input id="analysis-week-compare" type="checkbox" bind:checked={weekCompare} disabled={running} />
-                <span>{t('analysis.weekMode')}</span>
-              </label>
-              <small>{t('analysis.weekModeHint')}</small>
-            </div>
-          {/if}
         {/if}
       </div>
 
@@ -1974,7 +1999,7 @@
         {:else if stores.length === 0}
           <div class="store-empty">{t('analysis.noStores')}</div>
         {:else}
-          {#if stores.length > 8}
+          {#if stores.length > 4}
             <div class="analysis-search store-search">
               <span class="material-symbols-rounded" aria-hidden="true">search</span>
               <input aria-label={t('analysis.searchStores')} placeholder={t('analysis.searchStores')} bind:value={storeQuery} />
@@ -2580,24 +2605,45 @@
   .selection-count { margin-left: 8px; color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-weight: 500; }
   .analysis-query.compact .store-grid { max-height: min(200px, 28vh); }
   .analysis-query-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; }
-  .week-compare-toggle { display: flex; min-height: 48px; align-items: center; gap: 10px; cursor: pointer; }
-  .week-compare-field input[type="checkbox"] {
-    width: 18px;
-    min-width: 18px;
-    height: 18px;
-    min-height: 18px;
-    padding: 0;
-    border: 0;
-    border-radius: 4px;
-    box-shadow: none;
-    accent-color: var(--md-sys-color-primary);
-    background: transparent;
+  .period-mode-field { grid-column: 1 / -1; }
+  .period-mode-field > span { display: block; margin-bottom: 8px; color: var(--app-field-label); font-size: 13px; font-weight: 680; }
+  .period-mode-options {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    overflow: hidden;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 14px;
+    background: var(--md-sys-color-surface-container-low);
   }
-  .week-compare-field input[type="checkbox"]:hover,
-  .week-compare-field input[type="checkbox"]:focus {
-    padding: 0;
+  .period-mode-options button {
+    display: flex;
+    min-height: 48px;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 10px;
+    cursor: pointer;
     border: 0;
-    box-shadow: 0 0 0 3px var(--app-field-ring);
+    border-right: 1px solid var(--md-sys-color-outline-variant);
+    color: var(--md-sys-color-on-surface-variant);
+    background: transparent;
+    font-size: 13px;
+    font-weight: 650;
+    line-height: 1.25;
+    text-align: center;
+    white-space: normal;
+  }
+  .period-mode-options button:last-child { border-right: 0; }
+  .period-mode-options button:hover { background: var(--md-sys-color-surface-container); }
+  .period-mode-options button.active {
+    color: var(--md-sys-color-on-secondary-container);
+    background: var(--md-sys-color-secondary-container);
+  }
+  .period-mode-field small {
+    display: block;
+    margin-top: 8px;
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 12px;
+    line-height: 1.45;
   }
   .store-selection { margin-top: 22px; }
   .selection-heading, .analysis-query-actions, .analysis-progress-heading, .analysis-progress-footer, .comparison-heading, .analysis-table-heading, .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
@@ -2611,7 +2657,18 @@
   .store-id { font-weight: 760; font-variant-numeric: tabular-nums; }
   .store-name { overflow: hidden; color: var(--md-sys-color-on-surface-variant); text-overflow: ellipsis; white-space: nowrap; }
   .inline-loading, .store-empty { display: flex; min-height: 92px; align-items: center; justify-content: center; gap: 10px; color: var(--md-sys-color-on-surface-variant); }
-  .analysis-query-actions { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--md-sys-color-outline-variant); }
+  .analysis-query-actions {
+    position: sticky;
+    z-index: 8;
+    bottom: 12px;
+    margin-top: 22px;
+    padding: 12px 14px;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--app-card) 88%, transparent);
+    backdrop-filter: blur(12px);
+    box-shadow: var(--app-shadow);
+  }
   .analysis-query-actions > span { color: var(--md-sys-color-on-surface-variant); font-variant-numeric: tabular-nums; }
   .rank-seg { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-shrink: 0; }
   .rank-seg > span { color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-weight: 650; }
@@ -2978,10 +3035,15 @@
     .ranking-heading { align-items: flex-start; flex-direction: column; }
   }
 
+  @media (max-width: 760px) {
+    .analysis-query-actions { bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }
+  }
+
   @media (max-width: 620px) {
     .analysis-heading-actions { width: 100%; justify-content: flex-start; }
     .analysis-query, .analysis-query.compact { padding: 16px; }
     .analysis-query-grid { grid-template-columns: minmax(0, 1fr); }
+    .period-mode-options button { min-height: 44px; font-size: 12px; padding: 8px 6px; }
     .report-navigation { gap: 4px; padding: 6px; }
     .report-navigation .rank-seg { padding: 4px; }
     .report-tabs button { min-height: 44px; }

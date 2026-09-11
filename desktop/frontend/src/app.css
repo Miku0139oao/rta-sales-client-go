@@ -832,8 +832,10 @@ main:focus {
 }
 
 .file-drop-card > p {
+  max-width: 28rem;
   margin: 0 0 24px;
   color: var(--md-sys-color-on-surface-variant);
+  line-height: 1.5;
 }
 
 .source-card {

@@ -293,6 +293,7 @@
     <div class="empty-state surface-card">
       <span class="material-symbols-rounded" aria-hidden="true">person_add</span>
       <h2>{t('accounts.emptyTitle')}</h2>
+      <p>{t('accounts.emptyHint')}</p>
       <md-filled-tonal-button onclick={openCreate}>{t('accounts.add')}</md-filled-tonal-button>
     </div>
   {:else}

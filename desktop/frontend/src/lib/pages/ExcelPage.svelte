@@ -546,6 +546,7 @@
         <span class="material-symbols-rounded search-symbol">search</span>
       </div>
       <strong class="drop-instruction"><span class="material-symbols-rounded" aria-hidden="true">move_to_inbox</span>{t('excel.dropHere')}</strong>
+      <p>{t('excel.dropHint')}</p>
       <md-filled-button onclick={openWorkbook} disabled={workflowBusy}>
         <span class="material-symbols-rounded" slot="icon">folder_open</span>
         {opening ? t('excel.opening') : t('excel.open')}

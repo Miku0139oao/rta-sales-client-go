@@ -22,6 +22,13 @@ afterEach(() => {
 });
 
 describe('account safety workflow', () => {
+  it('explains why an account is needed on the empty catalog', async () => {
+    configureBackend({ methods: { ListProfiles: vi.fn(async () => []) } });
+    render(AccountsPage, { props: { t: translator('zh-TW'), locale: 'zh-TW' } });
+    await waitFor(() => expect(screen.getByText('尚未建立帳號')).toBeInTheDocument());
+    expect(screen.getByText('銷售分析與 Excel 填入都需要至少一本已啟用的帳號。建議先按「測試並啟用」。')).toBeInTheDocument();
+  });
+
   it('creates profiles disabled and ignores duplicate save submissions', async () => {
     let resolveSave!: (saved: Profile) => void;
     const save = vi.fn((_request: unknown) => new Promise<Profile>((resolve) => { resolveSave = resolve; }));
