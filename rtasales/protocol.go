@@ -9,6 +9,22 @@ import (
 	"strings"
 )
 
+// RTA frontend identifiers and envelope strings. These are unpublished
+// partner-API details; keep them here so a protocol change has one place to
+// update and test.
+const (
+	rtaArticleViewCode = "318f39ba93894fb5b85344c24a352201"
+	rtaTrendPageCode   = "storeRealTimeSalesMannings"
+	rtaCaptchaExpired  = "2020350001"
+	rtaCaptchaWrong    = "2020350002"
+)
+
+var unauthenticatedBodyMarkers = []string{
+	"用戶未登錄",
+	"用户未登录",
+	"mansso.rta-os.com/login",
+}
+
 type flexibleString string
 
 func (s *flexibleString) UnmarshalJSON(data []byte) error {

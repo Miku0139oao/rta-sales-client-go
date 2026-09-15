@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -17,6 +16,11 @@ import (
 func (c *Client) ensureLogin(ctx context.Context, observedVersion uint64) error {
 	c.loginMu.Lock()
 	defer c.loginMu.Unlock()
+	if c.sessionVersion.Load() != observedVersion {
+		return nil
+	}
+	c.requestMu.Lock()
+	defer c.requestMu.Unlock()
 	if c.sessionVersion.Load() != observedVersion {
 		return nil
 	}
@@ -115,26 +119,23 @@ func (c *Client) fetchCaptcha(ctx context.Context) ([]byte, string, error) {
 		return nil, "", err
 	}
 	endpoint := c.endpoints.sso + "/getVerifyCodeImg?verifyCodeFlag=" + url.QueryEscape(flag)
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	body, status, err := c.roundTripWithRetry(ctx, "fetch captcha", func(reqCtx context.Context) (*http.Request, error) {
+		request, requestErr := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint, nil)
+		if requestErr != nil {
+			return nil, requestErr
+		}
+		setCommonHeaders(request)
+		request.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+		request.Header.Set("Referer", "https://sso.rta-os.com/")
+		request.Header.Set("Cache-Control", "no-cache")
+		request.Header.Set("Pragma", "no-cache")
+		return request, nil
+	})
 	if err != nil {
 		return nil, "", err
 	}
-	setCommonHeaders(request)
-	request.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
-	request.Header.Set("Referer", "https://sso.rta-os.com/")
-	request.Header.Set("Cache-Control", "no-cache")
-	request.Header.Set("Pragma", "no-cache")
-	response, err := c.httpClient.Do(request)
-	if err != nil {
-		return nil, "", &UpstreamError{Operation: "fetch captcha", Err: err}
-	}
-	defer func() { _ = response.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
-	if err != nil {
-		return nil, "", &UpstreamError{Operation: "fetch captcha", StatusCode: response.StatusCode, Err: err}
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, "", &UpstreamError{Operation: "fetch captcha", StatusCode: response.StatusCode, Body: compactPreview(string(body))}
+	if status < 200 || status >= 300 {
+		return nil, "", &UpstreamError{Operation: "fetch captcha", StatusCode: status, Body: compactPreview(string(body))}
 	}
 	if len(body) == 0 {
 		return nil, "", &ProtocolError{Operation: "fetch captcha", Message: "captcha image is empty"}
@@ -150,25 +151,25 @@ func (c *Client) submitLogin(ctx context.Context, answer, flag string) (rtaEnvel
 		"verifyCode":     {answer},
 		"verifyCodeFlag": {flag},
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoints.sso+"/doLogin?"+parameters.Encode(), nil)
+	endpoint := c.endpoints.sso + "/doLogin?" + parameters.Encode()
+	// Do not retry the same captcha: verifyCodeFlag is single-use. Transient
+	// failures fall through to login(), which fetches a fresh image.
+	body, status, _, err := c.roundTrip(ctx, "login", func(reqCtx context.Context) (*http.Request, error) {
+		request, requestErr := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint, nil)
+		if requestErr != nil {
+			return nil, requestErr
+		}
+		setCommonHeaders(request)
+		request.Header.Set("Accept", "application/json, text/javascript, */*; q=0.01")
+		request.Header.Set("Origin", "https://sso.rta-os.com")
+		request.Header.Set("Referer", "https://sso.rta-os.com/")
+		return request, nil
+	})
 	if err != nil {
 		return rtaEnvelope{}, err
 	}
-	setCommonHeaders(request)
-	request.Header.Set("Accept", "application/json, text/javascript, */*; q=0.01")
-	request.Header.Set("Origin", "https://sso.rta-os.com")
-	request.Header.Set("Referer", "https://sso.rta-os.com/")
-	response, err := c.httpClient.Do(request)
-	if err != nil {
-		return rtaEnvelope{}, &UpstreamError{Operation: "login", Err: err}
-	}
-	defer func() { _ = response.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	if err != nil {
-		return rtaEnvelope{}, &UpstreamError{Operation: "login", StatusCode: response.StatusCode, Err: err}
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return rtaEnvelope{}, &UpstreamError{Operation: "login", StatusCode: response.StatusCode, Body: compactPreview(string(body))}
+	if status < 200 || status >= 300 {
+		return rtaEnvelope{}, &UpstreamError{Operation: "login", StatusCode: status, Body: compactPreview(string(body))}
 	}
 	return decodeEnvelope(body, "login")
 }
@@ -189,8 +190,8 @@ func newVerifyCodeFlag() (string, error) {
 }
 
 func captchaRetryable(code, message string) bool {
-	return code == "2020350001" ||
-		code == "2020350002" ||
+	return code == rtaCaptchaExpired ||
+		code == rtaCaptchaWrong ||
 		strings.Contains(message, "驗証碼過期") ||
 		strings.Contains(message, "验证码过期") ||
 		strings.Contains(message, "驗証碼錯誤") ||

@@ -48,11 +48,18 @@ type Config struct {
 	Account        string
 	Password       string
 	CaptchaSolvers []CaptchaSolver
-	CookieFile     string
+	// CookieFile persists cookies as plaintext JSON. Prefer CookieStore for
+	// desktop builds; CookieFile is for CLI tools and tests. os.Chmod 0600
+	// does not restrict the file on Windows.
+	CookieFile string
 	// CookieStore persists the session without exposing cookie bytes to a
 	// plaintext file. It is mutually exclusive with CookieFile.
-	CookieStore     CookieStore
-	HTTPClient      *http.Client
+	CookieStore CookieStore
+	HTTPClient  *http.Client
+	// PageConcurrency is how many Article View page workers start after the
+	// first page. HTTP for one Client is serialized by requestMu, so extra
+	// workers queue rather than run in parallel. Desktop analysis uses
+	// multiple Clients when it needs real concurrency.
 	PageConcurrency int
 	// LoginAttempts is the maximum number of fresh captcha/login attempts.
 	// Non-positive values use four; values above ten are rejected.
@@ -222,7 +229,10 @@ func (c *Client) doAuthenticated(ctx context.Context, operation string, build re
 func (c *Client) do(ctx context.Context, operation string, build requestBuilder) ([]byte, int, error) {
 	c.requestMu.Lock()
 	defer c.requestMu.Unlock()
+	return c.roundTripWithRetry(ctx, operation, build)
+}
 
+func (c *Client) roundTripWithRetry(ctx context.Context, operation string, build requestBuilder) ([]byte, int, error) {
 	var lastBody []byte
 	var lastStatus int
 	var lastErr error
@@ -290,9 +300,12 @@ func isUnauthenticated(status int, body []byte) bool {
 		return true
 	}
 	text := string(body)
-	return strings.Contains(text, "用戶未登錄") ||
-		strings.Contains(text, "用户未登录") ||
-		strings.Contains(text, "mansso.rta-os.com/login")
+	for _, marker := range unauthenticatedBodyMarkers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func authenticationDetails(body []byte) (string, string) {

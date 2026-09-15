@@ -552,7 +552,16 @@ func liveRTACredentials(t *testing.T) (account, password, cookieFile string) {
 	}
 	cookieFile = strings.TrimSpace(os.Getenv("RTA_COOKIE_FILE"))
 	if cookieFile == "" {
-		cookieFile = filepath.Join("..", ".rta-sales.cookies.json")
+		cacheDir, err := os.UserCacheDir()
+		if err != nil {
+			cookieFile = filepath.Join(t.TempDir(), "rta-sales.cookies.json")
+		} else {
+			dir := filepath.Join(cacheDir, "rta-sales-client-go")
+			if mkErr := os.MkdirAll(dir, 0o700); mkErr != nil {
+				t.Fatal(mkErr)
+			}
+			cookieFile = filepath.Join(dir, "live-cookies.json")
+		}
 	}
 	return account, password, cookieFile
 }

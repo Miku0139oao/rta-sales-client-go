@@ -1,10 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import AccountsPage from './lib/pages/AccountsPage.svelte';
   import AnalysisPage from './lib/pages/AnalysisPage.svelte';
-  import ExcelPage from './lib/pages/ExcelPage.svelte';
-  import ItemCodesPage from './lib/pages/ItemCodesPage.svelte';
-  import SettingsPage from './lib/pages/SettingsPage.svelte';
   import UpdateNotice from './lib/UpdateNotice.svelte';
   import { translator } from './lib/i18n';
   import { isWebRuntime } from './lib/runtime';
@@ -201,17 +197,6 @@
           <md-outlined-button type="button" onclick={acknowledgeWebBanner}>{t('web.bannerAck')}</md-outlined-button>
         </div>
       {/if}
-      {#if mounted.excel}
-        <div class="page-host" hidden={activePage !== 'excel'} inert={activePage !== 'excel' ? true : undefined}>
-          <ExcelPage
-            {t}
-            {settings}
-            catalogEpoch={excelCatalogEpoch}
-            onBusyChange={(busy) => (excelBusy = busy)}
-            onGoToAccounts={() => { if (!excelBusy) void navigateTo('accounts'); }}
-          />
-        </div>
-      {/if}
       {#if mounted.analysis}
         <div class="page-host" hidden={activePage !== 'analysis'} inert={activePage !== 'analysis' ? true : undefined}>
           <AnalysisPage
@@ -224,20 +209,39 @@
           />
         </div>
       {/if}
+      {#if mounted.excel}
+        {#await import('./lib/pages/ExcelPage.svelte') then { default: ExcelPage }}
+          <div class="page-host" hidden={activePage !== 'excel'} inert={activePage !== 'excel' ? true : undefined}>
+            <ExcelPage
+              {t}
+              {settings}
+              catalogEpoch={excelCatalogEpoch}
+              onBusyChange={(busy) => (excelBusy = busy)}
+              onGoToAccounts={() => { if (!excelBusy) void navigateTo('accounts'); }}
+            />
+          </div>
+        {/await}
+      {/if}
       {#if mounted.accounts}
-        <div class="page-host" hidden={activePage !== 'accounts'} inert={activePage !== 'accounts' ? true : undefined}>
-          <AccountsPage {t} locale={settings.locale} onBusyChange={(busy) => (accountsBusy = busy)} />
-        </div>
+        {#await import('./lib/pages/AccountsPage.svelte') then { default: AccountsPage }}
+          <div class="page-host" hidden={activePage !== 'accounts'} inert={activePage !== 'accounts' ? true : undefined}>
+            <AccountsPage {t} locale={settings.locale} onBusyChange={(busy) => (accountsBusy = busy)} />
+          </div>
+        {/await}
       {/if}
       {#if mounted.itemcodes}
-        <div class="page-host" hidden={activePage !== 'itemcodes'} inert={activePage !== 'itemcodes' ? true : undefined}>
-          <ItemCodesPage {t} locale={settings.locale} onBusyChange={(busy) => (itemcodesBusy = busy)} />
-        </div>
+        {#await import('./lib/pages/ItemCodesPage.svelte') then { default: ItemCodesPage }}
+          <div class="page-host" hidden={activePage !== 'itemcodes'} inert={activePage !== 'itemcodes' ? true : undefined}>
+            <ItemCodesPage {t} locale={settings.locale} onBusyChange={(busy) => (itemcodesBusy = busy)} />
+          </div>
+        {/await}
       {/if}
       {#if mounted.settings}
-        <div class="page-host" hidden={activePage !== 'settings'} inert={activePage !== 'settings' ? true : undefined}>
-          <SettingsPage {t} {settings} onChange={updateSettings} onThemeChange={updateThemePreference} onDirtyChange={(dirty) => (settingsDirty = dirty)} />
-        </div>
+        {#await import('./lib/pages/SettingsPage.svelte') then { default: SettingsPage }}
+          <div class="page-host" hidden={activePage !== 'settings'} inert={activePage !== 'settings' ? true : undefined}>
+            <SettingsPage {t} {settings} onChange={updateSettings} onThemeChange={updateThemePreference} onDirtyChange={(dirty) => (settingsDirty = dirty)} />
+          </div>
+        {/await}
       {/if}
     </main>
   </div>

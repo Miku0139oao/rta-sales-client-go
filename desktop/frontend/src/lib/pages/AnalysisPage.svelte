@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import { beginNativeExportLease, endNativeExportLease, backend } from '../backend';
   import { errorMessage } from '../i18n';
   import { isWebRuntime } from '../runtime';
@@ -38,6 +38,7 @@
     isPresetRankingLimit,
     normalizeRankingLimit,
   } from '../settings';
+  import { ANALYSIS_SEARCH_DEBOUNCE_MS, itemMatchesSearch } from '../analysisSearch';
   import { weeklySegmentRows } from '../storeSegment';
   import { alignRangeComparisonPeriods } from '../periodAlignment';
   import {
@@ -157,6 +158,8 @@
   let to = localISODate();
   let activeView: ReportView = 'overview';
   let search = '';
+  let searchDraft = '';
+  let searchDebounce: ReturnType<typeof setTimeout> | undefined;
   let manCodeGroups: ManCodeGroup[] = [];
   let selectedGroupId = '';
   let selectedGroup: ManCodeGroup | undefined;
@@ -552,7 +555,7 @@
 
   function finishPresetApplication(submitted: typeof stagedPreset) {
     if (submitted) {
-      search = submitted.filters.search;
+      applySearch(submitted.filters.search, true);
       selectedGroupId = submitted.filters.groupId;
       groupLevel = submitted.filters.groupLevel;
       selections = Object.fromEntries(facets.map(({ key }) => [key, new Set(submitted.filters.categories[key])])) as FacetSelections;
@@ -651,7 +654,7 @@
 
   function clearScreenFilters() {
     selections = emptySelections();
-    search = '';
+    applySearch('', true);
     selectedGroupId = '';
     openFacet = '';
     facetSearch = '';
@@ -1315,7 +1318,7 @@
 
   function resetFilters() {
     selections = emptySelections();
-    search = '';
+    applySearch('', true);
     selectedGroupId = '';
     groupLevel = 'category2';
     salesRankingKey = 'current';
@@ -1382,15 +1385,7 @@
   }
 
   function matchesFilters(item: SalesAnalysisItem, current: FacetSelections, searchTerm: string): boolean {
-    if (!matchesSelections(item, current)) return false;
-    const term = searchTerm.trim().toLocaleLowerCase();
-    if (!term) return true;
-    return [
-      item.storeId, item.storeLabel, item.articleCode, item.articleName, item.brandName ?? '',
-      item.category1, item.category1Code ?? '', item.category2, item.category2Code ?? '',
-      item.category3, item.category3Code ?? '', item.category4, item.category4Code ?? '',
-      item.category5, item.category5Code ?? '',
-    ].some((value) => (value ?? '').toLocaleLowerCase().includes(term));
+    return matchesSelections(item, current) && itemMatchesSearch(item, searchTerm);
   }
 
   function matchesGroup(item: SalesAnalysisItem, codes: Set<string>, active: boolean): boolean {
@@ -1723,10 +1718,32 @@
     exportDirectory = '';
   }
 
+  function applySearch(next: string, immediate = false) {
+    searchDraft = next;
+    if (searchDebounce) {
+      clearTimeout(searchDebounce);
+      searchDebounce = undefined;
+    }
+    // Vitest fires a complete value in one input event; skip the typing delay.
+    const delay = import.meta.env.MODE === 'test' ? 0 : ANALYSIS_SEARCH_DEBOUNCE_MS;
+    if (immediate || delay <= 0) {
+      search = next;
+      return;
+    }
+    searchDebounce = setTimeout(() => {
+      search = searchDraft;
+      searchDebounce = undefined;
+    }, delay);
+  }
+
   function changeSearch(event: Event) {
-    search = (event.currentTarget as HTMLInputElement).value;
+    applySearch((event.currentTarget as HTMLInputElement).value);
     page = 1;
   }
+
+  onDestroy(() => {
+    if (searchDebounce) clearTimeout(searchDebounce);
+  });
 
   function delta(current: number | undefined, base: number | undefined): number | undefined {
     if (current === undefined || base === undefined || base === 0) return undefined;
@@ -2101,7 +2118,7 @@
 
       <section class="report-filter" bind:this={reportFilter} aria-label={t('analysis.categoryFilters')}>
         <div class="filter-bar">
-          <div class="analysis-search"><span class="material-symbols-rounded" aria-hidden="true">search</span><input bind:this={productSearch} aria-label={t('analysis.search')} placeholder={t('analysis.search')} value={search} oninput={changeSearch} />{#if search}<button type="button" aria-label={t('analysis.clear')} onclick={() => { search = ''; page = 1; }}><span class="material-symbols-rounded" aria-hidden="true">close</span></button>{/if}</div>
+          <div class="analysis-search"><span class="material-symbols-rounded" aria-hidden="true">search</span><input bind:this={productSearch} aria-label={t('analysis.search')} placeholder={t('analysis.search')} value={searchDraft} oninput={changeSearch} />{#if searchDraft}<button type="button" aria-label={t('analysis.clear')} onclick={() => { applySearch('', true); page = 1; }}><span class="material-symbols-rounded" aria-hidden="true">close</span></button>{/if}</div>
           <button class="filter-toggle" class:active={filtersOpen || activeFilterCount > 0} type="button" aria-expanded={filtersOpen} aria-controls="analysis-filter-panel" onclick={() => { filtersOpen = !filtersOpen; openFacet = ''; }}><span class="material-symbols-rounded" aria-hidden="true">filter_list</span>{t('analysis.filterToggle')}{#if activeFilterCount}<b>{activeFilterCount}</b>{/if}<span class="material-symbols-rounded" aria-hidden="true">{filtersOpen ? 'expand_less' : 'expand_more'}</span></button>
           <div class="filter-tools">
             <span class="scope-count" role="status">{currentDetailsMissing ? t('analysis.itemsNotReady') : t(productScopeActive ? 'analysis.filteredRows' : 'analysis.allRows', { count: filteredItems.length })}</span>
@@ -2151,7 +2168,7 @@
                 <button class="filter-chip" type="button" aria-label={t('analysis.removeFilter', { name: value })} title={`${t(facet.label)}: ${value}`} onclick={() => toggleFacet(facet.key, value)}><span>{t(facet.label)}: {value}</span><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
               {/each}
             {/each}
-            {#if search.trim()}<button class="filter-chip" type="button" aria-label={t('analysis.removeFilter', { name: search.trim() })} onclick={() => { search = ''; page = 1; }}><span>“{search.trim()}”</span><span class="material-symbols-rounded" aria-hidden="true">close</span></button>{/if}
+            {#if search.trim()}<button class="filter-chip" type="button" aria-label={t('analysis.removeFilter', { name: search.trim() })} onclick={() => { applySearch('', true); page = 1; }}><span>“{search.trim()}”</span><span class="material-symbols-rounded" aria-hidden="true">close</span></button>{/if}
             {#if selectedGroup}<button class="filter-chip" type="button" aria-label={t('analysis.removeFilter', { name: selectedGroup.name })} onclick={() => { selectedGroupId = ''; page = 1; }}><span>{selectedGroup.name}</span><span class="material-symbols-rounded" aria-hidden="true">close</span></button>{/if}
             <button class="clear-filters" type="button" onclick={clearScreenFilters}>{t('analysis.clearFilters')}</button>
           </div>

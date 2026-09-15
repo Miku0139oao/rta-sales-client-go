@@ -24,27 +24,32 @@ func (solver solverFunc) Solve(ctx context.Context, image []byte) (string, error
 }
 
 type rtaFixture struct {
-	testing             *testing.T
-	server              *httptest.Server
-	loginSubmissions    atomic.Int32
-	captchaRequests     atomic.Int32
-	salesRequests       atomic.Int32
-	transactionRequests atomic.Int32
-	storeRequests       atomic.Int32
-	mu                  sync.Mutex
-	payloads            []salesQueryPayload
-	rawPayloads         []map[string]any
-	transactionPayloads []trendTransactionQueryPayload
-	transactionForms    []url.Values
-	failPage            int
-	expireNextSales     bool
-	salesFailRemaining  int
-	salesFailStatus     int
-	salesRetryAfter     string
-	salesFailBody       []byte
-	salesInFlight       int
-	salesMaxInFlight    int
-	salesHold           time.Duration
+	testing              *testing.T
+	server               *httptest.Server
+	loginSubmissions     atomic.Int32
+	captchaRequests      atomic.Int32
+	salesRequests        atomic.Int32
+	transactionRequests  atomic.Int32
+	storeRequests        atomic.Int32
+	mu                   sync.Mutex
+	payloads             []salesQueryPayload
+	rawPayloads          []map[string]any
+	transactionPayloads  []trendTransactionQueryPayload
+	transactionForms     []url.Values
+	failPage             int
+	expireNextSales      bool
+	salesFailRemaining   int
+	salesFailStatus      int
+	salesRetryAfter      string
+	salesFailBody        []byte
+	salesInFlight        int
+	salesMaxInFlight     int
+	salesHold            time.Duration
+	captchaFailRemaining int
+	captchaFailStatus    int
+	loginFailRemaining   int
+	loginFailStatus      int
+	trendHold            time.Duration
 }
 
 func newRTAFixture(t *testing.T) *rtaFixture {
@@ -59,11 +64,35 @@ func (f *rtaFixture) serveHTTP(response http.ResponseWriter, request *http.Reque
 	switch request.URL.Path {
 	case "/getVerifyCodeImg":
 		f.captchaRequests.Add(1)
+		f.mu.Lock()
+		if f.captchaFailRemaining > 0 {
+			f.captchaFailRemaining--
+			status := f.captchaFailStatus
+			f.mu.Unlock()
+			if status == 0 {
+				status = http.StatusBadGateway
+			}
+			http.Error(response, "captcha temporary failure", status)
+			return
+		}
+		f.mu.Unlock()
 		http.SetCookie(response, &http.Cookie{Name: "challenge", Value: "active", Path: "/"})
 		response.WriteHeader(http.StatusOK)
 		_, _ = response.Write([]byte("fake-image"))
 	case "/doLogin":
 		f.loginSubmissions.Add(1)
+		f.mu.Lock()
+		if f.loginFailRemaining > 0 {
+			f.loginFailRemaining--
+			status := f.loginFailStatus
+			f.mu.Unlock()
+			if status == 0 {
+				status = http.StatusBadGateway
+			}
+			http.Error(response, "login temporary failure", status)
+			return
+		}
+		f.mu.Unlock()
 		if request.URL.Query().Get("password") != passwordDigest("secret") {
 			writeJSON(response, map[string]any{"code": "1001", "msg": "bad password"})
 			return
@@ -186,6 +215,18 @@ func (f *rtaFixture) serveHTTP(response http.ResponseWriter, request *http.Reque
 		})
 	case "/data/pc/v1/query":
 		f.transactionRequests.Add(1)
+		f.mu.Lock()
+		hold := f.trendHold
+		f.mu.Unlock()
+		if hold > 0 {
+			timer := time.NewTimer(hold)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+			case <-request.Context().Done():
+				return
+			}
+		}
 		if !hasCookie(request, "sid", "valid") {
 			writeJSON(response, map[string]any{"code": "9800", "msg": "用户未登录"})
 			return
@@ -477,6 +518,58 @@ func TestEmbeddedOCRFailureUsesConfiguredFallback(t *testing.T) {
 	}
 }
 
+func TestFetchCaptchaRetries5xxThenSucceeds(t *testing.T) {
+	fixture := newRTAFixture(t)
+	fixture.captchaFailRemaining = 2
+	fixture.captchaFailStatus = http.StatusBadGateway
+	client, err := NewClient(Config{
+		Account:         "account",
+		Password:        "secret",
+		CaptchaSolvers:  []CaptchaSolver{solverFunc(func(context.Context, []byte) (string, error) { return "RIGHT", nil })},
+		PageConcurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.endpoints = endpoints{sso: fixture.server.URL, dsa: fixture.server.URL, cockpit: fixture.server.URL, authStores: fixture.server.URL}
+	client.retryWait = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+	if _, err := client.Sales(context.Background(), compactSalesQuery()); err != nil {
+		t.Fatal(err)
+	}
+	if got := fixture.captchaRequests.Load(); got != 3 {
+		t.Fatalf("captcha requests=%d, want 3 (two 502 retries then success)", got)
+	}
+	if got := fixture.loginSubmissions.Load(); got != 1 {
+		t.Fatalf("login submissions=%d, want 1", got)
+	}
+}
+
+func TestSubmitLoginFailureFetchesAFreshCaptcha(t *testing.T) {
+	fixture := newRTAFixture(t)
+	fixture.loginFailRemaining = 1
+	fixture.loginFailStatus = http.StatusBadGateway
+	client, err := NewClient(Config{
+		Account:         "account",
+		Password:        "secret",
+		CaptchaSolvers:  []CaptchaSolver{solverFunc(func(context.Context, []byte) (string, error) { return "RIGHT", nil })},
+		PageConcurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.endpoints = endpoints{sso: fixture.server.URL, dsa: fixture.server.URL, cockpit: fixture.server.URL, authStores: fixture.server.URL}
+	client.retryWait = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+	if _, err := client.Sales(context.Background(), compactSalesQuery()); err != nil {
+		t.Fatal(err)
+	}
+	if got := fixture.captchaRequests.Load(); got != 2 {
+		t.Fatalf("captcha requests=%d, want 2 (fresh image after login 502)", got)
+	}
+	if got := fixture.loginSubmissions.Load(); got != 2 {
+		t.Fatalf("login submissions=%d, want 2 (failed attempt is not retried with the same flag)", got)
+	}
+}
+
 func TestLoginAttemptsRequestFreshCaptchas(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -611,6 +704,26 @@ func TestSalesFailsInsteadOfReturningPartialPages(t *testing.T) {
 	var upstream *UpstreamError
 	if !errors.As(err, &upstream) || upstream.StatusCode != http.StatusBadGateway {
 		t.Fatalf("unexpected error: %T %v", err, err)
+	}
+}
+
+func TestSalesCancelsTrendWhenArticleFails(t *testing.T) {
+	fixture := newRTAFixture(t)
+	fixture.failPage = 1
+	fixture.trendHold = 2 * time.Second
+	client, _, _ := fixture.client(t, "")
+	started := time.Now()
+	result, err := client.Sales(context.Background(), SalesQuery{
+		BusinessStoreID: "STOREA",
+		StartDate:       time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC),
+		EndDate:         time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC),
+	})
+	elapsed := time.Since(started)
+	if err == nil || result != nil {
+		t.Fatalf("expected article failure, result=%+v err=%v", result, err)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("Sales waited %s after article failure; trend should have been cancelled", elapsed)
 	}
 }
 

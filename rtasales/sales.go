@@ -215,6 +215,11 @@ type salesDateWindow struct {
 // deterministic aggregates. RTA's query-only store values remain private.
 // Inclusive ranges longer than 90 calendar days are queried as adjacent
 // windows and merged so callers can request a wider span than RTA accepts.
+// Sales fetches Article View rows and Trend View totals for query.
+// There is no overall deadline: worst-case time is roughly date windows ×
+// (queued Article pages + Trend pages) × attempts × (per-request timeout +
+// Retry-After ≤ 30s), because one Client serializes HTTP. Callers must set
+// ctx to bound the whole call.
 func (c *Client) Sales(ctx context.Context, query SalesQuery) (*SalesResult, error) {
 	started := time.Now()
 	query, err := validateSalesQuery(query)
@@ -259,6 +264,12 @@ func (c *Client) fetchSalesWindows(ctx context.Context, query SalesQuery, store 
 		trend trendTotals
 		err   error
 	}
+	workCtx := ctx
+	var cancel context.CancelFunc
+	if !query.SkipTrend && !query.SkipArticle {
+		workCtx, cancel = context.WithCancel(ctx)
+		defer cancel()
+	}
 	var trendDone chan trendFetch
 	if !query.SkipTrend {
 		trendDone = make(chan trendFetch, 1)
@@ -266,9 +277,9 @@ func (c *Client) fetchSalesWindows(ctx context.Context, query SalesQuery, store 
 			var trend trendTotals
 			var err error
 			if query.SkipTrendLookback {
-				trend, err = c.fetchTrendTotals(ctx, query, store)
+				trend, err = c.fetchTrendTotals(workCtx, query, store)
 			} else {
-				trend, err = c.fetchTrendSeries(ctx, query, store)
+				trend, err = c.fetchTrendSeries(workCtx, query, store)
 			}
 			trendDone <- trendFetch{trend: trend, err: err}
 		}()
@@ -290,6 +301,9 @@ func (c *Client) fetchSalesWindows(ctx context.Context, query SalesQuery, store 
 		payload.StoreIDString = store.filterText
 		windowItems, err := c.fetchArticleItems(ctx, payload, query.Compact)
 		if err != nil {
+			if cancel != nil {
+				cancel()
+			}
 			if trendDone != nil {
 				<-trendDone
 			}
@@ -495,7 +509,7 @@ func mergeTrendDays(days []TrendDay) []TrendDay {
 func (c *Client) fetchTrendTransactionPage(ctx context.Context, queryJSON, columnsJSON []byte, page int) ([]map[string]any, int, error) {
 	const operation = "fetch Trend View totals"
 	form := url.Values{
-		"pageCode":    {"storeRealTimeSalesMannings"},
+		"pageCode":    {rtaTrendPageCode},
 		"moduleCode":  {"trendTable"},
 		"tabCode":     {"trend"},
 		"serviceCode": {"achievement"},
@@ -785,7 +799,7 @@ func fixedSalesForm(page int) url.Values {
 		"showColumns":    {"{\"purchase_category1_name\":true,\"column_purchase_category1_code\":true,\"purchase_category2_name\":true,\"column_purchase_category2_code\":true,\"purchase_category3_name\":true,\"column_purchase_category3_code\":true,\"purchase_category4_name\":true,\"column_purchase_category4_code\":true,\"purchase_category5_name\":true,\"column_purchase_category5_code\":true,\"matnr\":true,\"article_name\":true,\"brand_name\":true,\"tp_transaction_count\":true,\"tp_transaction_count_agg\":true,\"tp_sale_qty\":true,\"tp_sale_amount\":true,\"tmp2_tp_sale_amount\":true,\"actual_sale_amount_contribution\":false,\"tp_return_transaction_count\":true,\"tp_return_transaction_count_agg\":true,\"tp_return_sale_qty\":true,\"tp_return_sale_amount\":true,\"tmp2_return_sale_amount\":true,\"return_sale_amount_contribution\":false,\"tp_gross_sale_qty\":true,\"tp_gross_sale_amount\":true,\"tmp2_gross_sale_amount\":true,\"gross_sale_amount_contribution\":false}"},
 		"filterParam":    {"{}"},
 		"orderByColumns": {"{\"tp_sale_amount\":2}"},
-		"viewCode":       {"318f39ba93894fb5b85344c24a352201"},
+		"viewCode":       {rtaArticleViewCode},
 		"pageSize":       {strconv.Itoa(salesPageSize)},
 		"columnSeq":      {"purchase_category1_name,column_purchase_category1_code,purchase_category2_name,column_purchase_category2_code,purchase_category3_name,column_purchase_category3_code,purchase_category4_name,column_purchase_category4_code,purchase_category5_name,column_purchase_category5_code,matnr,article_name,brand_name,tp_transaction_count,tp_transaction_count_agg,tp_sale_qty,tp_sale_amount,tmp2_tp_sale_amount,tp_return_transaction_count,tp_return_transaction_count_agg,tp_return_sale_qty,tp_return_sale_amount,tmp2_return_sale_amount,tp_gross_sale_qty,tp_gross_sale_amount,tmp2_gross_sale_amount"},
 		"pageNum":        {strconv.Itoa(page)},

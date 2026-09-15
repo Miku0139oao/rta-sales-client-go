@@ -59,7 +59,7 @@ describe('desktop application shell', () => {
     render(App);
     await fireEvent.click(screen.getAllByRole('button', { name: /商品代碼/ })[0]);
     await waitFor(() => expect(screen.getByRole('heading', { name: '商品代碼' })).toBeInTheDocument());
-    expect(screen.getByText('保健')).toBeInTheDocument();
+    await screen.findByText('保健');
     expect(screen.getByText('護膚')).toBeInTheDocument();
   });
 
@@ -116,7 +116,7 @@ describe('desktop application shell', () => {
   it('switches every visible setting label to English after saving', async () => {
     const { container } = render(App);
     await fireEvent.click(screen.getAllByRole('button', { name: /設定/ })[0]);
-    const language = screen.getByRole('combobox', { name: '介面語言' }) as HTMLSelectElement;
+    const language = await screen.findByRole('combobox', { name: '介面語言' }) as HTMLSelectElement;
     await fireEvent.change(language, { target: { value: 'en' } });
     await fireEvent.submit(container.querySelector('.settings-grid')!);
 
@@ -162,7 +162,7 @@ describe('desktop application shell', () => {
   it('applies a settings-page theme immediately without saving unrelated draft values', async () => {
     render(App);
     await fireEvent.click(screen.getAllByRole('button', { name: /設定/ })[0]);
-    const maxJobs = screen.getByRole('spinbutton', { name: '每次最多查詢工作' }) as HTMLInputElement;
+    const maxJobs = await screen.findByRole('spinbutton', { name: '每次最多查詢工作' }) as HTMLInputElement;
     await fireEvent.input(maxJobs, { target: { value: '17' } });
     await fireEvent.click(screen.getByRole('radio', { name: '深色' }));
 
@@ -238,7 +238,7 @@ describe('desktop application shell', () => {
   it('keeps unsaved workload settings while switching pages', async () => {
     render(App);
     await fireEvent.click(screen.getAllByRole('button', { name: /設定/ })[0]);
-    const maxJobs = screen.getByRole('spinbutton', { name: '每次最多查詢工作' }) as HTMLInputElement;
+    const maxJobs = await screen.findByRole('spinbutton', { name: '每次最多查詢工作' }) as HTMLInputElement;
     await fireEvent.input(maxJobs, { target: { value: '17' } });
     expect(screen.getByText('有尚未儲存的變更')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: '設定（有尚未儲存的變更）' }).length).toBeGreaterThan(0);

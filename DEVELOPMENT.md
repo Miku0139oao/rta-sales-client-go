@@ -118,7 +118,9 @@ report, err := xlsxfill.Apply(ctx, plan, xlsxfill.ApplyRequest{
 })
 ```
 
-`PageConcurrency` defaults to 16, `LoginAttempts` to 4 (max 10). `CookieStore` and `CookieFile` cannot both be set. Use a separate client and cookie path per account.
+`PageConcurrency` defaults to 16. That is the number of Article View page workers started after the first page; HTTP for one `Client` is still serialized, so extra workers queue. Desktop analysis opens extra Clients when it needs real concurrency. `LoginAttempts` defaults to 4 (max 10). Prefer `CookieStore` over plaintext `CookieFile` (Windows `chmod 0600` does not restrict the file). The two cookie options cannot both be set. Use a separate client and cookie path per account.
+
+`Sales` has no overall deadline. Bound the call with `ctx`. A failed Article View cancels the in-flight Trend View request. Captcha fetch retries transient 429/5xx/timeouts; a failed login submission fetches a new captcha instead of reusing the same flag.
 
 The embedded OCR is CPU-only. Uncertain glyphs are not submitted; the client asks for a new captcha or the next solver (`NewTwoCaptchaSolver` if you want a remote fallback). Typed errors work with `errors.As`. A failed page fails the whole sales call.
 

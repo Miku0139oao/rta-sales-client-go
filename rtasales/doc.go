@@ -7,5 +7,7 @@
 // request, and retries once after an expired session. Transient HTTP 429, 408,
 // 5xx, and transport timeouts are retried with Retry-After honored. In-flight
 // HTTP for one account is serialized so concurrent store queries do not
-// stampede. HTTP 401/403 and other permission denials are not retried.
+// stampede, including captcha fetch and login. HTTP 401/403 and other
+// permission denials are not retried. A failed Article View cancels the
+// in-flight Trend View request.
 package rtasales

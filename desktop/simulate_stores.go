@@ -16,7 +16,8 @@ const (
 
 // simulatingClient exposes extra store identities for local multi-store tests.
 // Each clone queries RTA with the authorized store ID so the request volume
-// matches a real multi-store account.
+// matches a real multi-store account. N clones mean N times the real traffic
+// on one requestMu; 16 simulated stores are 16 times the RTA load.
 type simulatingClient struct {
 	inner accountClient
 	count int

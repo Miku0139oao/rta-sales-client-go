@@ -116,7 +116,9 @@ report, err := xlsxfill.Apply(ctx, plan, xlsxfill.ApplyRequest{
 })
 ```
 
-`Config` 裡比較常動的是 `PageConcurrency`（預設 16）跟 `LoginAttempts`（預設 4，最多 10）。`CookieStore` 跟 `CookieFile` 只能選一個。不同帳號請用不同 Client、不同 cookie 路徑。
+`Config` 裡比較常動的是 `PageConcurrency`（預設 16）跟 `LoginAttempts`（預設 4，最多 10）。`PageConcurrency` 是 Article View 第一頁之後啟動的分頁 worker 數；同一個 `Client` 的 HTTP 仍會序列化，多出來的 worker 是排隊而不是真並行。桌面分析若要真正並行，會再開額外的 Client。Cookie 請優先用 `CookieStore`；`CookieFile` 是明文 JSON，Windows 上 `chmod 0600` 沒有實際限制。兩者只能選一個。不同帳號請用不同 Client、不同 cookie 路徑。
+
+`Sales` 沒有整體逾時，請用呼叫端的 `ctx` 限制最長時間。Article View 失敗時會取消進行中的 Trend View。驗證碼圖片遇到暫時性 429／5xx／逾時會重試；登入提交失敗則改抓新驗證碼，不會重送同一組 `verifyCodeFlag`。
 
 驗證碼預設用內建 OCR，一般 CPU 就好，不用裝 Tesseract。看不懂的圖它不會硬送，會換一張或交給你串的下一個 solver（例如 `NewTwoCaptchaSolver`）。錯誤用 `errors.As` 看 `AuthError`、`CaptchaError`、`UpstreamError` 那些。任何一分頁失敗，整次查詢就失敗。
 
