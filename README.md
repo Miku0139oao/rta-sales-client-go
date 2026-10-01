@@ -24,9 +24,15 @@ New builds read version and changelog metadata from a fixed [GitHub Pages manife
 
 **0.4.8 and earlier API-based clients need a one-time manual upgrade to a Pages-enabled release.** Finish work, close the app, keep a backup, then replace it at the same path and filename. Old clients cannot learn this endpoint automatically and may encounter GitHub API rate limits. See [update safety and deployment](docs/portable-updates.md).
 
+## v0.4.12 (current stable)
+
+Portable updates now check the executable and ancestor folders before offering automatic installation. Rejected owners or permissions show the affected path, localized recovery instructions, and a manual Release download link. Installation repeats the safety checks; no folder permissions are changed automatically.
+
+[v0.4.12 release notes (Traditional Chinese)](docs/releases/v0.4.12.zh-TW.md).
+
 ## v0.4.11
 
-**v0.4.11 is now the current stable release.** Queries continue while navigating between pages, errors retain their causes, and repeated sales analysis reuses short-lived login sessions and authorized-store caches.
+Queries continue while navigating between pages, errors retain their causes, and repeated sales analysis reuses short-lived login sessions and authorized-store caches.
 
 - **Category share:** each category's net sales divided by the **sum of filtered category net sales for the same period**, not unfiltered whole-store sales or just the displayed Top N. Each period has its own denominator. Incomplete/missing period data, missing values, or a zero denominator leave the share blank (PDF uses `-`), not 0%. Valid negative net sales are not forced to zero.
 - **Display and export:** category comparison shares appear below amounts on screen and in the PDF category performance panel. Analysis-table Excel exports and copied TSV use separate amount/share columns: Excel stores numeric ratios with percentage formatting; TSV represents them as percentage text, separate from amounts. This is distinct from the daily Excel-fill workflow.
@@ -35,7 +41,7 @@ New builds read version and changelog metadata from a fixed [GitHub Pages manife
 
 [v0.4.11 release notes (Traditional Chinese)](docs/releases/v0.4.11.zh-TW.md).
 
-## What's new in 0.4.9 (current stable)
+## What's new in 0.4.9
 
 Version metadata and changelogs now come from GitHub Pages, without a login, token or anonymous GitHub API quota. Startup caching and failure backoff reduce requests. Executables remain signed GitHub Release assets.
 
