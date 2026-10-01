@@ -243,8 +243,8 @@ func TestSalesAnalysisSerializesOneProfileStoresAndPreservesCategories(t *testin
 			progressEvents++
 		}
 	}
-	if progressEvents != 3 {
-		t.Fatalf("progress events=%d, want initial plus two stores", progressEvents)
+	if progressEvents != 4 {
+		t.Fatalf("progress events=%d, want authorizing, initial and two stores", progressEvents)
 	}
 }
 

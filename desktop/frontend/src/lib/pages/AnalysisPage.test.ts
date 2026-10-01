@@ -347,8 +347,8 @@ describe('sales analysis page', () => {
     });
     await fireEvent.click(screen.getByRole('tab', { name: '每週變化' }));
     expect(screen.getByRole('heading', { name: '每週銷售變化' })).toBeInTheDocument();
-    expect(screen.getByText('本週')).toBeInTheDocument();
-    expect(screen.getByText('上週')).toBeInTheDocument();
+    expect(screen.getAllByText('本週')[0]).toBeInTheDocument();
+    expect(screen.getAllByText('上週')[0]).toBeInTheDocument();
     await fireEvent.click(screen.getByRole('tab', { name: '關注' }));
     expect(screen.getByRole('heading', { name: '接下來關注' })).toBeInTheDocument();
     expect(screen.getByText('去年下月熱賣，用來準備接下來要補貨或推廣的商品。')).toBeInTheDocument();

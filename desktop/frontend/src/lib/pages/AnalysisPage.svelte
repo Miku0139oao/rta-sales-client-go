@@ -1,6 +1,14 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
-  import { beginNativeExportLease, endNativeExportLease, backend } from '../backend';
+  import { beginNativeExportLease, endNativeExportLease, backend, callBackend } from '../backend';
+  import { analysisActivity } from '../analysisActivity';
+  import { filterAnalysisTable } from '../tableView';
+  import ReportHistoryDialog from './ReportHistoryDialog.svelte';
+  import type { HistoryReport } from '../reportHistory';
+  import { DEFAULT_REPORT_WORKFLOW } from '../analysisPresets';
+  import { workbookSnapshot } from '../analysisTable';
+  import { ReportBundle } from '../reportBundle';
+  import { downloadBytes } from '../webDownloads';
   import { errorMessage } from '../i18n';
   import { isWebRuntime } from '../runtime';
   import { loadWebAnalysisSnapshot } from '../webStorage';
@@ -125,6 +133,14 @@
   let loadingProfiles = true;
   let loadingStores = false;
   let running = false;
+  let retrying = false;
+  let taskStartedAt = 0;
+  let historyOpen = false;
+  let historyCurrent: HistoryReport | undefined;
+  let historyLoading = false;
+  let tableSearch: Record<string,string> = {};
+  let queriedAt = '';
+  $: en = settings.locale === 'en';
   let loadingItems = false;
   let cancelling = false;
   let exportingPDF = false;
@@ -239,9 +255,9 @@
     appliedCatalogEpoch = catalogEpoch;
     if (catalogEpoch > 0) void refreshCatalog();
   }
-  $: busy = loadingProfiles || loadingStores || running || Boolean(result?.pending);
+  $: busy = loadingProfiles || loadingStores || running || retrying || workflowRunning || Boolean(result?.pending);
   $: visibleStores = filterStores(stores, storeQuery);
-  $: onBusyChange(running || exportingPDF || exportingData || Boolean(result?.pending));
+  $: onBusyChange(running || retrying || workflowRunning || exportingPDF || exportingData || Boolean(result?.pending));
   $: rangeInvalid = periodMode === 'range' && Boolean(from && to && from > to);
   $: periodUi = periodMode === 'month' ? 'month' : weekCompare ? 'week' : 'range';
   $: reportPeriods = normalizePeriods(result);
@@ -322,9 +338,10 @@
   $: pageCount = Math.max(1, Math.ceil(filteredItems.length / pageSize));
   $: if (page > pageCount) page = pageCount;
   $: pageRows = filteredItems.slice((page - 1) * pageSize, page * pageSize);
-  $: dataTables = buildAnalysisTables({ items: filteredItems, performance: performanceRows, categories: categoryRows, stores: storeRows,
+  $: rawDataTables = buildAnalysisTables({ items: filteredItems, performance: performanceRows, categories: categoryRows, stores: storeRows,
     periods: reportPeriods, week: weeklyWeek, weekAligned: weeklyUsesAlignedComparison, topSales, topQuantity,
     salesGroups: salesRankingGroups, quantityGroups: quantityRankingGroups, focus: focusGroups, insights: insightTable }, t, settings.locale, tableSorts);
+  $: dataTables = Object.fromEntries(Object.entries(rawDataTables).map(([key,tables]) => [key,tables.map(table => filterAnalysisTable(table,tableSearch[table.id] ?? ''))])) as typeof rawDataTables;
   $: dataContext = [t('analysis.querySummary', { account: reportAccount || t('analysis.savedReport'), period: result ? `${result.from} — ${result.to}` : '', count: result?.selectedStores ?? 0 }),
     'HKD', ...reportPeriods.map((period) => `${period.label}: ${period.from} — ${period.to}${period.complete ? '' : ` (${t('data.partial')})`}`),
     ...facets.flatMap(({ key, label }) => selections[key].size ? [`${t(label)}: ${[...selections[key]].join(', ')}`] : []),
@@ -335,6 +352,114 @@
     ...(activeView === 'categories' ? [`${t('analysis.categorySalesRanking')}: ${salesRankingPeriod?.label ?? ''}`, `${t('analysis.monthlyQuantityRanking')}: ${quantityRankingPeriod?.label ?? ''}`] : [])];
 
   function sortData(id: string, sort: TableSort) { tableSorts = { ...tableSorts, [id]: sort }; }
+  function searchTable(id: string, query: string) {
+    tableSearch = { ...tableSearch, [id]: query };
+  }
+
+  async function retrySales() {
+    if (!result || result.pending || running || retrying || workflowRunning || exportingPDF) return;
+    retrying = true;
+    error = '';
+    taskStartedAt = Date.now();
+    resetHydration();
+    analysisActivity.set({
+      operationId: result.operationId,
+      phase: 'comparison',
+      current: 0,
+      total: 0,
+      scope: reportAccount,
+      startedAt: taskStartedAt,
+    });
+    try {
+      result = await callBackend<SalesAnalysisResult>('RetrySalesAnalysis', [{ operationId: result.operationId }]);
+      queriedAt = new Date().toISOString();
+      analysisActivity.set(undefined);
+    } catch (cause) {
+      error = errorMessage(settings.locale, cause);
+      analysisActivity.set({
+        operationId,
+        phase: 'error',
+        current: 0,
+        total: 0,
+        scope: reportAccount,
+        startedAt: taskStartedAt,
+        error,
+      });
+    } finally {
+      retrying = false;
+    }
+  }
+
+  async function openHistory() {
+    if (historyLoading || running || retrying || workflowRunning || result?.pending || exportingPDF) return;
+    historyLoading = true;
+    error = '';
+    historyCurrent = undefined;
+    try {
+      const source = result;
+      if (source?.complete) {
+        const id = source.operationId;
+        await ensurePeriodItems(['current']);
+        await tick();
+        if (result?.operationId !== id || itemFailureRows.length || loadingItems)
+          throw new Error(en ? 'Report details are not ready.' : '報表明細尚未就緒。');
+        const query = appliedQuery;
+        const scope = JSON.stringify({
+          profileId: query?.profileId ?? profileId,
+          stores: source.stores.map((store) => store.businessId).sort(),
+          search: search.trim().normalize('NFKC').toLowerCase(),
+          categories: facets.map(({ key }) => [key, [...selections[key]].sort()]),
+          groupCodes: groupScopeActive ? [...selectedGroupCodes].sort() : [],
+        });
+        const scopedStores = source.stores.map((store) => ({
+          ...store,
+          totals: productScopeActive
+            ? summarize(
+                (currentPeriod?.items ?? []).filter(
+                  (item) =>
+                    item.storeId === store.businessId &&
+                    matchesFilters(item, selections, search) &&
+                    matchesGroup(item, selectedGroupCodes, groupScopeActive),
+                ),
+              )
+            : store.totals,
+        }));
+        historyCurrent = {
+          version: 1,
+          id: crypto.randomUUID(),
+          savedAt: queriedAt || restoredAt || new Date().toISOString(),
+          name: `${(reportAccount || t('analysis.savedReport')).slice(0, 60)} ${source.from} — ${source.to}`,
+          from: source.from,
+          to: source.to,
+          scope,
+          scopeLabel: dataContext
+            .slice(0, 1)
+            .concat(
+              facets.flatMap(({ key, label }) =>
+                selections[key].size ? [`${t(label)}: ${[...selections[key]].join(', ')}`] : [],
+              ),
+              search ? [`${t('analysis.search')}: ${search}`] : [],
+              selectedGroup ? [selectedGroup.name] : [],
+            )
+            .join(' · '),
+          complete: true,
+          totals: { ...currentTotals },
+          stores: scopedStores,
+        };
+      }
+      historyOpen = true;
+    } catch (cause) {
+      error = errorMessage(
+        settings.locale,
+        cause instanceof AppError
+          ? cause
+          : new AppError('backend_error', cause instanceof Error ? cause.message : String(cause)),
+      );
+    } finally {
+      historyLoading = false;
+    }
+  }
+
   function openProduct(code: string, name: string, periodKey = 'current') {
     if (!code || exportingData) return;
     selectedProduct = { code, name, periodKey };
@@ -351,15 +476,22 @@
   $: exportFilesCount = (exportTargetTotal, exportPDFEnabled, exportAIEnabled, exportGroupDetail, exportGroupIds, manCodeGroups, exportOutputCount());
 
   onMount(() => {
+    const cancelTask = () => { void cancelAnalysis(); };
+    window.addEventListener('rta:cancel-query', cancelTask);
     reloadShortcuts();
     const syncPresets = (event: StorageEvent) => { if (event.key === null || event.key === ANALYSIS_PRESETS_KEY) reloadShortcuts(); };
     window.addEventListener('storage', syncPresets);
     const unsubscribe = backend.onSalesAnalysisProgress((next) => {
+      if (!(running || retrying || result?.pending) || (operationId && next.operationId !== operationId)) return;
       progress = next;
       operationId = next.operationId;
+      analysisActivity.set({operationId,phase:next.phase ?? 'current',current:next.current,total:next.total,scope:reportAccount || profiles.find(profile=>profile.id===profileId)?.displayName || '',startedAt:taskStartedAt});
     });
     const unsubscribeUpdate = backend.onSalesAnalysisUpdate((next) => {
-      if (result?.operationId && next.operationId === result.operationId) result = keepHydratedItems(result, next);
+      if (result?.operationId && next.operationId === result.operationId) {
+        result = keepHydratedItems(result, next);
+        if (!next.pending) { queriedAt=new Date().toISOString(); analysisActivity.set(next.complete ? undefined : {operationId:next.operationId,phase:'error',current:progress?.current??0,total:progress?.total??0,scope:reportAccount,startedAt:taskStartedAt,error:en?'Some queries failed. Open the report to retry.':'部分查詢失敗，請開啟報表重試。'}); }
+      }
     });
     const closeFacetMenus = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null;
@@ -369,6 +501,7 @@
     document.addEventListener('keydown', closeFacetOnEscape);
     void initialize();
     return () => {
+      window.removeEventListener('rta:cancel-query', cancelTask);
       window.removeEventListener('storage', syncPresets);
       unsubscribe();
       unsubscribeUpdate();
@@ -510,7 +643,7 @@
     finally { shortcutBusy = false; }
   }
   function openPresets() {
-    if (loadingProfiles || loadingStores || running || exportingPDF || exportingData) return;
+    if (loadingProfiles || loadingStores || running || retrying || workflowRunning || exportingPDF || exportingData) return;
     try {
       const profile = profiles.find((profile) => profile.id === profileId);
       if (!profile) throw new Error('No account');
@@ -526,7 +659,7 @@
   }
 
   async function stagePreset(preset: AnalysisPreset): Promise<string | undefined> {
-    if (loadingProfiles || loadingStores || running || exportingPDF || exportingData) return t('presets.applyError');
+    if (loadingProfiles || loadingStores || running || retrying || workflowRunning || exportingPDF || exportingData) return t('presets.applyError');
     if (!profiles.some((profile) => profile.id === preset.query.profileId)) return t('presets.accountMissing');
     if (preset.filters.groupId && !manCodeGroups.some((group) => group.id === preset.filters.groupId)) return t('presets.groupMissing');
     const generation = ++storeLoadGeneration;
@@ -702,6 +835,8 @@
   }
 
   async function discardResult() {
+    dismissExportNotice();
+    queriedAt = '';
     selectedProduct = undefined;
     resetHydration();
     const operationId = result?.operationId;
@@ -766,16 +901,128 @@
     return ['107', '108'];
   }
 
-  async function runAnalysis() {
+  let workflowRunning = false;
+  let workflowCancelled = false;
+  let workflowBundle: ReportBundle | undefined;
+  let workflowDownload: { name: string; bytes: Uint8Array } | undefined;
+  async function runWorkflow(preset: AnalysisPreset) {
+    if (busy || exportingPDF || exportingData) return;
+    const problem = await stagePreset(preset);
+    if (problem || presetWarning) {
+      error = problem || presetWarning;
+      return;
+    }
+    workflowRunning = true;
+    workflowCancelled = false;
+    workflowDownload = undefined;
+    let lease = '';
+    try {
+      await runAnalysis(true);
+      const id = result?.operationId;
+      if (!id || error) return;
+      const deadline = Date.now() + 20 * 60 * 1000;
+      while (result?.operationId === id && result.pending && !workflowCancelled) {
+        if (Date.now() > deadline)
+          throw new Error('Query is still running; export it after completion / 查詢仍在執行，請完成後手動匯出');
+        await new Promise((resolve) => window.setTimeout(resolve, 250));
+      }
+      if (workflowCancelled) return;
+      if (result?.operationId !== id || !result.complete)
+        throw new Error(
+          'Query is incomplete. Retry failed queries before exporting / 查詢不完整，請先重試失敗項目再匯出',
+        );
+      await ensurePeriodItems((result.periods ?? []).map((period) => period.key));
+      await tick();
+      if (workflowCancelled) return;
+      if (itemFailureRows.length || loadingItems)
+        throw new Error('Report details are unavailable / 報表明細尚未載入完成');
+      if (!isWebRuntime()) lease = await beginNativeExportLease();
+      const directory = await backend.chooseSalesAnalysisPDFDirectory();
+      if (!directory) return;
+      const recipe = preset.workflow ?? DEFAULT_REPORT_WORKFLOW;
+      workflowBundle = new ReportBundle();
+      analysisActivity.set({
+        operationId: id,
+        phase: 'export',
+        current: 0,
+        total: 0,
+        scope: preset.name,
+        startedAt: taskStartedAt,
+      });
+      const filename = `RTA-${result.from}-${result.to}`;
+      if (recipe.excel) {
+        const tables = Object.values(dataTables).flatMap((value) => value ?? []);
+        const request = workbookSnapshot(tables, dataContext, `${filename}.xlsx`);
+        const base64 = await callBackend<string>('BuildSalesAnalysisWorkbook', [request]);
+        workflowBundle.add(
+          request.filename,
+          Uint8Array.from(atob(base64), (char) => char.charCodeAt(0)),
+        );
+      }
+      if (recipe.pdf || recipe.ai) {
+        openExportDialog();
+        exportDialog = false;
+        exportPDFEnabled = recipe.pdf;
+        exportAIEnabled = recipe.ai;
+        exportStoreIds = new Set(
+          recipe.perStore ? listSuccessfulReportStores(result).map((store) => store.businessId) : [],
+        );
+        await tick();
+        await exportPDF(directory);
+        if (error) throw new Error(error);
+      }
+      const bytes = await workflowBundle.build();
+      if (isWebRuntime()) {
+        workflowDownload = { name: `${filename}.zip`, bytes };
+        exportNotice = en ? 'Reports are ready. Download the ZIP below.' : '報表已完成，請下載下方 ZIP 報表包。';
+      } else {
+        const path = await callBackend<string>('WriteReportBundle', [
+          { directory, filename: `${filename}.zip`, dataBase64: bytesToBase64(bytes) },
+        ]);
+        exportDirectory = directory;
+        exportNotice = en ? `Report bundle saved: ${path}` : `報表包已儲存：${path}`;
+      }
+      analysisActivity.set(undefined);
+    } catch (caught) {
+      error = errorMessage(
+        settings.locale,
+        caught instanceof AppError
+          ? caught
+          : new AppError('backend_error', caught instanceof Error ? caught.message : String(caught)),
+      );
+      analysisActivity.set({
+        operationId: operationId ?? '',
+        phase: 'error',
+        current: 0,
+        total: 0,
+        scope: preset.name,
+        startedAt: taskStartedAt,
+        error,
+      });
+    } finally {
+      workflowBundle = undefined;
+      workflowRunning = false;
+      if (lease)
+        await endNativeExportLease(lease).catch((caught) => {
+          error = errorMessage(settings.locale, caught);
+        });
+      if (workflowCancelled) analysisActivity.set(undefined);
+    }
+  }
+
+  async function runAnalysis(fromWorkflow = false) {
     if (!profileId || selectedStoreIds.size === 0 || rangeInvalid) return;
     const periods = buildPeriodRequests();
-    if (running || exportingData || loadingStores || periods.length === 0) return;
+    if (running || retrying || exportingPDF || (workflowRunning && !fromWorkflow) || exportingData || loadingStores || periods.length === 0) return;
     const submittedKey = currentQueryKey();
     const submittedAccount = profiles.find((profile) => profile.id === profileId)?.displayName ?? profileId;
     const submittedQuery = captureQuery();
     const submittedPreset = stagedPreset;
     // Lock the draft before awaiting cancellation; a rapid second click must not start another run.
     running = true;
+    taskStartedAt=Date.now();
+    tableSearch={};
+    analysisActivity.set({operationId:'',phase:'authorizing',current:0,total:0,scope:submittedAccount,startedAt:taskStartedAt});
     if (operationId) {
       try { await backend.cancelSalesAnalysis(operationId); } catch { /* previous run may already be finished */ }
     }
@@ -794,6 +1041,8 @@
         simulateStoreCount: settings.simulateStoreCount,
       });
       result = summary;
+      queriedAt=new Date().toISOString();
+      if (!summary.pending) analysisActivity.set(undefined);
       operationId = summary.operationId;
       activeView = 'overview';
       queryOpen = false;
@@ -803,6 +1052,7 @@
       finishPresetApplication(submittedPreset);
     } catch (caught) {
       error = errorMessage(settings.locale, caught);
+      analysisActivity.set({operationId,phase:'error',current:0,total:0,scope:submittedAccount,startedAt:taskStartedAt,error});
     } finally {
       running = false;
       cancelling = false;
@@ -884,11 +1134,13 @@
   }
 
   async function cancelAnalysis() {
+    workflowCancelled = true;
     const id = operationId || result?.operationId;
     if (!id || cancelling) return;
     cancelling = true;
     try {
       await backend.cancelSalesAnalysis(id);
+      analysisActivity.set(undefined);
       if (result?.operationId === id && result.pending) {
         result = { ...result, pending: false };
         progress = undefined;
@@ -1043,7 +1295,9 @@
     exportFilter = { ...exportFilter, categories: [...next] };
   }
 
-  async function exportPDF() {
+  async function exportPDF(directoryOverride?: string) {
+    if (workflowRunning && !directoryOverride) return;
+    if (!directoryOverride) workflowDownload = undefined;
     if (!result || exportingPDF || !currentReady) return;
     if (exportFilter.mode === 'whitelist' && exportFilter.categories.length === 0) return;
     if (exportFilesCount === 0) return;
@@ -1055,7 +1309,7 @@
     let nativeExportLease = '';
     try {
       if (!isWebRuntime()) nativeExportLease = await beginNativeExportLease();
-      const directory = await backend.chooseSalesAnalysisPDFDirectory();
+      const directory = directoryOverride ?? await backend.chooseSalesAnalysisPDFDirectory();
       if (!directory) return;
       const availableStores = listSuccessfulReportStores(result);
       if (availableStores.length === 0) throw new AppError('pdf_no_stores', 'No successful store is available for PDF export');
@@ -1229,6 +1483,7 @@
     errorCode: 'pdf_write' | 'export_write',
     kind: 'pdf' | 'text' = 'pdf',
   ): Promise<string> {
+    if (workflowBundle) { workflowBundle.add(filename,data); return filename; }
     const dataBase64 = bytesToBase64(data);
     try {
       return kind === 'text'
@@ -1716,6 +1971,7 @@
   function dismissExportNotice() {
     exportNotice = '';
     exportDirectory = '';
+    workflowDownload = undefined;
   }
 
   function applySearch(next: string, immediate = false) {
@@ -1899,6 +2155,7 @@
       {/if}
     </div>
     <div class="analysis-heading-actions">
+      <button type="button" class="preset-trigger" disabled={running||retrying||workflowRunning||result?.pending||exportingPDF||historyLoading} onclick={()=>void openHistory()}>{historyLoading?(en?'Loading history…':'載入歷史…'):(en?'History and comparison':'歷史與比較')}</button>
       <button type="button" class="preset-trigger" onclick={openPresets} disabled={loadingProfiles || loadingStores || running || exportingPDF} aria-haspopup="dialog"><span class="material-symbols-rounded" aria-hidden="true">bookmarks</span>{t('presets.title')}</button>
       {#if result}
         <md-filled-button type="button" onclick={openExportDialog} disabled={(exportingPDF || !currentReady) ? true : undefined}>
@@ -1923,6 +2180,12 @@
   {#if error}
     <div class="notice error-notice" role="alert"><span class="material-symbols-rounded" aria-hidden="true">error</span><span>{error}</span></div>
   {/if}
+  {#if result && !result.pending && !result.complete && result.issues?.length}
+    <div class="notice warning-notice"><span>{en?`${result.issues.length} queries failed. Successful data is retained.`:`${result.issues.length} 項查詢失敗，成功資料已保留。`}</span><button class="preset-trigger" type="button" disabled={running||retrying||exportingPDF} onclick={()=>void retrySales()}>{retrying?(en?'Retrying…':'重試中…'):(en?'Retry failed queries only':'只重試失敗查詢')}</button><details><summary>{en?'Failure details':'失敗明細'}</summary>{#each result.issues as issue}<p>{issue.storeLabel} · {issue.periodKey}：{issue.message}</p>{/each}</details></div>
+  {/if}
+  {#if result && currentPeriod}
+    <div class="report-summary-bar" class:active-task={Boolean($analysisActivity)} aria-label={en?'Report scope and freshness':'報表範圍與資料時間'}><strong>{currentPeriod.from} — {currentPeriod.to}</strong><span>{reportAccount} · {result.selectedStores} {en?'stores':'間門店'}</span><span>{result.pending?(en?'Comparison data loading':'比較資料補齊中'):result.complete?(en?'Complete report':'完整報表'):(en?'Partial report':'部分報表')}</span><span>{en?'Data time':'資料時間'}：{queriedAt?new Date(queriedAt).toLocaleString(settings.locale):restoredAt?new Date(restoredAt).toLocaleString(settings.locale):(en?'Previous saved result':'先前儲存結果')}</span><span>{en?'Query time':'查詢耗時'}：{(result.queryDurationMs/1000).toFixed(1)}s</span></div>
+  {/if}
   {#if exportNotice}
     <div class="notice success-notice export-notice" role="status">
       <span class="material-symbols-rounded" aria-hidden="true">check_circle</span>
@@ -1930,6 +2193,7 @@
         <span>{exportNotice}</span>
         {#if exportDirectory}<code title={exportDirectory}>{exportDirectory}</code>{/if}
       </div>
+      {#if workflowDownload}<button type="button" class="preset-trigger" onclick={()=>{if(workflowDownload)downloadBytes(workflowDownload.name,workflowDownload.bytes,'application/zip');}}>{en?'Download report ZIP':'下載 ZIP 報表包'}</button>{/if}
       {#if exportDirectory && !isWebRuntime()}
         <md-outlined-button type="button" onclick={() => void openExportFolder()} disabled={openingFolder}>
           {openingFolder ? t('analysis.openingFolder') : t('analysis.openFolder')}
@@ -2236,7 +2500,7 @@
             <div class="ranking-empty">{result.pending ? t('common.loading') : t('analysis.weeklyMissing')}</div>
           {:else}
             <p class="focus-note">{t(weeklyUsesAlignedComparison ? 'analysis.weeklyAlignedHint' : 'analysis.weeklyHint')}</p>
-            <div class="store-table"><AnalysisDataTable table={dataTables.weekly![0]!} {t} locale={settings.locale} sort={tableSorts.weekly} onSort={sortData} /></div>
+            <div class="store-table"><AnalysisDataTable table={dataTables.weekly![0]!} {t} locale={settings.locale} sort={tableSorts.weekly} onSort={sortData} viewKey={result?.operationId??''} search={tableSearch.weekly??''} onSearch={searchTable} /></div>
           {/if}
         </section>
       {:else if activeView === 'focus'}
@@ -2292,7 +2556,7 @@
       {:else if activeView === 'categories'}
         <section class="comparison-card surface-card" aria-labelledby="category-title">
           <div class="comparison-heading"><h2 id="category-title">{t('analysis.rolling')}</h2><div class="group-tabs" role="radiogroup" aria-label={t('analysis.groupBy')}>{#each facets as facet}<button type="button" class:active={groupLevel === facet.key} role="radio" aria-checked={groupLevel === facet.key} onclick={() => { groupLevel = facet.key; }}>{t(facet.label)}</button>{/each}</div></div>
-          <div class="category-table"><AnalysisDataTable table={dataTables.categories![0]!} {t} locale={settings.locale} sort={tableSorts.categories} onSort={sortData} /></div>
+          <div class="category-table"><AnalysisDataTable table={dataTables.categories![0]!} {t} locale={settings.locale} sort={tableSorts.categories} onSort={sortData} viewKey={result?.operationId??''} search={tableSearch.categories??''} onSearch={searchTable} /></div>
           <p class="category-share-hint">{t('analysis.shareHint')}</p>
         </section>
 
@@ -2336,12 +2600,12 @@
       {:else if activeView === 'products'}
         <section class="analysis-table-card surface-card" aria-labelledby="items-title">
           <div class="analysis-table-heading"><h2 id="items-title">{t('analysis.items')}</h2><strong>{t('common.items', { count: filteredItems.length })}</strong></div>
-          <AnalysisDataTable table={dataTables.products![0]!} {t} locale={settings.locale} sort={tableSorts.products} onSort={sortData} onProduct={openProduct} paginated />
+          <AnalysisDataTable table={dataTables.products![0]!} {t} locale={settings.locale} sort={tableSorts.products} onSort={sortData} onProduct={openProduct} viewKey={result?.operationId??''} search={tableSearch.products??''} onSearch={searchTable} paginated />
         </section>
       {:else}
         <section class="comparison-card surface-card" aria-labelledby="stores-title">
           <div class="section-heading"><h2 id="stores-title">{t('analysis.storeComparison')}</h2></div>
-          <div class="store-table"><AnalysisDataTable table={dataTables.stores![0]!} {t} locale={settings.locale} sort={tableSorts.stores} onSort={sortData} /></div>
+          <div class="store-table"><AnalysisDataTable table={dataTables.stores![0]!} {t} locale={settings.locale} sort={tableSorts.stores} onSort={sortData} viewKey={result?.operationId??''} search={tableSearch.stores??''} onSearch={searchTable} /></div>
         </section>
       {/if}
       {/if}
@@ -2356,8 +2620,12 @@
     onRetry={retryItemHydration} onClose={() => { selectedProduct = undefined; }} onBusy={(value) => { exportingData = value; }} />
 {/if}
 
+{#if historyOpen}
+  <ReportHistoryDialog locale={settings.locale} current={historyCurrent} onClose={() => historyOpen=false} />
+{/if}
+
 {#if presetsOpen}
-  <AnalysisPresetsDialog {t} locale={settings.locale} draft={presetSaveDraft} groups={manCodeGroups} onClose={closePresets} onApply={stagePreset} />
+  <AnalysisPresetsDialog {t} locale={settings.locale} draft={presetSaveDraft} groups={manCodeGroups} onClose={closePresets} onApply={stagePreset} onRun={(preset)=>void runWorkflow(preset)} />
 {/if}
 
 {#if exportDialog && result}
@@ -2521,6 +2789,8 @@
 {/if}
 
 <style>
+  .report-summary-bar.active-task{position:static;}
+  .report-summary-bar{position:sticky;top:0;z-index:4;display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:12px 16px;border:1px solid var(--md-sys-color-outline-variant);border-radius:12px;background:var(--md-sys-color-surface-container);font-size:12px;}
   .analysis-page { max-width: 1480px; }
   .empty-state-steps { width: min(100%, 28rem); margin: 0 auto 16px; padding-left: 1.2em; text-align: left; color: var(--md-sys-color-on-surface-variant); font-size: 14px; line-height: 1.6; }
   .analysis-page.has-results { width: 100%; max-width: 1480px; }

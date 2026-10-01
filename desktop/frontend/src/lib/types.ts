@@ -431,6 +431,8 @@ export interface SalesAnalysisWeekStore {
 }
 
 export interface SalesAnalysisProgress {
+  phase?: 'authorizing' | 'current' | 'comparison' | 'trend';
+  message?: string;
   operationId: string;
   current: number;
   total: number;

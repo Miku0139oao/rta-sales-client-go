@@ -162,6 +162,12 @@ async function invoke<T>(names: string[], args: unknown[], fallback: () => Promi
   }
 }
 
+export async function callBackend<T>(name: string, args: unknown[] = []): Promise<T> {
+  const method = findMethod([name]);
+  if (!method) throw new AppError('backend_unavailable', 'Backend method is unavailable');
+  try { return await method(...args) as T; } catch (error) { throw asAppError(error); }
+}
+
 // Update calls never use demo fallbacks or the web RPC bridge.
 export async function invokeNativeUpdate<T>(name: 'GetUpdateStatus' | 'CheckForUpdate' | 'CheckForUpdateStartup' | 'InstallUpdate' | 'CancelUpdate' | 'BeginNativeExportLease' | 'EndNativeExportLease', args: unknown[] = []): Promise<T> {
   if (isWebRuntime()) throw new AppError('unsupported', 'Portable updates require the Windows native app');

@@ -291,6 +291,12 @@ func dispatchWebRPC(session *webSession, method string, args []json.RawMessage) 
 			return nil, err
 		}
 		return app.RunSalesAnalysis(request)
+	case "RetrySalesAnalysis":
+		var request OperationRequest
+		if err := arg(0, &request); err != nil {
+			return nil, err
+		}
+		return app.RetrySalesAnalysis(request)
 	case "GetSalesAnalysisItems":
 		var request SalesAnalysisItemsRequest
 		if err := arg(0, &request); err != nil {

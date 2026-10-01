@@ -14,6 +14,11 @@
   export let groups: ManCodeGroup[];
   export let onClose: () => void;
   export let onApply: (preset: AnalysisPreset) => Promise<string | undefined>;
+  export let onRun: ((preset: AnalysisPreset) => void) | undefined = undefined;
+  let recipePDF = true;
+  let recipeExcel = true;
+  let recipeAI = false;
+  let recipePerStore = false;
 
   let presets: AnalysisPreset[] = [];
   let selectedId = '';
@@ -28,6 +33,7 @@
   $: selected = presets.find((preset) => preset.id === selectedId);
   $: currentDraft = draft && {
     ...draft,
+    workflow: {pdf:recipePDF,excel:recipeExcel,ai:recipeAI,perStore:recipePerStore},
     query: { ...draft.query, monthMode, ...(monthMode !== 'fixed' ? { periodMode: 'month' as const, weekCompare: false } : {}) },
   };
 
@@ -107,6 +113,7 @@
   </div>
   <div class="presets-body pane-scroll">
     <p id="presets-help" class="muted">{t('presets.help')}</p>
+    <fieldset><legend>{locale==='en'?'Formats for new or updated workflows':'新增／更新流程的匯出設定'}</legend><label><input type="checkbox" bind:checked={recipePDF}/> PDF</label> <label><input type="checkbox" bind:checked={recipeExcel}/> Excel</label> <label><input type="checkbox" bind:checked={recipeAI}/> {locale==='en'?'AI summary':'AI 摘要'}</label> <label><input type="checkbox" bind:checked={recipePerStore}/> {locale==='en'?'Include individual stores':'另外產生各門店報表'}</label></fieldset>
     {#if error}<div class="notice error-notice" role="alert">{error}{#if loadFailed}<button type="button" onclick={reload}>{t('presets.retryRead')}</button>{/if}</div>{/if}
     {#if notice}<div class="notice success-notice" role="status">{notice}</div>{/if}
 
@@ -122,12 +129,14 @@
             <strong>{selected.query.profileName || selected.query.profileId}</strong>
             <span>{periodLabel(selected)}{selected.query.periodMode === 'range' && selected.query.weekCompare ? ` · ${t('analysis.weekMode')}` : ''}</span>
             <span>{t('analysis.selectedStores', { count: selected.query.storeIds.length })} · {selected.query.storeIds.join(', ')}</span>
+            <span>{locale==='en'?'Export formats':'匯出格式'}：{(selected.workflow?.pdf??true)?'PDF ':''}{(selected.workflow?.excel??true)?'Excel ':''}{selected.workflow?.ai?'AI ':''} · ZIP</span>
             {#if selected.lastUsedAt !== undefined}<span>{t('presets.lastUsed', { date: new Date(selected.lastUsedAt).toLocaleString(locale) })}</span>{/if}
           </div>
           {#if filterLabels(selected).length}
             <details><summary>{t('presets.filters', { count: filterLabels(selected).length })}</summary><ul>{#each filterLabels(selected) as label}<li>{label}</li>{/each}</ul></details>
           {:else}<p class="muted">{t('presets.noFilters')}</p>{/if}
           <div class="preset-actions">
+            {#if onRun}<button type="button" class="primary" disabled={busy || loadFailed} onclick={() => { if(selected && onRun){const preset=selected;onClose();onRun(preset);} }}>{locale === 'en' ? 'Run query and export' : '一鍵查詢並匯出'}</button>{/if}
             <button type="button" class="primary" disabled={busy || loadFailed} onclick={() => void apply()}>{t(busy ? 'presets.applying' : 'presets.apply')}</button>
             <button type="button" disabled={busy || loadFailed} aria-pressed={Boolean(selected.pinned)} onclick={togglePin}>{t(selected.pinned ? 'presets.unpin' : 'presets.pin')}</button>
             <button type="button" disabled={busy || loadFailed} onclick={() => begin('rename')}>{t('presets.rename')}</button>

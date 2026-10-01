@@ -68,6 +68,7 @@ type App struct {
 	salesAnalysisCancel    context.CancelFunc
 	salesResultMu          sync.Mutex
 	salesResult            *SalesAnalysisResult
+	salesRetry             *salesRetryState
 	salesPacked            map[string]SalesAnalysisPackedItems
 	salesProfileID         string
 	salesSavedAt           time.Time

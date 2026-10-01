@@ -277,20 +277,20 @@ type SalesAnalysisIssue struct {
 }
 
 type SalesAnalysisPeriodResult struct {
-	Key              string                      `json:"key"`
-	Label            string                      `json:"label"`
-	From             string                      `json:"from"`
-	To               string                      `json:"to"`
-	Complete         bool                        `json:"complete"`
-	SuccessfulStores int                         `json:"successfulStores"`
-	Totals           SalesAnalysisTotals         `json:"totals"`
-	Stores           []SalesAnalysisStoreSummary `json:"stores"`
-	Items            []SalesAnalysisItem                    `json:"items,omitempty"`
-	ItemCount        int                                    `json:"itemCount"`
-	Issues           []SalesAnalysisIssue                   `json:"issues,omitempty"`
-	TopAmount        []SalesAnalysisRankedItem              `json:"topAmount,omitempty"`
-	TopQuantity      []SalesAnalysisRankedItem              `json:"topQuantity,omitempty"`
-	FacetOptions     map[string][]string                    `json:"facetOptions,omitempty"`
+	Key              string                                  `json:"key"`
+	Label            string                                  `json:"label"`
+	From             string                                  `json:"from"`
+	To               string                                  `json:"to"`
+	Complete         bool                                    `json:"complete"`
+	SuccessfulStores int                                     `json:"successfulStores"`
+	Totals           SalesAnalysisTotals                     `json:"totals"`
+	Stores           []SalesAnalysisStoreSummary             `json:"stores"`
+	Items            []SalesAnalysisItem                     `json:"items,omitempty"`
+	ItemCount        int                                     `json:"itemCount"`
+	Issues           []SalesAnalysisIssue                    `json:"issues,omitempty"`
+	TopAmount        []SalesAnalysisRankedItem               `json:"topAmount,omitempty"`
+	TopQuantity      []SalesAnalysisRankedItem               `json:"topQuantity,omitempty"`
+	FacetOptions     map[string][]string                     `json:"facetOptions,omitempty"`
 	CategoryGroups   map[string][]SalesAnalysisCategoryGroup `json:"categoryGroups,omitempty"`
 }
 
@@ -463,6 +463,8 @@ type SalesAnalysisPDFWriteRequest struct {
 }
 
 type SalesAnalysisProgress struct {
+	Phase       string `json:"phase,omitempty"`
+	Message     string `json:"message,omitempty"`
 	OperationID string `json:"operationId"`
 	Current     int    `json:"current"`
 	Total       int    `json:"total"`

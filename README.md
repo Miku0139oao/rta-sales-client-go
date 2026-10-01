@@ -24,7 +24,13 @@ New builds read version and changelog metadata from a fixed [GitHub Pages manife
 
 **0.4.8 and earlier API-based clients need a one-time manual upgrade to a Pages-enabled release.** Finish work, close the app, keep a backup, then replace it at the same path and filename. Old clients cannot learn this endpoint automatically and may encounter GitHub API rate limits. See [update safety and deployment](docs/portable-updates.md).
 
-## v0.4.13 (current stable)
+## v0.4.14 (current stable)
+
+Sales analysis now has cross-page task progress, failed-job-only retry, report scope/freshness, searchable configurable tables, local history comparison, and saved one-click query/export workflows. PDF/Excel/AI files can be bundled into one ZIP. Historical summaries stay on the device and are limited to 20 records without automatic deletion.
+
+[v0.4.14 release notes (Traditional Chinese)](docs/releases/v0.4.14.zh-TW.md) · [Report workflows and storage](docs/report-workflows.md).
+
+## v0.4.13
 
 Updates now support ordinary local installation folders, including inherited Modify permissions and different disk/folder owners. Private staging, signed publisher/version/hash checks, file identities, locks and backup recovery remain. Local accounts allowed to modify installation folders are trusted; no folder ACL is changed.
 

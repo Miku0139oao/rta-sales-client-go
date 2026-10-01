@@ -330,6 +330,11 @@ export function installWebBackend(): void {
       ListSalesAnalysisStores: async (value: unknown) =>
         liveRPC('ListSalesAnalysisStores', value),
 
+      RetrySalesAnalysis: async (value: unknown) => {
+        const result = await liveRPC<SalesAnalysisResult>('RetrySalesAnalysis', value);
+        rememberArticleNames(result);
+        return result;
+      },
       RunSalesAnalysis: async (value: unknown) => {
         const result = await liveRPC<SalesAnalysisResult>('RunSalesAnalysis', value);
         rememberArticleNames(result);
@@ -379,6 +384,7 @@ export function installWebBackend(): void {
       },
 
       ChooseSalesAnalysisPDFDirectory: async () => WEB_DOWNLOADS,
+      BuildSalesAnalysisWorkbook: async (value: unknown) => liveRPC<string>('BuildSalesAnalysisWorkbook', value),
 
       ExportSalesAnalysisWorkbook: async (value: unknown) => {
         const request = value as import('./analysisTable').AnalysisWorkbookRequest;

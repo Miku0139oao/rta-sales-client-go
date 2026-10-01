@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte';
   import AnalysisPage from './lib/pages/AnalysisPage.svelte';
   import UpdateNotice from './lib/UpdateNotice.svelte';
+  import AnalysisActivityNotice from './lib/AnalysisActivityNotice.svelte';
   import { translator } from './lib/i18n';
   import { isWebRuntime } from './lib/runtime';
   import { loadSettings, saveSettings } from './lib/settings';
@@ -180,6 +181,7 @@
     </aside>
 
     <main id="main-content" bind:this={mainContent} tabindex="-1" onwheel={relayMainWheel}>
+      <AnalysisActivityNotice locale={settings.locale} onOpen={() => void navigateTo('analysis')} onCancel={() => window.dispatchEvent(new Event('rta:cancel-query'))} />
       <UpdateNotice {settings} details={activePage === 'settings'} busy={excelBusy || analysisBusy || accountsBusy || itemcodesBusy} onChange={updateSettings} onBusyChange={(busy) => (updateBusy = busy)} />
       {#if webBannerVisible}
         <div class="notice warning-notice web-preview-notice" role="status">

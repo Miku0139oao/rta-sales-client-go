@@ -110,6 +110,7 @@ func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResul
 		}
 	}()
 
+	a.events.Emit(a.appContext(), salesAnalysisProgressEventName, SalesAnalysisProgress{OperationID: operationID, Status: "running", Phase: "authorizing"})
 	selected, err := a.selectSalesAnalysisStores(ctx, request.ProfileID, storeIDs, request.SimulateStoreCount)
 	if err != nil {
 		return SalesAnalysisResult{}, err
@@ -148,13 +149,19 @@ func (a *App) RunSalesAnalysis(request SalesAnalysisRequest) (SalesAnalysisResul
 		if err := run.wait(); err != nil {
 			return SalesAnalysisResult{}, err
 		}
+		a.rememberSalesRetry(operationID, request, selected, periods, run.finalOutcomes)
 		released = true
 		finish()
 		return remembered, nil
 	}
 
 	released = true
-	go a.finishSalesAnalysisSupplement(finish, started, operationID, selected, periods, primaryIndex, run)
+	go a.finishSalesAnalysisSupplement(func() {
+		if run.wait() == nil {
+			a.rememberSalesRetry(operationID, request, selected, periods, run.finalOutcomes)
+		}
+		finish()
+	}, started, operationID, selected, periods, primaryIndex, run)
 	return remembered, nil
 }
 
@@ -278,6 +285,7 @@ func (a *App) startSalesAnalysisJobs(
 	periods []normalizedSalesAnalysisPeriod,
 	primaryJobs, followJobs []analysisJob,
 	progressOffset, totalTasks, concurrency, primaryIndex int,
+	seed ...[][]storeOutcome,
 ) *analysisJobRun {
 	run := &analysisJobRun{
 		outcomes:    make([][]storeOutcome, len(periods)),
@@ -296,6 +304,14 @@ func (a *App) startSalesAnalysisJobs(
 		return run
 	}
 	trendOutcomes := make([]storeOutcome, len(periods))
+	if len(seed) > 0 {
+		for i, outcomes := range seed[0] {
+			copy(run.outcomes[i], outcomes)
+			if len(outcomes) > len(selected) {
+				trendOutcomes[i] = outcomes[len(selected)]
+			}
+		}
+	}
 	jobsByLane := make(map[string][]analysisJob)
 	laneOrder := make([]string, 0)
 	for _, task := range tasks {
@@ -354,10 +370,17 @@ func (a *App) startSalesAnalysisJobs(
 					}
 					current := int(run.completed.Add(1))
 					status := "success"
+					phase := "comparison"
+					if task.kind == "trend" {
+						phase = "trend"
+					} else if task.periodIndex == primaryIndex {
+						phase = "current"
+					}
 					if queryErr != nil {
 						status = "failed"
 					}
 					a.events.Emit(a.appContext(), salesAnalysisProgressEventName, SalesAnalysisProgress{
+						Phase:       phase,
 						OperationID: operationID, Current: current, Total: totalTasks,
 						StoreID: storeID, StoreLabel: storeLabel,
 						PeriodKey: period.key, PeriodLabel: period.label, Status: status,

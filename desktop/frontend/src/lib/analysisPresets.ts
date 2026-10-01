@@ -23,7 +23,9 @@ export interface PresetFilters {
   groupLevel: PresetCategory;
   categories: Record<PresetCategory, string[]>;
 }
-export interface AnalysisPresetDraft { query: PresetQuery; filters: PresetFilters }
+export interface ReportWorkflow { pdf: boolean; excel: boolean; ai: boolean; perStore: boolean }
+export const DEFAULT_REPORT_WORKFLOW: ReportWorkflow = { pdf: true, excel: true, ai: false, perStore: false };
+export interface AnalysisPresetDraft { query: PresetQuery; filters: PresetFilters; workflow?: ReportWorkflow }
 export interface AnalysisPreset extends AnalysisPresetDraft { id: string; name: string; pinned?: boolean; lastUsedAt?: number }
 export class PresetError extends Error {
   constructor(public code: 'invalid' | 'name' | 'duplicate' | 'limit' | 'pinLimit') { super(code); }
@@ -50,6 +52,12 @@ function nameKey(value: string): string { return value.trim().normalize('NFKC').
 
 export function normalizePresetDraft(value: unknown): AnalysisPresetDraft {
   const raw = record(value), query = record(raw.query), filters = record(raw.filters), categories = record(filters.categories);
+  let workflow: ReportWorkflow | undefined;
+  if (raw.workflow !== undefined) {
+    const recipe = record(raw.workflow);
+    if (['pdf','excel','ai','perStore'].some(key => typeof recipe[key] !== 'boolean') || !(recipe.pdf || recipe.excel || recipe.ai)) throw new PresetError('invalid');
+    workflow = {pdf:recipe.pdf as boolean,excel:recipe.excel as boolean,ai:recipe.ai as boolean,perStore:recipe.perStore as boolean};
+  }
   if (query.periodMode !== 'month' && query.periodMode !== 'range') throw new PresetError('invalid');
   if (!['fixed', 'current', 'previous'].includes(String(query.monthMode))) throw new PresetError('invalid');
   const month = text(query.month, 7), from = text(query.from, 10), to = text(query.to, 10);
@@ -59,6 +67,7 @@ export function normalizePresetDraft(value: unknown): AnalysisPresetDraft {
   const storeIds = strings(query.storeIds, 2000);
   if (!storeIds.length) throw new PresetError('invalid');
   return {
+    ...(workflow ? {workflow} : {}),
     query: {
       profileId: text(query.profileId, 256, true), profileName: text(query.profileName, 256),
       periodMode: query.periodMode, monthMode: query.monthMode as PresetMonthMode,
