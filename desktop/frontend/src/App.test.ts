@@ -191,13 +191,14 @@ describe('desktop application shell', () => {
   it('finishes a background analysis after navigating to settings', async () => {
     let finishQuery!: () => void;
     const queryGate = new Promise<void>((resolve) => { finishQuery = resolve; });
+    const listStores = vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]);
     const totals = { saleQuantity: 2, saleAmount: 20, returnQuantity: 0, returnAmount: 0, netQuantity: 2, netSalesAmount: 20 };
     configureBackend({ methods: {
       ListProfiles: vi.fn(async () => [{ id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true }]),
-      ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
+      ListSalesAnalysisStores: listStores,
       ListManCodeGroups: vi.fn(async () => []),
       RunSalesAnalysis: vi.fn(async () => { await queryGate; return ({
-        operationId: 'keep-1', from: '2026-08-01', to: '2026-08-31', complete: true, pending: false,
+        operationId: 'keep-1', from: '2026-08-01', to: '2026-08-31', complete: false, pending: true,
         selectedStores: 1, successfulStores: 1, totals,
         stores: [{ businessId: '107', label: '107 - Central', totals }],
         periods: [{
@@ -223,6 +224,11 @@ describe('desktop application shell', () => {
     finishQuery();
     await fireEvent.click(screen.getAllByRole('button', { name: /銷售分析/ })[0]);
     await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 24' })).toBeInTheDocument());
+    await fireEvent.click(screen.getAllByRole('button', { name: /^帳號$/ })[0]);
+    await screen.findByRole('heading', { name: '帳號設定檔' });
+    await fireEvent.click(screen.getAllByRole('button', { name: /銷售分析/ })[0]);
+    await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 24' })).toBeVisible());
+    expect(listStores).toHaveBeenCalledTimes(1);
   });
 
   it('keeps a workbook scan after visiting accounts and asks to scan again', async () => {

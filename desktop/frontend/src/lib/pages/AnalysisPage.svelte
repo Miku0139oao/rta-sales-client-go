@@ -231,11 +231,11 @@
   const prefetchPeriodKeys = ['current', 'previous', 'previous2', 'yearAgo', 'yearAgoNext'];
   const rankingViews: ReportView[] = ['overview', 'categories', 'focus'];
 
-  $: if (!loadingProfiles && profileId && loadedSimulateCount !== settings.simulateStoreCount) {
+  $: if (!busy && profileId && loadedSimulateCount !== settings.simulateStoreCount) {
     loadedSimulateCount = settings.simulateStoreCount;
     void loadStores();
   }
-  $: if (!loadingProfiles && catalogEpoch > appliedCatalogEpoch) {
+  $: if (!busy && !exportingPDF && !exportingData && catalogEpoch > appliedCatalogEpoch) {
     appliedCatalogEpoch = catalogEpoch;
     if (catalogEpoch > 0) void refreshCatalog();
   }
