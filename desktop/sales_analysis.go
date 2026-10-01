@@ -1030,6 +1030,13 @@ func (a *App) salesAnalysisAccountClient(profileID string) (accountSession, erro
 	if err != nil {
 		return accountSession{}, err
 	}
+	if a.querySessions != nil {
+		sessions, err := a.reusableQuerySessions(profileID, credential, 1)
+		if err != nil {
+			return accountSession{}, err
+		}
+		return sessions[0], nil
+	}
 	cookies, err := a.cookies.CookieStore(profileID)
 	if err != nil {
 		return accountSession{}, err
@@ -1072,6 +1079,9 @@ func (a *App) extraAccountSessions(primary accountSession, profileID string, cou
 	credential, err := a.credentials.Get(profileID)
 	if err != nil {
 		return nil, err
+	}
+	if a.querySessions != nil {
+		return a.reusableQuerySessions(profileID, credential, count)
 	}
 	for index := 1; index < count; index++ {
 		client, err := a.clients.New(credential, new(securestore.MemoryCookieStore))

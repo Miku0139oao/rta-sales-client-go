@@ -91,7 +91,7 @@ describe('desktop application shell', () => {
     expect(password.value).toBe('');
   });
 
-  it('locks cross-page navigation while an account test is running', async () => {
+  it('keeps an account test running while navigating away and back', async () => {
     let resolveTest!: (result: ProfileTestResult) => void;
     configureBackend({ methods: {
       ListProfiles: async () => [{
@@ -106,10 +106,13 @@ describe('desktop application shell', () => {
 
     const excelNavigation = screen.getAllByRole('button', { name: /Excel 填入/ });
     await waitFor(() => excelNavigation.forEach((button) => {
-      expect(button).toBeDisabled();
-      expect(button).toHaveAttribute('title', '請待目前工作完成後再切換頁面');
+      expect(button).not.toBeDisabled();
     }));
+    await fireEvent.click(screen.getAllByRole('button', { name: /設定/ })[0]);
+    expect(await screen.findByRole('combobox', { name: '介面語言' })).toBeInTheDocument();
     resolveTest({ success: true });
+    await fireEvent.click(screen.getAllByRole('button', { name: /帳號/ })[0]);
+    await waitFor(() => expect(screen.getByText('Primary')).toBeVisible());
     await waitFor(() => excelNavigation.forEach((button) => expect(button).not.toBeDisabled()));
   });
 
@@ -185,13 +188,15 @@ describe('desktop application shell', () => {
     expect(document.activeElement).toBe(main);
   });
 
-  it('keeps a finished analysis report after visiting settings', async () => {
+  it('finishes a background analysis after navigating to settings', async () => {
+    let finishQuery!: () => void;
+    const queryGate = new Promise<void>((resolve) => { finishQuery = resolve; });
     const totals = { saleQuantity: 2, saleAmount: 20, returnQuantity: 0, returnAmount: 0, netQuantity: 2, netSalesAmount: 20 };
     configureBackend({ methods: {
       ListProfiles: vi.fn(async () => [{ id: 'profile-1', displayName: 'Production', enabled: true, priority: 1, hasCredentials: true }]),
       ListSalesAnalysisStores: vi.fn(async () => [{ businessId: '107', label: '107 - Central' }]),
       ListManCodeGroups: vi.fn(async () => []),
-      RunSalesAnalysis: vi.fn(async () => ({
+      RunSalesAnalysis: vi.fn(async () => { await queryGate; return ({
         operationId: 'keep-1', from: '2026-08-01', to: '2026-08-31', complete: true, pending: false,
         selectedStores: 1, successfulStores: 1, totals,
         stores: [{ businessId: '107', label: '107 - Central', totals }],
@@ -205,17 +210,17 @@ describe('desktop application shell', () => {
           }],
         }],
         weeks: [], queryDurationMs: 10,
-      })),
+      }); }),
       GetSalesAnalysisItems: vi.fn(async () => ({ periodKey: 'current', dict: [''], rows: [] })),
       ClearSalesAnalysis: vi.fn(async () => undefined),
     } });
     render(App);
     await waitFor(() => expect(screen.getByText('107 - Central')).toBeInTheDocument());
     await fireEvent.click(screen.getByText('開始分析'));
-    await screen.findByRole('heading', { name: '銷售額 Top 24' });
     await fireEvent.click(screen.getAllByRole('button', { name: /設定/ })[0]);
     await waitFor(() => expect(screen.getByRole('heading', { name: '設定' })).toBeInTheDocument());
     expect(screen.queryByRole('heading', { name: '銷售額 Top 24' })).not.toBeInTheDocument();
+    finishQuery();
     await fireEvent.click(screen.getAllByRole('button', { name: /銷售分析/ })[0]);
     await waitFor(() => expect(screen.getByRole('heading', { name: '銷售額 Top 24' })).toBeInTheDocument());
   });

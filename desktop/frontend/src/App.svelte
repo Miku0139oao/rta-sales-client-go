@@ -35,7 +35,7 @@
   $: t = translator(settings.locale);
   $: resolvedTheme = resolveTheme(settings.theme, systemDark);
   $: applyTheme(resolvedTheme);
-  $: navigationBusy = updateBusy || (activePage === 'excel' ? excelBusy : activePage === 'analysis' ? analysisBusy : activePage === 'accounts' ? accountsBusy : activePage === 'itemcodes' ? itemcodesBusy : false);
+  $: navigationBusy = updateBusy;
   $: if (typeof document !== 'undefined') {
     document.documentElement.lang = settings.locale === 'en' ? 'en' : 'zh-Hant';
     document.title = t('app.name');

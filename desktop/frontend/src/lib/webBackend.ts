@@ -19,6 +19,9 @@ import { loadWebSnapshot, saveWebSnapshot, type StoredProfileSecret, type WebSna
 const WEB_DOWNLOADS = 'downloads';
 
 let snapshot = loadWebSnapshot();
+let syncedPayload = '';
+let syncedAt = 0;
+let syncQueue: Promise<void> = Promise.resolve();
 const listeners = new Map<string, Set<(payload: unknown) => void>>();
 
 function emit(name: string, payload: unknown): void {
@@ -69,7 +72,7 @@ function normalizeSnapshotIDs(value: WebSnapshot): WebSnapshot {
 }
 
 async function syncLiveSession(): Promise<void> {
-  await syncWebSession({
+  const payload = {
     profiles: snapshot.profiles.map((profile) => ({
       id: profile.id,
       displayName: profile.displayName,
@@ -78,12 +81,31 @@ async function syncLiveSession(): Promise<void> {
     })),
     secrets: snapshot.secrets,
     groups: snapshot.manCodeGroups,
+  };
+  const identity = JSON.stringify(payload);
+  const sync = syncQueue.catch(() => undefined).then(async () => {
+    // Revalidate periodically so expired server sessions are recreated. Report
+    // hydration calls share one sync instead of repeatedly replacing credentials.
+    if (identity === syncedPayload && Date.now() - syncedAt < 5 * 60_000) return;
+    await syncWebSession(payload);
+    syncedPayload = identity;
+    syncedAt = Date.now();
   });
+  syncQueue = sync;
+  await sync;
 }
 
 async function liveRPC<T>(method: string, arg?: unknown): Promise<T> {
   await syncLiveSession();
-  return arg === undefined ? webRPC<T>(method) : webRPC<T>(method, arg);
+  const call = () => arg === undefined ? webRPC<T>(method) : webRPC<T>(method, arg);
+  try { return await call(); } catch (error) {
+    // The origin may restart before the periodic sync. Recreate its session
+    // only for failures that indicate missing profile state, then retry once.
+    if (!(error instanceof AppError) || !['credentials_required', 'profile_not_found'].includes(error.code)) throw error;
+    syncedPayload = '';
+    await syncLiveSession();
+    return call();
+  }
 }
 
 function currentAnalysis(operationId?: string): SalesAnalysisResult {
@@ -110,6 +132,9 @@ function rememberArticleNames(result: SalesAnalysisResult): void {
 }
 
 export function installWebBackend(): void {
+  syncedPayload = '';
+  syncedAt = 0;
+  syncQueue = Promise.resolve();
   snapshot = normalizeSnapshotIDs(loadWebSnapshot());
   persist(snapshot);
   listenWebEvents((name, payload) => {
@@ -314,12 +339,14 @@ export function installWebBackend(): void {
       GetSalesAnalysisItems: async (value: unknown) => {
         try {
           return await liveRPC('GetSalesAnalysisItems', value);
-        } catch {
+        } catch (error) {
           const request = asRecord(value);
           const operationId = String(request.operationId ?? '');
           const periodKey = String(request.periodKey ?? '');
-          const result = currentAnalysis(operationId);
+          if (!snapshot.analysis || snapshot.analysis.operationId !== operationId) throw error;
+          const result = snapshot.analysis;
           const period = result.periods?.find((candidate) => candidate.key === periodKey);
+          if (!period?.items || period.items.length < (period.itemCount ?? 0)) throw error;
           return packSalesAnalysisItems(periodKey, period?.items ?? [], period?.stores ?? result.stores ?? []);
         }
       },
@@ -348,7 +375,7 @@ export function installWebBackend(): void {
       },
 
       CancelSalesAnalysis: async (value: unknown) => {
-        try { await liveRPC('CancelSalesAnalysis', value ?? {}); } catch { /* local cancel still applies */ }
+        await liveRPC('CancelSalesAnalysis', value ?? {});
       },
 
       ChooseSalesAnalysisPDFDirectory: async () => WEB_DOWNLOADS,

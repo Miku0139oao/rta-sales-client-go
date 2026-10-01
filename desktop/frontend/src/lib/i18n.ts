@@ -1,4 +1,5 @@
 import type { Locale } from './types';
+import { isWebRuntime } from './runtime';
 
 const zhTW = {
   'app.name': 'RTA 銷售分析',
@@ -551,7 +552,15 @@ const zhTW = {
   'web.accountsHint': '帳號與密碼僅保存在此瀏覽器。測試登入時會傳送至本站，僅供向 RTA 驗證；本站不以任何方式記錄帳號與密碼。啟用前請先於此測試。',
   'web.exportConfirm': '下載匯出檔',
   'error.title': '無法完成操作',
-  'error.backend_error': '桌面服務發生錯誤，請再試一次。',
+  'error.web_network': '網路連線中斷，請確認網路後再試。',
+  'error.web_timeout': '網站等候查詢逾時，請縮小查詢範圍後再試。',
+  'error.web_unavailable': '網站服務暫時無法連線，請稍後再試。',
+  'error.web_response': '網站無法完成操作。原因如下：',
+  'error.rta_auth': 'RTA 登入失敗，請檢查帳號與密碼並重新測試登入。',
+  'error.rta_rate_limit': 'RTA 請求過於頻繁，請稍後重試或降低查詢並行數。',
+  'error.rta_upstream': 'RTA 服務回應異常，請稍後再試。',
+  'error.operation_busy': '已有工作正在執行，請等待完成或先取消該工作。',
+  'error.backend_error': '無法完成操作。原因如下：',
   'error.backend_unavailable': '無法連線到桌面服務，請關閉後重新開啟應用程式。',
   'error.cancelled': '分析已取消。',
   'error.invalid_workbook': '這個活頁簿無法讀取，請確認檔案格式與內容。',
@@ -1143,7 +1152,15 @@ const en: Record<TranslationKey, string> = {
   'web.accountsHint': 'Account credentials are stored in this browser. A test sign-in is sent to this site solely to authenticate with RTA. This site does not record account names or passwords in any form. Test here before enabling a profile.',
   'web.exportConfirm': 'Download files',
   'error.title': 'Could not complete the action',
-  'error.backend_error': 'The desktop service reported an error. Please try again.',
+  'error.web_network': 'The network connection was interrupted. Check your connection and retry.',
+  'error.web_timeout': 'The website timed out waiting for the query. Try a smaller query range.',
+  'error.web_unavailable': 'The website service is temporarily unavailable. Please retry later.',
+  'error.web_response': 'The website could not complete the action. Details:',
+  'error.rta_auth': 'RTA login failed. Check your credentials and test the account again.',
+  'error.rta_rate_limit': 'RTA is limiting requests. Retry later or reduce query concurrency.',
+  'error.rta_upstream': 'RTA returned an unexpected response. Please retry later.',
+  'error.operation_busy': 'A task is already running. Wait for it to finish or cancel it first.',
+  'error.backend_error': 'Could not complete the action. Details:',
   'error.backend_unavailable': 'The desktop service is unavailable. Close and reopen the application.',
   'error.cancelled': 'Analysis was cancelled.',
   'error.invalid_workbook': 'This workbook could not be read. Check its format and contents.',
@@ -1202,5 +1219,10 @@ export function translator(locale: Locale): Translator {
 
 export function errorMessage(locale: Locale, error: unknown): string {
   const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : 'generic';
-  return translate(locale, `error.${code}`);
+  const message = error instanceof Error ? error.message : typeof error === 'object' && error && 'message' in error ? String(error.message) : '';
+  const key = isWebRuntime() && code === 'backend_error' ? 'error.web_response'
+    : isWebRuntime() && code === 'backend_unavailable' ? 'error.web_unavailable' : `error.${code}`;
+  const translated = translate(locale, key);
+  const summary = translated === key ? translate(locale, 'error.generic') : translated;
+  return message.trim() && (isWebRuntime() || code === 'backend_error' || translated === key || code.startsWith('rta_') || code === 'operation_busy') ? `${summary}\n${message.trim()}` : summary;
 }

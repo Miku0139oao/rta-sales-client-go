@@ -72,6 +72,8 @@ type App struct {
 	salesProfileID         string
 	salesSavedAt           time.Time
 	salesAnalysisBackoff   func(context.Context, time.Duration) error
+	querySessionMu         sync.Mutex
+	querySessions          map[string]querySessionPool
 }
 
 type operationState struct {
@@ -105,6 +107,7 @@ func newApp(dependencies appDependencies) (*App, error) {
 		runtime:              dependencies.runtime,
 		reportCache:          dependencies.reportCache,
 		ctx:                  context.Background(),
+		querySessions:        make(map[string]querySessionPool),
 		salesAnalysisBackoff: waitForSalesAnalysisRetry,
 	}, nil
 }
@@ -353,6 +356,7 @@ func (a *App) CreateOrUpdateProfile(request ProfileUpsertRequest) (Profile, erro
 		}
 		credentialChanged := !previousExists || previous.Account != nextCredential.Account || previous.Password != nextCredential.Password
 		if credentialChanged {
+			a.discardQuerySessions(request.ID)
 			// A cookie session is authenticated independently of the supplied
 			// credentials. Remove it first so a changed profile can never continue
 			// silently as the previous account. Losing a stale session if a later
@@ -511,6 +515,7 @@ func (a *App) DeleteProfile(request ProfileIDRequest) error {
 	if err := a.credentials.Delete(request.ProfileID); err != nil {
 		return err
 	}
+	a.discardQuerySessions(request.ProfileID)
 	if err := a.cookies.DeleteCookie(request.ProfileID); err != nil {
 		if rollbackErr := restoreSecrets(); rollbackErr != nil {
 			return errors.Join(err, fmt.Errorf("profile deletion rollback failed: %w", rollbackErr))

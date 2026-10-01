@@ -1,5 +1,13 @@
 import { AppError } from './types';
 
+async function fetchWeb(input: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch {
+    throw new AppError('web_network', '');
+  }
+}
+
 interface RPCResponse<T> {
   result?: T;
   error?: { code?: string; message?: string };
@@ -8,7 +16,7 @@ interface RPCResponse<T> {
 export async function uploadWebFile(file: File): Promise<{ path: string; fileName: string }> {
   const body = new FormData();
   body.set('file', file, file.name);
-  const response = await fetch('/api/upload', { method: 'POST', credentials: 'same-origin', body });
+  const response = await fetchWeb('/api/upload', { method: 'POST', credentials: 'same-origin', body });
   return readJSON(response);
 }
 
@@ -27,7 +35,7 @@ export async function syncWebSession(payload: {
   secrets: Record<string, { account: string; password: string }>;
   groups: Array<{ id: string; name: string; codes: string[] }>;
 }): Promise<void> {
-  const response = await fetch('/api/session', {
+  const response = await fetchWeb('/api/session', {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
@@ -37,7 +45,7 @@ export async function syncWebSession(payload: {
 }
 
 export async function webRPC<T>(method: string, ...args: unknown[]): Promise<T> {
-  const response = await fetch('/api/rpc', {
+  const response = await fetchWeb('/api/rpc', {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
@@ -79,8 +87,8 @@ async function readJSON<T>(response: Response): Promise<T> {
     payload = await response.json() as T & RPCResponse<unknown>;
   } catch {
     throw new AppError(
-      response.ok ? 'backend_error' : 'backend_unavailable',
-      response.ok ? 'The web API returned an unreadable response' : `Web API HTTP ${response.status}`,
+      [408, 504, 524].includes(response.status) ? 'web_timeout' : response.ok ? 'web_response' : 'web_unavailable',
+      response.ok ? '' : `HTTP ${response.status}`,
     );
   }
   if (!response.ok) {

@@ -93,17 +93,29 @@ function findMethod(names: string[]): AnyMethod | undefined {
   return undefined;
 }
 
+function classifyBackendError(code: string | undefined, message: string): AppError {
+  if (code && code !== 'backend_error') return new AppError(code, message);
+  const text = message.toLowerCase();
+  const mapped = text.includes('authentication failed') ? 'rta_auth'
+    : /http 429|too many requests/.test(text) ? 'rta_rate_limit'
+    : /already running|operation is running/.test(text) ? 'operation_busy'
+    : /context canceled|cancelled/.test(text) ? 'cancelled'
+    : /rta returned http|rta request failed|invalid rta response/.test(text) ? 'rta_upstream'
+    : 'backend_error';
+  return new AppError(mapped, message);
+}
+
 function asAppError(error: unknown): AppError {
   if (error instanceof AppError) return error;
   if (error instanceof Error) {
     const coded = error as Error & Partial<AppErrorShape>;
-    return new AppError(coded.code ?? 'backend_error', coded.message);
+    return classifyBackendError(coded.code, coded.message);
   }
   if (typeof error === 'object' && error) {
     const value = error as Partial<AppErrorShape>;
-    return new AppError(value.code ?? 'backend_error', value.message ?? 'Unknown backend error');
+    return classifyBackendError(value.code, value.message ?? 'Unknown backend error');
   }
-  return new AppError('backend_error', String(error));
+  return classifyBackendError(undefined, String(error));
 }
 
 function mapManCodeTransferError(error: unknown): AppError {

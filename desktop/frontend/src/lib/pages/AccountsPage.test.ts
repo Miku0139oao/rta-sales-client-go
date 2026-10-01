@@ -286,7 +286,7 @@ describe('account safety workflow', () => {
     await fireEvent.click(button(container, '刪除'));
 
     const dialog = container.querySelector('.app-dialog')!;
-    await waitFor(() => expect(dialog.querySelector('[role="alert"]')).toHaveTextContent('桌面服務發生錯誤，請再試一次。'));
+    await waitFor(() => expect(dialog.querySelector('[role="alert"]')).toHaveTextContent('無法完成操作。原因如下： failed'));
     expect(dialog).toBeInTheDocument();
   });
 

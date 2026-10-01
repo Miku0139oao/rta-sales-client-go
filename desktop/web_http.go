@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"os"
 	"path"
@@ -17,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Miku0139oao/rta-sales-client-go/rtasales"
 	"github.com/Miku0139oao/rta-sales-client-go/securestore"
 )
 
@@ -145,6 +147,7 @@ func (s *WebServer) handleSync(w http.ResponseWriter, r *http.Request) {
 			next, err := store.Get(profileID)
 			old, had := previous[profileID]
 			if err != nil || !had || old.Account != next.Account || old.Password != next.Password {
+				session.app.discardQuerySessions(profileID)
 				_ = cookies.DeleteCookie(profileID)
 			}
 		}
@@ -625,6 +628,7 @@ func newWebApp(clients clientFactory, events eventSink) (*App, error) {
 		return nil, err
 	}
 	Start(app, context.Background())
+	app.querySessions = make(map[string]querySessionPool)
 	return app, nil
 }
 
@@ -714,8 +718,28 @@ func webErrorCode(err error) string {
 	if err == nil {
 		return "backend_error"
 	}
+	if errors.Is(err, context.Canceled) {
+		return "cancelled"
+	}
+	var auth *rtasales.AuthError
+	if errors.As(err, &auth) {
+		return "rta_auth"
+	}
+	var network net.Error
+	if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &network) && network.Timeout() {
+		return "web_timeout"
+	}
+	var upstream *rtasales.UpstreamError
+	if errors.As(err, &upstream) {
+		if upstream.StatusCode == http.StatusTooManyRequests {
+			return "rta_rate_limit"
+		}
+		return "rta_upstream"
+	}
 	message := strings.ToLower(err.Error())
 	switch {
+	case strings.Contains(message, "already running"), strings.Contains(message, "operation is running"):
+		return "operation_busy"
 	case strings.Contains(message, "cancelled"):
 		return "cancelled"
 	case strings.Contains(message, "credential"):

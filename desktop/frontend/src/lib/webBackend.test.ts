@@ -15,6 +15,20 @@ afterEach(() => {
 });
 
 describe('web localStorage backend', () => {
+  it('shares session synchronization and resynchronizes changed credentials', async () => {
+    const profile = await backend.saveProfile({ displayName: 'Store', account: 'sa01', password: 'secret', enabled: true });
+    const fetchMock = vi.fn(async (input: RequestInfo) => new Response(JSON.stringify(
+      String(input).includes('/api/session') ? { ok: true } : { result: [] },
+    ), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await Promise.all([backend.listSalesAnalysisStores(profile.id), backend.listSalesAnalysisStores(profile.id)]);
+      expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/api/session'))).toHaveLength(1);
+      await backend.saveProfile({ id: profile.id, displayName: 'Store', account: 'sa01', password: 'changed', enabled: true });
+      await backend.listSalesAnalysisStores(profile.id);
+      expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/api/session'))).toHaveLength(2);
+    } finally { vi.unstubAllGlobals(); }
+  });
   it('persists created accounts and item-code groups', async () => {
     const profile = await backend.saveProfile({
       displayName: '店長', account: 'sa01', password: 'secret', enabled: false,

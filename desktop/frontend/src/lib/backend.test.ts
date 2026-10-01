@@ -1,10 +1,24 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { backend, configureBackend } from './backend';
 import type { AnalysisProgress } from './types';
+import { errorMessage } from './i18n';
 
 afterEach(() => configureBackend(undefined));
 
 describe('Wails backend adapter', () => {
+  it('preserves native error details and classifies actionable query failures', async () => {
+    for (const [message, code] of [
+      ['RTA authentication failed: expired', 'rta_auth'],
+      ['sales: RTA returned HTTP 429: rate limit', 'rta_rate_limit'],
+      ['another account operation is already running', 'operation_busy'],
+      ['store 107 is not authorized', 'backend_error'],
+    ]) {
+      configureBackend({ methods: { RunSalesAnalysis: async () => { throw new Error(message); } } });
+      const error = await backend.runSalesAnalysis({ storeIds: ['107'], concurrency: 1, periods: [] }).catch((error) => error);
+      expect(error).toMatchObject({ code, message });
+      expect(errorMessage('zh-TW', error)).toContain(message);
+    }
+  });
   it('maps the stable frontend profile methods to the Wails method names', async () => {
     const createOrUpdate = vi.fn(async (request) => ({
       id: 'p1', displayName: request.displayName, enabled: true, priority: 1, hasCredentials: true,

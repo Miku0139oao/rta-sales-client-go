@@ -2,8 +2,10 @@ package desktop
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -18,6 +20,24 @@ import (
 	rtasales "github.com/Miku0139oao/rta-sales-client-go/rtasales"
 	"github.com/Miku0139oao/rta-sales-client-go/securestore"
 )
+
+func TestWebErrorCodes(t *testing.T) {
+	for _, test := range []struct {
+		err  error
+		code string
+	}{
+		{fmt.Errorf("query: %w", context.Canceled), "cancelled"},
+		{fmt.Errorf("query: %w", context.DeadlineExceeded), "web_timeout"},
+		{fmt.Errorf("login: %w", &rtasales.AuthError{Message: "invalid login"}), "rta_auth"},
+		{&rtasales.UpstreamError{StatusCode: 429}, "rta_rate_limit"},
+		{&rtasales.UpstreamError{StatusCode: 503}, "rta_upstream"},
+		{errors.New("another account operation is already running"), "operation_busy"},
+	} {
+		if got := webErrorCode(test.err); got != test.code {
+			t.Errorf("%v: got %s, want %s", test.err, got, test.code)
+		}
+	}
+}
 
 func TestWebHTTPSyncAndLiveStoreList(t *testing.T) {
 	profileID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
