@@ -24,7 +24,15 @@ New builds read version and changelog metadata from a fixed [GitHub Pages manife
 
 **0.4.8 and earlier API-based clients need a one-time manual upgrade to a Pages-enabled release.** Finish work, close the app, keep a backup, then replace it at the same path and filename. Old clients cannot learn this endpoint automatically and may encounter GitHub API rate limits. See [update safety and deployment](docs/portable-updates.md).
 
-## v0.4.12 (current stable)
+## v0.4.13 (current stable)
+
+Updates now support ordinary local installation folders, including inherited Modify permissions and different disk/folder owners. Private staging, signed publisher/version/hash checks, file identities, locks and backup recovery remain. Local accounts allowed to modify installation folders are trusted; no folder ACL is changed.
+
+If v0.4.12 or an older updater already blocks your path, close the app and manually replace it once, preserving its filename and a backup. Later updates can use the same folder.
+
+[v0.4.13 release notes (Traditional Chinese)](docs/releases/v0.4.13.zh-TW.md).
+
+## v0.4.12
 
 Portable updates now check the executable and ancestor folders before offering automatic installation. Rejected owners or permissions show the affected path, localized recovery instructions, and a manual Release download link. Installation repeats the safety checks; no folder permissions are changed automatically.
 
