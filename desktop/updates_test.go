@@ -11,6 +11,32 @@ import (
 
 type checkFunc func(context.Context, string) (portableupdate.Inspection, error)
 
+type preflightInstaller struct{ failure error }
+
+func (p *preflightInstaller) Preflight() error { return p.failure }
+func (*preflightInstaller) Prepare(context.Context, portableupdate.Candidate, func(string)) (updateReceipt, error) {
+	return &fakeReceipt{}, nil
+}
+
+func TestUpdatePreflightBlocksAndRecovers(t *testing.T) {
+	u := newUpdateService()
+	u.client = checkFunc(func(context.Context, string) (portableupdate.Inspection, error) {
+		return portableupdate.Inspection{}, nil
+	})
+	p := &preflightInstaller{failure: &portableupdate.PathError{Code: "unsafe_owner", Path: `D:\downloads`, Reason: "unsafe update path owner"}}
+	u.installer, u.quit = p, func() {}
+	a := &App{ctx: context.Background(), updates: u}
+	status, err := a.CheckForUpdate()
+	if err != nil || status.InstallSupported || status.ErrorCode != "unsafe_owner" || status.ErrorPath != `D:\downloads` {
+		t.Fatalf("%+v %v", status, err)
+	}
+	p.failure = nil
+	status, err = a.CheckForUpdate()
+	if err != nil || !status.InstallSupported || status.Error != "" || status.ErrorCode != "" || status.ErrorPath != "" {
+		t.Fatalf("%+v %v", status, err)
+	}
+}
+
 func (f checkFunc) Inspect(ctx context.Context, v string) (portableupdate.Inspection, error) {
 	return f(ctx, v)
 }

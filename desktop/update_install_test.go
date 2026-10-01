@@ -60,6 +60,25 @@ func TestDevelopmentInstallerCapabilityFailsClosed(t *testing.T) {
 	}
 }
 
+func TestInstallPathFailureDisablesRetryAndKeepsAppOpen(t *testing.T) {
+	a, request := installFixture()
+	quit := false
+	a.updates.quit = func() { quit = true }
+	a.updates.installer = installFunc(func(context.Context, portableupdate.Candidate, func(string)) (updateReceipt, error) {
+		return nil, &portableupdate.PathError{Code: "unsafe_owner", Path: `D:\downloads`, Reason: "unsafe update path owner"}
+	})
+	if err := a.InstallUpdate(request); err == nil {
+		t.Fatal("unsafe path accepted")
+	}
+	status, _ := a.GetUpdateStatus()
+	if status.InstallSupported || status.ErrorPath != `D:\downloads` || status.ErrorCode != "unsafe_owner" || a.updateReserved || quit {
+		t.Fatalf("%+v reserved=%v quit=%v", status, a.updateReserved, quit)
+	}
+	if err := a.InstallUpdate(request); err == nil {
+		t.Fatal("retry allowed without a fresh preflight")
+	}
+}
+
 func TestInstallRequiresConfirmationFreshCandidateAndCapability(t *testing.T) {
 	for _, test := range []string{"unconfirmed", "stale", "unsupported"} {
 		t.Run(test, func(t *testing.T) {

@@ -15,6 +15,14 @@ function setup(check = vi.fn().mockResolvedValue({ ...status, phase: 'current' }
   return { get, check, install };
 }
 describe('portable update notice', () => {
+  it('explains the rejected path in Chinese and offers manual download without installation', async () => {
+    const methods = setup(vi.fn().mockResolvedValue({ ...status, phase: 'available', availableVersion: '0.5.0', candidateId: 'checked', errorCode: 'unsafe_owner', errorPath: 'D:\\downloads', error: 'unsafe update path owner', unsupportedReason: 'unsafe update path owner' }));
+    render(UpdateNotice, { settings: { ...defaultSettings, locale: 'zh-TW' }, details: true, onChange: vi.fn() });
+    expect(await screen.findByText(/更新路徑的擁有者不符合安全要求/)).toHaveTextContent('D:\\downloads');
+    expect(screen.getByRole('link', { name: /GitHub Releases/ })).toHaveAttribute('href', 'https://github.com/Miku0139oao/rta-sales-client-go/releases');
+    expect(screen.queryByRole('button', { name: '下載並重啟…' })).toBeNull();
+    expect(methods.install).not.toHaveBeenCalled();
+  });
   it('routes startup to cached metadata and manual clicks to fresh checks', async () => {
     const startup = vi.fn().mockResolvedValue({ ...status, phase: 'current' });
     const manual = vi.fn().mockResolvedValue({ ...status, phase: 'current' });
@@ -51,7 +59,7 @@ describe('portable update notice', () => {
     const { container } = render(UpdateNotice, { settings: { ...defaultSettings, locale: 'en' }, details: true, onChange: vi.fn() });
     expect(await screen.findByText('<script>bad()</script>')).toBeInTheDocument();
     expect(container.querySelector('script')).toBeNull();
-    expect(screen.getByText(/Automatic installation is unavailable for this build/) ).toBeInTheDocument();
+    expect(screen.getByText(/Automatic installation is currently unavailable/) ).toBeInTheDocument();
     expect(methods.install).not.toHaveBeenCalled();
   });
   it('keeps notes collapsed, labelled and keyboard-scrollable, and hides details in the compact notice', async () => {

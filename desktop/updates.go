@@ -24,7 +24,21 @@ type UpdateStatus struct {
 	InstallSupported  bool   `json:"installSupported"`
 	UnsupportedReason string `json:"unsupportedReason"`
 	Error             string `json:"error"`
+	ErrorCode         string `json:"errorCode,omitempty"`
+	ErrorPath         string `json:"errorPath,omitempty"`
 }
+
+func setUpdateFailure(status *UpdateStatus, err error) {
+	status.Error = err.Error()
+	status.ErrorCode, status.ErrorPath = "", ""
+	var pathError *portableupdate.PathError
+	if errors.As(err, &pathError) {
+		status.ErrorCode, status.ErrorPath = pathError.Code, pathError.Path
+		status.InstallSupported = false
+		status.UnsupportedReason = err.Error()
+	}
+}
+
 type InstallUpdateRequest struct {
 	CandidateID string `json:"candidateId"`
 	Confirmed   bool   `json:"confirmed"`
@@ -87,6 +101,7 @@ func (a *App) checkForUpdate(startup bool) (UpdateStatus, error) {
 	u.reset("checking")
 	u.candidate = nil
 	version := u.status.CurrentVersion
+	installer := u.installer
 	u.mu.Unlock()
 	var inspection portableupdate.Inspection
 	var err error
@@ -96,6 +111,12 @@ func (a *App) checkForUpdate(startup bool) (UpdateStatus, error) {
 		inspection, err = checker.InspectStartup(ctx, version)
 	} else {
 		inspection, err = u.client.Inspect(ctx, version)
+	}
+	var preflightErr error
+	if err == nil {
+		if preflight, ok := installer.(interface{ Preflight() error }); ok {
+			preflightErr = preflight.Preflight()
+		}
 	}
 	cancel()
 	u.mu.Lock()
@@ -124,6 +145,14 @@ func (a *App) checkForUpdate(startup bool) (UpdateStatus, error) {
 		u.status.CandidateID = id
 		u.status.AvailableVersion = candidate.Version()
 		u.status.ReleaseNotes = candidate.Notes()
+	}
+	if installer != nil && u.quit != nil {
+		u.status.InstallSupported = preflightErr == nil
+		u.status.UnsupportedReason = ""
+		if preflightErr != nil {
+			u.status.UnsupportedReason = preflightErr.Error()
+			setUpdateFailure(&u.status, preflightErr)
+		}
 	}
 	return u.status, nil
 }
@@ -214,6 +243,7 @@ func (a *App) InstallUpdate(request InstallUpdateRequest) (err error) {
 	u.installing = true
 	u.status.Phase = "preparing"
 	u.status.Error = ""
+	u.status.ErrorCode, u.status.ErrorPath = "", ""
 	u.mu.Unlock()
 	var receipt updateReceipt
 	committed := false
@@ -250,7 +280,7 @@ func (a *App) InstallUpdate(request InstallUpdateRequest) (err error) {
 		} else {
 			u.status.Phase = "error"
 			if err != nil {
-				u.status.Error = err.Error()
+				setUpdateFailure(&u.status, err)
 			}
 		}
 		a.releaseUpdate()

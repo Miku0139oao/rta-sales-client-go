@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { isWebRuntime } from './runtime';
   import { modal } from './modal';
-  import { updates, updateIsExclusive, type UpdateStatus } from './updates';
+  import { updates, updateIsExclusive, updateFailureText, type UpdateStatus } from './updates';
   import type { AppSettings } from './types';
 
   export let settings: AppSettings;
@@ -22,6 +22,7 @@
   $: onBusyChange(exclusive || Boolean(confirmCandidate));
   $: cancellationClosed = status?.phase === 'committing' || status?.phase === 'committed';
   $: phaseText = stageText(status?.phase, en);
+  $: failureText = updateFailureText(status, error || status?.error || '', en);
 
   onMount(() => {
     alive = true;
@@ -47,7 +48,7 @@
   async function check(startup = false) {
     if (checking || exclusive || confirmCandidate) return;
     checking = true; error = '';
-    if (status) status = { ...status, phase: 'checking', candidateId: '', availableVersion: '', releaseNotes: '', changelogVersion: '', changelogBody: '' };
+    if (status) status = { ...status, phase: 'checking', candidateId: '', availableVersion: '', releaseNotes: '', changelogVersion: '', changelogBody: '', error: '', errorCode: '', errorPath: '' };
     try { const next = await (startup ? updates.startup() : updates.check()); if (alive) status = next; }
     catch (cause) { if (alive) error = cause instanceof Error ? cause.message : String(cause); }
     finally { if (alive) checking = false; }
@@ -110,7 +111,7 @@
       {#if checking}<p class="update-status" role="status"><span class="material-symbols-rounded" aria-hidden="true">sync</span>{en ? 'Checking…' : '檢查中…'}</p>
       {:else if !exclusive && status?.phase === 'current'}<p class="update-status current" role="status"><span class="material-symbols-rounded" aria-hidden="true">check_circle</span>{en ? 'No newer stable release.' : '沒有較新的正式版本。'}</p>{/if}
       {#if status && !status.installSupported}
-        <p class="update-support">{en ? 'Automatic installation is unavailable for this build.' : '此版本無法自動安裝更新。'} {status.unsupportedReason}</p>
+        <p class="update-support">{en ? 'Automatic installation is currently unavailable.' : '目前無法自動安裝更新。'} {status.error ? '' : updateFailureText(status, status.unsupportedReason || '', en)}</p>
       {/if}
     {/if}
     {#if details && !checking && status?.changelogVersion}
@@ -131,7 +132,7 @@
       <p class="update-status" role="status"><span class="material-symbols-rounded" aria-hidden="true">sync</span>{phaseText}</p>
       {#if !cancellationClosed}<button class="update-button secondary" type="button" onclick={() => void cancelUpdate()}>{en ? 'Cancel update' : '取消更新'}</button>{/if}
     {/if}
-    {#if (details && error) || (exclusive && (error || status?.error))}<p class="dialog-error" role="status">{error || status?.error}</p>{/if}
+    {#if (details || exclusive) && failureText}<p class="dialog-error" role="status">{failureText}</p>{/if}
     <div class="form-actions update-actions">
       {#if details}<button class="update-button secondary" type="button" disabled={checking || exclusive || Boolean(confirmCandidate)} onclick={() => void check()}>
         <span class="material-symbols-rounded" aria-hidden="true">refresh</span>{checking ? (en ? 'Checking…' : '檢查中…') : (en ? 'Check for updates' : '檢查更新')}

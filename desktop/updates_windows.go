@@ -13,6 +13,8 @@ import (
 
 type windowsUpdateInstaller struct{}
 
+func (windowsUpdateInstaller) Preflight() error { return portableupdate.CheckWindowsUpdatePath() }
+
 func nativeUpdateInstaller(version string) (updateInstaller, error) {
 	if runtime.GOARCH != "amd64" {
 		return nil, errors.New("only Windows amd64 portable builds support installation / 僅支援 Windows 64 位元免安裝版")

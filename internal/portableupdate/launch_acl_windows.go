@@ -53,11 +53,11 @@ func validateLaunchACL(file *os.File, current string, directory, immediateParent
 	}
 	owner, _, err := sd.Owner()
 	if err != nil || owner == nil || !trustedLaunchPrincipal(owner.String(), current) {
-		return errors.New("unsafe update path owner; use a private user-owned folder")
+		return &PathError{Code: "unsafe_owner", Path: file.Name(), Reason: "unsafe update path owner"}
 	}
 	acl, _, err := sd.DACL()
 	if err != nil || acl == nil {
-		return errors.New("unsafe update path: missing restrictive DACL")
+		return &PathError{Code: "unsafe_permissions", Path: file.Name(), Reason: "unsafe update path: missing restrictive DACL"}
 	}
 	header := (*struct {
 		Revision, Reserved     byte
@@ -75,11 +75,11 @@ func validateLaunchACL(file *os.File, current string, directory, immediateParent
 			continue
 		}
 		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
-			return errors.New("unsupported launch-boundary ACE; use a private folder")
+			return &PathError{Code: "unsafe_permissions", Path: file.Name(), Reason: "unsupported launch-boundary ACE"}
 		}
 		principal := (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
 		if unsafeLaunchGrant(principal, current, uint32(ace.Mask), directory, immediateParent) {
-			return fmt.Errorf("unsafe update path permissions at %s (principal %s, mask %#x); use a private user-owned folder", file.Name(), principal, uint32(ace.Mask))
+			return &PathError{Code: "unsafe_permissions", Path: file.Name(), Reason: fmt.Sprintf("unsafe update path permissions (principal %s, mask %#x)", principal, uint32(ace.Mask))}
 		}
 	}
 	return nil

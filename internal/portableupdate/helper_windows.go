@@ -42,6 +42,26 @@ func NewWindowsStaging() (*WindowsStaging, error) {
 	}
 	return newStaging(target, cwd, WindowsIdentityVerifier{})
 }
+
+// CheckWindowsUpdatePath is read-only. Installation repeats these checks under
+// pinned handles; this advisory check never authorizes a later replacement.
+func CheckWindowsUpdatePath() error {
+	target, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	guards, err := guardDirectories(filepath.Dir(target))
+	if err != nil {
+		return err
+	}
+	defer closeFiles(guards)
+	old, err := openLocked(target, false)
+	if err != nil {
+		return err
+	}
+	defer old.Close()
+	return validateTargetBoundary(old, target, guards)
+}
 func newStaging(target, cwd string, verifier IdentityVerifier) (*WindowsStaging, error) {
 	guards, err := guardDirectories(filepath.Dir(target))
 	if err != nil {
