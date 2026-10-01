@@ -59,12 +59,13 @@ func TestWindowsLaunchACLPrincipalModel(t *testing.T) {
 		}
 	}
 }
-func TestWindowsUnsafeTargetACLRejected(t *testing.T) {
+func TestWindowsOrdinaryFolderPermissionsAllowUpdate(t *testing.T) {
 	dummy := buildSandboxDummy(t)
 	for _, tc := range []struct {
 		name, ace string
 		file      bool
 	}{
+		{"parent inherited Modify", "(A;OICI;0x1301bf;;;AU)", false},
 		{"parent delete-child", "(A;;0x40;;;WD)", false},
 		{"parent create-file", "(A;;0x2;;;WD)", false},
 		{"parent write-DACL", "(A;;0x40000;;;WD)", false},
@@ -79,12 +80,12 @@ func TestWindowsUnsafeTargetACLRejected(t *testing.T) {
 				path = p.config.Target
 			}
 			setSandboxACL(t, path, tc.ace)
-			if err := p.Prepare(context.Background()); err == nil {
-				t.Fatal("unsafe ACL admitted before readiness")
+			result, err := RunTransaction(context.Background(), p)
+			p.Close()
+			if err != nil || result.Phase != "complete" {
+				t.Fatal(result, err)
 			}
-			if _, err := os.Stat(p.backupPath()); !os.IsNotExist(err) {
-				t.Fatal("unsafe target was moved")
-			}
+			waitMarker(t, p.config.CWD)
 		})
 	}
 }
@@ -179,14 +180,14 @@ func prepareMovedSandbox(t *testing.T, dummy []byte) *windowsTransaction {
 }
 func TestWindowsLaunchRechecksACLIdentityAndSignature(t *testing.T) {
 	dummy := buildSandboxDummy(t)
-	for _, kind := range []string{"parent ACL", "file identity", "file hash", "signed publisher", "signed version"} {
+	for _, kind := range []string{"candidate ACL", "file identity", "file hash", "signed publisher", "signed version"} {
 		t.Run(kind, func(t *testing.T) {
 			p := prepareMovedSandbox(t, dummy)
 			launched := false
 			p.launch = func(string, string) error { launched = true; return nil }
 			switch kind {
-			case "parent ACL":
-				setSandboxACL(t, filepath.Dir(p.config.Target), "(A;;0x40;;;WD)")
+			case "candidate ACL":
+				setSandboxACL(t, p.config.Target, "(A;;0x2;;;WD)")
 			case "file identity":
 				// Model an already-substituted same-user file, not a production bypass.
 				p.next.Close()

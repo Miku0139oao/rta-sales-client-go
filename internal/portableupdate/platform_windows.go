@@ -285,10 +285,12 @@ func (p *windowsTransaction) Restart() error {
 	if p.next == nil {
 		return errors.New("verified launch source handle unavailable")
 	}
-	// Revalidate effective owner/DACL policy while the verified DELETE handle
-	// still excludes content writers/deleters. A read/deny-delete handle cannot
-	// coexist with it; the enforced cross-principal ACL boundary covers this
-	// necessary close/reopen interval, for BOTH update and recovery launches.
+	// The moved candidate/recovery retains its private staging ACL. Check it
+	// before dropping the rename handle, then recheck identity/hash/signature
+	// under a loader-compatible read lock. Folder writers are locally trusted.
+	if err := validateLaunchFileACL(p.next); err != nil {
+		return err
+	}
 	if err := validateTargetBoundary(p.next, p.config.Target, p.guards); err != nil {
 		return err
 	}
@@ -299,6 +301,9 @@ func (p *windowsTransaction) Restart() error {
 		return err
 	}
 	defer locked.Close()
+	if err := validateLaunchFileACL(locked); err != nil {
+		return err
+	}
 	if err = validateTargetBoundary(locked, p.config.Target, p.guards); err != nil {
 		return err
 	}

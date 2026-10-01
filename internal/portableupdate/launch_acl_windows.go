@@ -13,27 +13,20 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// A read-only/deny-delete open cannot coexist with an existing DELETE-access
-// open: Windows checks sharing in both directions. The target ACL boundary is
-// therefore mandatory BEFORE dropping the rename handle, not just a hash after
-// reopening. No other unprivileged principal may replace the leaf in that gap,
-// mutate its contents, change path metadata, or grant itself those rights.
+// General folder owners and inherited grants do not determine update support.
+// Local principals allowed to modify the installation directory are trusted;
+// metadata guards reject reparse/identity changes observed during the operation.
+// Candidate/recovery files retain their private staging ACL, checked separately
+// before the rename handle is dropped. No directory ACL is changed.
 func validateTargetBoundary(target *os.File, targetPath string, guards []*os.File) error {
-	user, err := windows.GetCurrentProcessToken().GetTokenUser()
-	if err != nil {
-		return err
-	}
-	current := user.User.Sid.String()
 	parent := filepath.Dir(targetPath)
 	found := false
 	for _, dir := range guards {
-		// p.guards also contains private staging and cwd ancestry; checking these
-		// conservatively is intentional. Only the target parent forbids creation.
 		immediate := strings.EqualFold(dir.Name(), parent)
 		if immediate {
 			found = true
 		}
-		if err := validateLaunchACL(dir, current, true, immediate); err != nil {
+		if _, err := idOf(dir); err != nil {
 			return err
 		}
 	}
@@ -41,9 +34,20 @@ func validateTargetBoundary(target *os.File, targetPath string, guards []*os.Fil
 		return errors.New("target parent is not pinned")
 	}
 	if target != nil {
-		return validateLaunchACL(target, current, false, false)
+		_, err := idOf(target)
+		return err
 	}
 	return nil
+}
+
+// The candidate/recovery file retains its private staging ACL after moving.
+// General folder owners and inherited Modify grants do not prevent updates.
+func validateLaunchFileACL(file *os.File) error {
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return err
+	}
+	return validateLaunchACL(file, user.User.Sid.String(), false, false)
 }
 
 func validateLaunchACL(file *os.File, current string, directory, immediateParent bool) error {
