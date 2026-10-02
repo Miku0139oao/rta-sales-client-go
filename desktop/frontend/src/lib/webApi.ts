@@ -92,7 +92,12 @@ async function readJSON<T>(response: Response): Promise<T> {
     );
   }
   if (!response.ok) {
-    throw new AppError(payload.error?.code || 'backend_unavailable', payload.error?.message || `Web API HTTP ${response.status}`);
+    // Older origins used a generic code for an expired report. Keep recovery
+    // usable during rolling deployments as well as with the structured code.
+    const message = payload.error?.message || `Web API HTTP ${response.status}`;
+    const code = message.toLowerCase().includes('sales analysis result is no longer available')
+      ? 'analysis_expired' : payload.error?.code || 'backend_unavailable';
+    throw new AppError(code, message);
   }
   return payload;
 }

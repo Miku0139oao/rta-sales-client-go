@@ -538,11 +538,11 @@ const zhTW = {
   'settings.unsaved': '有尚未儲存的變更',
   'settings.reset': '恢復建議值',
   'web.bannerTitle': '使用者需知',
-  'web.bannerBody': '請先閱讀下列事項。',
+  'web.bannerBody': '帳號與最近一次完整報表會保留在此瀏覽器，重新開啟即可查看。共用裝置請在使用後清除本機資料。',
   'web.noticeStore': '帳號與密碼僅保存在此瀏覽器。',
-  'web.noticeRecord': '本站不另設會員帳號，亦不以任何方式記錄帳號與密碼。',
+  'web.noticeRecord': '本站不另設會員帳號，伺服器不持久儲存帳號與密碼。查詢時僅在工作階段記憶體中使用。',
   'web.noticeSession': '查詢時由本站代向 RTA 取得資料。連線閒置超過兩小時，伺服器端工作階段將予以清除。',
-  'web.noticeLog': '本站不記錄使用者之查詢內容、帳號或分析結果。',
+  'web.noticeLog': '伺服器不記錄查詢內容、帳號或分析結果。本機完整報表使用 localStorage 或 IndexedDB 儲存，不會跨裝置同步；可從報表畫面清除。',
   'web.bannerAck': '我已知曉',
   'web.excelTitle': 'Excel 填入需使用桌面版',
   'web.excelBody': '瀏覽器無法開啟活頁簿或向 RTA 查詢。請使用 Windows 桌面應用程式掃描、分析並另存 Excel。',
@@ -568,6 +568,7 @@ const zhTW = {
   'error.credentials_required': '請輸入帳號與密碼。',
   'error.output_same_as_input': '輸出檔案不能與來源檔案相同。',
   'error.analysis_required': '請先完成分析。',
+  'error.analysis_expired': '這份報表的線上明細已失效，可能是工作階段過期、服務重新啟動，或另一個視窗執行了新查詢。已載入的資料仍可查看；請重新查詢以取得完整明細。',
   'error.pdf_failed': '無法產生 PDF 報告，請再試一次。',
   'error.pdf_font': '無法載入 PDF 字型，請重新啟動應用程式後再試。',
   'error.pdf_write': '無法儲存 PDF 檔案，請確認資料夾權限後再試。',
@@ -1138,11 +1139,11 @@ const en: Record<TranslationKey, string> = {
   'settings.unsaved': 'You have unsaved changes',
   'settings.reset': 'Restore recommended values',
   'web.bannerTitle': 'Notice to users',
-  'web.bannerBody': 'Please read the following before continuing.',
+  'web.bannerBody': 'Accounts and the latest complete report are kept in this browser so you can reopen them. Clear local data after using a shared device.',
   'web.noticeStore': 'Account credentials are stored only in this browser.',
-  'web.noticeRecord': 'This site does not create memberships and does not record account names or passwords in any form.',
+  'web.noticeRecord': 'This site has no memberships. The server does not persist credentials; they are used in session memory while querying.',
   'web.noticeSession': 'Queries are sent to RTA through this site. Idle sessions are removed from the server after two hours.',
-  'web.noticeLog': 'This site does not log user queries, account names, or analysis results.',
+  'web.noticeLog': 'The server does not log queries, accounts or results. Full local reports use localStorage or IndexedDB, are not synced across devices, and can be cleared from the report page.',
   'web.bannerAck': 'I acknowledge',
   'web.excelTitle': 'Excel fill needs the desktop app',
   'web.excelBody': 'The browser cannot open workbooks. Use the Windows desktop app to scan, analyze, and save Excel files. Sales analysis on this site is live.',
@@ -1168,6 +1169,7 @@ const en: Record<TranslationKey, string> = {
   'error.credentials_required': 'Enter an account and password.',
   'error.output_same_as_input': 'The output file cannot be the source file.',
   'error.analysis_required': 'Complete an analysis first.',
+  'error.analysis_expired': 'The online details for this report are no longer available. The session may have expired, the service restarted, or another window started a new query. Loaded data remains readable; run the query again for complete details.',
   'error.pdf_failed': 'The PDF report could not be created. Please try again.',
   'error.pdf_font': 'The PDF font could not be loaded. Restart the app and try again.',
   'error.pdf_write': 'The PDF file could not be saved. Check the folder permissions and try again.',
@@ -1220,6 +1222,8 @@ export function translator(locale: Locale): Translator {
 export function errorMessage(locale: Locale, error: unknown): string {
   const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : 'generic';
   const message = error instanceof Error ? error.message : typeof error === 'object' && error && 'message' in error ? String(error.message) : '';
+  if (code === 'analysis_expired' || message.toLowerCase().includes('sales analysis result is no longer available'))
+    return translate(locale, 'error.analysis_expired');
   const key = isWebRuntime() && code === 'backend_error' ? 'error.web_response'
     : isWebRuntime() && code === 'backend_unavailable' ? 'error.web_unavailable' : `error.${code}`;
   const translated = translate(locale, key);

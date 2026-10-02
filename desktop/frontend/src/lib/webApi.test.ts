@@ -7,6 +7,15 @@ vi.mock('./runtime', () => ({ isWebRuntime: () => true }));
 afterEach(() => vi.unstubAllGlobals());
 
 describe('web API errors', () => {
+  it.each(['backend_error', 'analysis_expired'])('gives an expired report a recovery reason for %s', async (code) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({error: {
+      code, message: 'sales analysis result is no longer available',
+    }}), {status:400})));
+    const error = await webRPC('GetSalesAnalysisItems').catch(error => error);
+    expect((error as AppError).code).toBe('analysis_expired');
+    expect(errorMessage('zh-TW', error)).toContain('重新查詢');
+    expect(errorMessage('zh-TW', error)).not.toContain('no longer available');
+  });
   it('preserves a server reason in the displayed error', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: {
       code: 'backend_error', message: 'store 107 is not authorized',

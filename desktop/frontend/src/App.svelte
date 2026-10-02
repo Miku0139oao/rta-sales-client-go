@@ -189,12 +189,12 @@
           <div class="web-banner-copy">
             <strong>{t('web.bannerTitle')}</strong>
             <p>{t('web.bannerBody')}</p>
-            <ul class="web-notice-list">
+          <details class="web-banner-details"><summary>{settings.locale === 'en' ? 'Data and privacy details' : '資料與隱私說明'}</summary><ul class="web-notice-list">
               <li>{t('web.noticeStore')}</li>
               <li>{t('web.noticeRecord')}</li>
               <li>{t('web.noticeSession')}</li>
               <li>{t('web.noticeLog')}</li>
-            </ul>
+          </ul></details>
           </div>
           <md-outlined-button type="button" onclick={acknowledgeWebBanner}>{t('web.bannerAck')}</md-outlined-button>
         </div>

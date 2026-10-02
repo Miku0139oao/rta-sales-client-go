@@ -1,7 +1,8 @@
 import { configureBackend } from './backend';
 import { collectManCodes } from './manCodes';
 import { decodeManCodeCatalog, encodeManCodeCatalog } from './manCodeCatalog';
-import { packSalesAnalysisItems } from './salesAnalysisItems';
+import { packSalesAnalysisItems, unpackSalesAnalysisItems } from './salesAnalysisItems';
+import { loadBrowserReport, saveBrowserReport, clearBrowserReport, browserReportStatus, type BrowserReport } from './browserReportCache';
 import {
   AppError,
   type ManCodeGroup,
@@ -10,6 +11,7 @@ import {
   type SalesAnalysisReportMemoRequest,
   type SalesAnalysisRequest,
   type SalesAnalysisResult,
+  type SalesAnalysisPackedItems,
 } from './types';
 import { downloadWebPath, listenWebEvents, syncWebSession, uploadWebFile, webRPC } from './webApi';
 import { downloadBase64, downloadText, pickBinaryFile, pickTextFile } from './webDownloads';
@@ -22,6 +24,9 @@ let snapshot = loadWebSnapshot();
 let syncedPayload = '';
 let syncedAt = 0;
 let syncQueue: Promise<void> = Promise.resolve();
+let stopEvents: (() => void) | undefined;
+let cachedReport: BrowserReport | null = null;
+let cacheReady: Promise<void> = Promise.resolve();
 const listeners = new Map<string, Set<(payload: unknown) => void>>();
 
 function emit(name: string, payload: unknown): void {
@@ -90,6 +95,20 @@ async function syncLiveSession(): Promise<void> {
     await syncWebSession(payload);
     syncedPayload = identity;
     syncedAt = Date.now();
+    // Establish the HttpOnly session cookie before opening SSE. Parallel
+    // initial requests without a cookie can otherwise create different apps.
+    stopEvents?.();
+    stopEvents = listenWebEvents((name, payload) => {
+      if (name === 'rta:sales-analysis-update' && payload && typeof payload === 'object') {
+        const next=payload as SalesAnalysisResult;
+        // Other tabs may have a different active report in the same session.
+        if (cachedReport?.result.operationId === next.operationId) {
+          rememberArticleNames(next);
+          rememberReport(next);
+        }
+      }
+      emit(name, payload);
+    });
   });
   syncQueue = sync;
   await sync;
@@ -131,18 +150,63 @@ function rememberArticleNames(result: SalesAnalysisResult): void {
   persist({ ...snapshot, articleNames: names, analysis: result });
 }
 
+function rememberReport(
+  result: SalesAnalysisResult,
+  profileId?: string,
+  localQuery?: SalesAnalysisRequest['localQuery'],
+): void {
+  const previous = cachedReport?.result.operationId === result.operationId ? cachedReport : null;
+  const packed = { ...previous?.packed };
+  for (const period of result.periods ?? []) {
+    if (Array.isArray(period.items) && period.items.length >= (period.itemCount ?? 0))
+      packed[period.key] = packSalesAnalysisItems(period.key, period.items, period.stores ?? result.stores);
+    else if (
+      packed[period.key] &&
+      (packed[period.key]!.r ?? packed[period.key]!.rows ?? []).length < (period.itemCount ?? 0)
+    )
+      delete packed[period.key];
+  }
+  const owner = profileId ?? previous?.profileId ?? '';
+  cachedReport = {
+    version: 1,
+    savedAt: new Date().toISOString(),
+    profileId: owner,
+    profileName: previous?.profileName ?? snapshot.profiles.find((profile) => profile.id === owner)?.displayName ?? '',
+    result: {
+      ...result,
+      items: undefined,
+      periods: result.periods?.map((period) => ({ ...period, items: undefined })),
+    },
+    packed,
+    localQuery: localQuery ?? previous?.localQuery,
+  };
+  void saveBrowserReport(cachedReport).catch(() => undefined);
+}
+
+function expandedCachedReport(operationId: string): SalesAnalysisResult | undefined {
+  const cache = cachedReport;
+  if (!cache || cache.result.operationId !== operationId) return undefined;
+  if (!(cache.result.periods ?? []).every((period) => Boolean(cache.packed[period.key]))) return undefined;
+  return {
+    ...cache.result,
+    periods: cache.result.periods?.map((period) => ({
+      ...period,
+      items: unpackSalesAnalysisItems(cache.packed[period.key]!, period.stores ?? cache.result.stores),
+    })),
+  };
+}
+
 export function installWebBackend(): void {
+  stopEvents?.();
+  stopEvents = undefined;
   syncedPayload = '';
   syncedAt = 0;
   syncQueue = Promise.resolve();
   snapshot = normalizeSnapshotIDs(loadWebSnapshot());
   persist(snapshot);
-  listenWebEvents((name, payload) => {
-    if (name === 'rta:sales-analysis-update' && payload && typeof payload === 'object') {
-      rememberArticleNames(payload as SalesAnalysisResult);
-    }
-    emit(name, payload);
-  });
+  cachedReport = null;
+  browserReportStatus.set({});
+  cacheReady=loadBrowserReport().then(report=>{cachedReport=report;});
   configureBackend({
     methods: {
       OpenWorkbook: async () => {
@@ -330,20 +394,56 @@ export function installWebBackend(): void {
       ListSalesAnalysisStores: async (value: unknown) =>
         liveRPC('ListSalesAnalysisStores', value),
 
+      LoadSalesAnalysisSnapshot: async () => {
+        await cacheReady;
+        const cache=cachedReport;
+        return {result:cache?.result ?? null,profileId:cache?.profileId ?? '',savedAt:cache?.savedAt ?? '',localQuery:cache?.localQuery};
+      },
+
       RetrySalesAnalysis: async (value: unknown) => {
-        const result = await liveRPC<SalesAnalysisResult>('RetrySalesAnalysis', value);
+        await cacheReady;
+        const previous=cachedReport;
+        // A retry may change amounts without changing row counts. Invalidate
+        // packed details before progress updates can save an old batch.
+        if (cachedReport?.result.operationId === String(asRecord(value).operationId ?? ''))
+          cachedReport={...cachedReport,packed:{}};
+        let result:SalesAnalysisResult;
+        try { result = await liveRPC<SalesAnalysisResult>('RetrySalesAnalysis', value); }
+        catch(error) { cachedReport=previous; throw error; }
         rememberArticleNames(result);
+        rememberReport(result);
         return result;
       },
       RunSalesAnalysis: async (value: unknown) => {
-        const result = await liveRPC<SalesAnalysisResult>('RunSalesAnalysis', value);
+        await cacheReady;
+        const {localQuery,...request}=value as SalesAnalysisRequest;
+        const result = await liveRPC<SalesAnalysisResult>('RunSalesAnalysis', request);
         rememberArticleNames(result);
+        rememberReport(result,request.profileId ?? '',localQuery);
         return result;
       },
 
       GetSalesAnalysisItems: async (value: unknown) => {
+        await cacheReady;
+        const request=asRecord(value);
+        const operationId=String(request.operationId ?? '');
+        const periodKey=String(request.periodKey ?? '');
+        const storeId=String(request.storeId ?? '');
+        const local=cachedReport?.result.operationId === operationId ? cachedReport.packed[periodKey] : undefined;
+        if (local) {
+          if (!storeId) return local;
+          const period=cachedReport!.result.periods?.find(period=>period.key===periodKey);
+          const stores=period?.stores ?? cachedReport!.result.stores;
+          return packSalesAnalysisItems(periodKey,unpackSalesAnalysisItems(local,stores).filter(item=>item.storeId===storeId),stores);
+        }
         try {
-          return await liveRPC('GetSalesAnalysisItems', value);
+          const packed=await liveRPC<SalesAnalysisPackedItems>('GetSalesAnalysisItems', value);
+          if (!storeId && cachedReport?.result.operationId === operationId) {
+            cachedReport={...cachedReport,packed:{...cachedReport.packed,[periodKey]:packed}};
+            // A quota failure must not turn a successful query into an error.
+            await saveBrowserReport(cachedReport).catch(()=>undefined);
+          }
+          return packed;
         } catch (error) {
           const request = asRecord(value);
           const operationId = String(request.operationId ?? '');
@@ -357,6 +457,9 @@ export function installWebBackend(): void {
       },
 
       GetSalesAnalysisReportGlyphs: async (value: unknown) => {
+        await cacheReady;
+        const local=expandedCachedReport(String(asRecord(value).operationId ?? ''));
+        if (local) return collectReportGlyphs(local,snapshot.manCodeGroups);
         try {
           return await liveRPC<string>('GetSalesAnalysisReportGlyphs', value);
         } catch {
@@ -365,6 +468,9 @@ export function installWebBackend(): void {
       },
 
       GetSalesAnalysisReportMemo: async (value: unknown) => {
+        await cacheReady;
+        const local=expandedCachedReport(String(asRecord(value).operationId ?? ''));
+        if (local) return buildWebReportMemo(local,value as SalesAnalysisReportMemoRequest,snapshot.manCodeGroups);
         try {
           return await liveRPC('GetSalesAnalysisReportMemo', value);
         } catch {
@@ -375,8 +481,23 @@ export function installWebBackend(): void {
 
       ClearSalesAnalysis: async (value: unknown) => {
         const operationId = String(asRecord(value).operationId ?? '');
+        await cacheReady;
+        if (!operationId || cachedReport?.result.operationId === operationId) {
+          // Discarding the active server result (including starting a new
+          // query) must not erase the last committed local report. Only the
+          // explicit ClearLocalReportCache action removes persisted data.
+          cachedReport=null;
+        }
         try { await liveRPC('ClearSalesAnalysis', value); } catch { /* keep local copy if the session expired */ }
         if (snapshot.analysis?.operationId === operationId) persist({ ...snapshot, analysis: null });
+      },
+      ClearLocalReportCache: async () => {
+        await cacheReady;
+        const previous=cachedReport;
+        cachedReport=null;
+        try { await clearBrowserReport(); }
+        catch(error) { cachedReport=previous; throw error; }
+        persist({...snapshot,analysis:null});
       },
 
       CancelSalesAnalysis: async (value: unknown) => {

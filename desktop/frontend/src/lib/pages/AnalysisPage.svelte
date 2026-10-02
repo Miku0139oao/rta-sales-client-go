@@ -12,6 +12,7 @@
   import { errorMessage } from '../i18n';
   import { isWebRuntime } from '../runtime';
   import { loadWebAnalysisSnapshot } from '../webStorage';
+  import { browserReportStatus } from '../browserReportCache';
   import { buildFocusGroups, type FocusGroup } from '../analysisFocus';
   import {
     categoryCodeOf,
@@ -71,6 +72,7 @@
     SalesAnalysisProgress,
     SalesAnalysisReportMemo,
     SalesAnalysisResult,
+    SalesAnalysisRequest,
     SalesAnalysisStore,
     SalesAnalysisTotals,
     SalesAnalysisWeek,
@@ -142,6 +144,9 @@
   let queriedAt = '';
   $: en = settings.locale === 'en';
   let loadingItems = false;
+  let resultExpired = false;
+  let cacheClearOpen = false;
+  let clearingCache = false;
   let cancelling = false;
   let exportingPDF = false;
   let exportDialog = false;
@@ -263,7 +268,7 @@
   $: reportPeriods = normalizePeriods(result);
   $: currentPeriod = periodByKey(reportPeriods, 'current') ?? reportPeriods[0];
   $: currentReady = Boolean(
-    currentPeriod && ((currentPeriod.items?.length ?? 0) > 0 || (currentPeriod.topAmount?.length ?? 0) > 0 || (currentPeriod.itemCount ?? 0) > 0),
+    !resultExpired && currentPeriod && ((currentPeriod.items?.length ?? 0) > 0 || (currentPeriod.topAmount?.length ?? 0) > 0 || (currentPeriod.itemCount ?? 0) > 0),
   );
   $: draftQueryKey = JSON.stringify({
     profileId, periodMode,
@@ -375,6 +380,12 @@
       queriedAt = new Date().toISOString();
       analysisActivity.set(undefined);
     } catch (cause) {
+      if (cause instanceof AppError && cause.code === 'analysis_expired'
+        || cause instanceof Error && cause.message.toLowerCase().includes('sales analysis result is no longer available')) {
+        resultExpired = true;
+        analysisActivity.set(undefined);
+        return;
+      }
       error = errorMessage(settings.locale, cause);
       analysisActivity.set({
         operationId,
@@ -401,7 +412,7 @@
         const id = source.operationId;
         await ensurePeriodItems(['current']);
         await tick();
-        if (result?.operationId !== id || itemFailureRows.length || loadingItems)
+        if (result?.operationId !== id || resultExpired || itemFailureRows.length || loadingItems)
           throw new Error(en ? 'Report details are not ready.' : '報表明細尚未就緒。');
         const query = appliedQuery;
         const scope = JSON.stringify({
@@ -515,6 +526,7 @@
   async function initialize() {
     loadingProfiles = true;
     error = '';
+    let restoredLocalQuery: SalesAnalysisRequest['localQuery'];
     try {
       const [listedProfiles, listedGroups] = await Promise.all([
         backend.listProfiles(),
@@ -528,8 +540,18 @@
       // recorded one. Never attribute them to the first account by default.
       reportAccount = '';
       if (isWebRuntime()) {
-        const saved = loadWebAnalysisSnapshot();
-        if (saved?.pending) {
+        const cached = await backend.loadSalesAnalysisSnapshot().catch(() => undefined);
+        const saved = cached?.result ?? loadWebAnalysisSnapshot();
+        if (cached?.result && !cached.result.pending) {
+          result = cached.result;
+          restoredAt = cached.savedAt;
+          restoredLocalQuery = cached.localQuery;
+          const owner = profiles.find(profile => profile.id === cached.profileId);
+          profileId = owner?.id ?? '';
+          reportAccount = owner?.displayName ?? (en ? 'Saved report' : '本機報表');
+          // Reading a saved report must not require an RTA login or live stores.
+          stores = result.stores.map(store => ({businessId:store.businessId,label:store.label}));
+        } else if (saved?.pending) {
           await backend.clearSalesAnalysis(saved.operationId).catch(() => undefined);
         } else if (saved) {
           result = saved;
@@ -546,10 +568,12 @@
           result = snapshot.result;
         }
       }
-      if (profileId) await loadStores({ keepResult: Boolean(result) });
+      if (profileId && !(isWebRuntime() && restoredAt)) await loadStores({ keepResult: Boolean(result) });
       if (result) {
         const current = normalizePeriods(result).find((period) => period.key === 'current');
-        periodMode = 'range';
+        periodMode = restoredLocalQuery?.periodMode ?? 'range';
+        if (restoredLocalQuery) month = restoredLocalQuery.month;
+        weekCompare = restoredLocalQuery?.weekCompare ?? hasWeekAlignedComparison(normalizePeriods(result));
         from = current?.from ?? result.from;
         to = current?.to ?? result.to;
         selectedStoreIds = new Set(result.stores.map((store) => store.businessId));
@@ -735,6 +759,37 @@
   function changeQuery() {
     dismissExportNotice();
     queryOpen = !queryOpen;
+    if (queryOpen && isWebRuntime() && restoredAt && profileId) void refreshSavedQueryStores();
+  }
+
+  async function refreshSavedQueryStores() {
+    const selected = [...selectedStoreIds];
+    const owner = profileId;
+    const generation = storeLoadGeneration + 1;
+    await loadStores({ keepResult: true });
+    if (owner !== profileId || generation !== storeLoadGeneration) return;
+    const available = new Set(stores.map((store) => store.businessId));
+    selectedStoreIds = new Set(selected.filter((id) => available.has(id)));
+  }
+
+  async function clearSavedWebReport() {
+    if (clearingCache || busy) return;
+    clearingCache = true;
+    try {
+      await callBackend<void>('ClearLocalReportCache');
+      resetHydration();
+      result = undefined;
+      restoredAt = '';
+      queriedAt = '';
+      operationId = '';
+      appliedQuery = undefined;
+      lastRunKey = '';
+      cacheClearOpen = false;
+    } catch (caught) {
+      error = errorMessage(settings.locale, caught);
+    } finally {
+      clearingCache = false;
+    }
   }
 
   function setPeriodUi(next: PeriodUi) {
@@ -867,7 +922,7 @@
     running = true;
     cancelling = false;
     error = '';
-    void discardResult();
+    await discardResult();
     progress = undefined;
     operationId = '';
     resetFilters();
@@ -934,7 +989,7 @@
       await ensurePeriodItems((result.periods ?? []).map((period) => period.key));
       await tick();
       if (workflowCancelled) return;
-      if (itemFailureRows.length || loadingItems)
+      if (resultExpired || itemFailureRows.length || loadingItems)
         throw new Error('Report details are unavailable / 報表明細尚未載入完成');
       if (!isWebRuntime()) lease = await beginNativeExportLease();
       const directory = await backend.chooseSalesAnalysisPDFDirectory();
@@ -1028,7 +1083,7 @@
     }
     cancelling = false;
     error = '';
-    void discardResult();
+    await discardResult();
     progress = undefined;
     operationId = '';
     resetFilters();
@@ -1039,6 +1094,7 @@
         periods,
         concurrency: settings.accountConcurrency,
         simulateStoreCount: settings.simulateStoreCount,
+        ...(isWebRuntime() ? {localQuery:{periodMode:submittedQuery.periodMode,month:submittedQuery.month,weekCompare:submittedQuery.weekCompare}} : {}),
       });
       result = summary;
       queriedAt=new Date().toISOString();
@@ -1066,11 +1122,12 @@
     hydrationFailures = {};
     hydratingPeriod = '';
     loadingItems = false;
+    resultExpired = false;
   }
 
   function ensurePeriodItems(keys: string[]): Promise<SalesAnalysisPeriodResult[]> {
     const summary = result;
-    if (!summary?.periods?.length || !summary.operationId) return Promise.resolve(summary?.periods ?? []);
+    if (!summary?.periods?.length || !summary.operationId || resultExpired) return Promise.resolve(summary?.periods ?? []);
     if (hydrationOperationId !== summary.operationId) {
       resetHydration();
       hydrationOperationId = summary.operationId;
@@ -1113,6 +1170,14 @@
             ? { ...period, items, itemCount: items.length } : period) };
         } catch (caught) {
           if (!stillCurrent()) break;
+          const expired = caught instanceof AppError && caught.code === 'analysis_expired'
+            || caught instanceof Error && caught.message.toLowerCase().includes('sales analysis result is no longer available');
+          if (expired) {
+            resultExpired = true;
+            run.keys.clear();
+            hydrationFailures = {};
+            break;
+          }
           hydrationFailures = { ...hydrationFailures, [key]: errorMessage(settings.locale, caught) };
         }
       }
@@ -1131,6 +1196,16 @@
     const failed = Object.keys(hydrationFailures);
     hydrationFailures = {};
     void ensurePeriodItems(failed);
+  }
+
+  async function reopenExpiredQuery() {
+    if (running || exportingPDF || retrying || workflowRunning) return;
+    restoreQuery();
+    queryOpen = true;
+    if (isWebRuntime() && restoredAt && profileId) await refreshSavedQueryStores();
+    await tick();
+    document.getElementById('analysis-query-form')?.scrollIntoView?.({ block: 'start' });
+    document.getElementById('analysis-profile')?.focus({ preventScroll: true });
   }
 
   async function cancelAnalysis() {
@@ -1597,7 +1672,7 @@
 
   function itemEmptyLabel(period: SalesAnalysisPeriodResult | undefined, failures: Record<string, string>): string {
     if (!periodNeedsItemHydration(period)) return t('analysis.noResults');
-    return t(failures[period?.key ?? ''] ? 'analysis.itemsUnavailable' : 'common.loading');
+    return t(resultExpired || failures[period?.key ?? ''] ? 'analysis.itemsUnavailable' : 'common.loading');
   }
 
   function focusGroupLabel(group: FocusGroup): string {
@@ -2139,8 +2214,8 @@
             count: result.selectedStores,
           })}</p>
           <div class="heading-flags">
-            <span class="report-status" class:ready={result.complete && !loadingItems && !itemFailureRows.length}>
-              <span class="status-dot" aria-hidden="true"></span>{itemFailureRows.length ? t('analysis.itemsNotReady') : loadingItems || result.pending ? t('common.loading') : result.complete ? t('analysis.reportReady') : t('analysis.partialResult', { count: result.issues?.length ?? 0 })}
+            <span class="report-status" class:ready={result.complete && !resultExpired && !loadingItems && !itemFailureRows.length}>
+              <span class="status-dot" aria-hidden="true"></span>{resultExpired || itemFailureRows.length ? t('analysis.itemsNotReady') : loadingItems || result.pending ? t('common.loading') : result.complete ? t('analysis.reportReady') : t('analysis.partialResult', { count: result.issues?.length ?? 0 })}
             </span>
             <details class="period-disclosure">
               <summary>{t('analysis.periods')}<span class="material-symbols-rounded" aria-hidden="true">expand_more</span></summary>
@@ -2184,7 +2259,19 @@
     <div class="notice warning-notice"><span>{en?`${result.issues.length} queries failed. Successful data is retained.`:`${result.issues.length} 項查詢失敗，成功資料已保留。`}</span><button class="preset-trigger" type="button" disabled={running||retrying||exportingPDF} onclick={()=>void retrySales()}>{retrying?(en?'Retrying…':'重試中…'):(en?'Retry failed queries only':'只重試失敗查詢')}</button><details><summary>{en?'Failure details':'失敗明細'}</summary>{#each result.issues as issue}<p>{issue.storeLabel} · {issue.periodKey}：{issue.message}</p>{/each}</details></div>
   {/if}
   {#if result && currentPeriod}
-    <div class="report-summary-bar" class:active-task={Boolean($analysisActivity)} aria-label={en?'Report scope and freshness':'報表範圍與資料時間'}><strong>{currentPeriod.from} — {currentPeriod.to}</strong><span>{reportAccount} · {result.selectedStores} {en?'stores':'間門店'}</span><span>{result.pending?(en?'Comparison data loading':'比較資料補齊中'):result.complete?(en?'Complete report':'完整報表'):(en?'Partial report':'部分報表')}</span><span>{en?'Data time':'資料時間'}：{queriedAt?new Date(queriedAt).toLocaleString(settings.locale):restoredAt?new Date(restoredAt).toLocaleString(settings.locale):(en?'Previous saved result':'先前儲存結果')}</span><span>{en?'Query time':'查詢耗時'}：{(result.queryDurationMs/1000).toFixed(1)}s</span></div>
+    <div class="report-summary-bar" class:active-task={Boolean($analysisActivity)} aria-label={en?'Report scope and freshness':'報表範圍與資料時間'}><strong>{currentPeriod.from} — {currentPeriod.to}</strong><span>{reportAccount} · {result.selectedStores} {en?'stores':'間門店'}</span><span>{resultExpired || itemFailureRows.length ? t('analysis.itemsNotReady') : result.pending?(en?'Comparison data loading':'比較資料補齊中'):result.complete?(en?'Complete report':'完整報表'):(en?'Partial report':'部分報表')}</span><span>{en?'Data time':'資料時間'}：{queriedAt?new Date(queriedAt).toLocaleString(settings.locale):restoredAt?new Date(restoredAt).toLocaleString(settings.locale):(en?'Previous saved result':'先前儲存結果')}</span><span>{en?'Query time':'查詢耗時'}：{(result.queryDurationMs/1000).toFixed(1)}s</span></div>
+    {#if isWebRuntime()}
+      <div class="local-report-notice" role="status">
+        <div>{#if $browserReportStatus.operationId === result.operationId && $browserReportStatus.savedAt}
+          <strong>{restoredAt ? (en ? 'Reading a saved local report' : '正在查看本機報表') : (en ? 'Full report saved in this browser' : '完整報表已存於此瀏覽器')}</strong>
+          <p>{new Date($browserReportStatus.savedAt).toLocaleString(settings.locale)} · {$browserReportStatus.storage} · {en ? 'Updates only when you query again.' : '重新查詢才會更新資料。'}</p>
+        {:else if $browserReportStatus.error}
+          <strong>{en ? 'The report could not be saved locally' : '本機報表儲存失敗'}</strong><p>{en ? 'Browser storage may be full or disabled. Loaded data can still be viewed and exported during this visit.' : '瀏覽器儲存空間可能不足或被停用。本次已載入的資料仍可查看及匯出，關閉後可能無法恢復。'}</p>
+        {:else if resultExpired}<span>{en ? 'This old report has no full local copy yet. Query again once to save its details.' : '這份舊報表尚未保存完整本機明細，請重新查詢一次以保存。'}</span>
+        {:else}<span>{!result.complete && !result.pending ? (en ? 'Some queries failed. Retry them to save a complete report locally.' : '部分查詢失敗，重試完成後才會儲存完整本機報表。') : (en ? 'The report will be saved locally when all period details are loaded.' : '所有期間明細載入後，會自動保留最近一份完整本機報表。')}</span>{/if}</div>
+        <div class="local-report-actions"><button type="button" class="preset-trigger" onclick={() => void reopenExpiredQuery()} disabled={busy || exportingPDF}>{en ? 'Update data' : '更新資料'}</button><button type="button" class="preset-trigger" onclick={() => cacheClearOpen=true} disabled={busy || exportingPDF || clearingCache}>{en ? 'Clear local report' : '清除本機報表'}</button></div>
+      </div>
+    {/if}
   {/if}
   {#if exportNotice}
     <div class="notice success-notice export-notice" role="status">
@@ -2240,6 +2327,7 @@
         <div class="field-group">
           <label for="analysis-profile">{t('analysis.account')}</label>
           <select id="analysis-profile" bind:value={profileId} onchange={() => void loadStores({ keepResult: true })} disabled={loadingStores || running}>
+            {#if !profileId}<option value="" disabled>{en ? 'Choose an account' : '請選擇帳號'}</option>{/if}
             {#each profiles as profile}<option value={profile.id}>{profile.displayName}</option>{/each}
           </select>
         </div>
@@ -2336,7 +2424,7 @@
 
   {#if result && currentPeriod}
     <section class="analysis-results">
-      {#if restoredAt && !result.pending}
+      {#if restoredAt && !result.pending && !isWebRuntime()}
         <div class="notice restored-notice" role="status">
           <span class="material-symbols-rounded" aria-hidden="true">history</span>
           <span class="restored-notice-copy">{t('analysis.restoredReport', { time: formatRestoredAt(restoredAt) })}</span>
@@ -2359,10 +2447,18 @@
         </section>
       {:else if !result.complete}<div class="notice warning-notice" role="status"><span class="material-symbols-rounded" aria-hidden="true">warning</span><span>{t('analysis.partialResult', { count: result.issues?.length ?? 0 })}</span></div>{/if}
 
-      {#if itemFailureRows.length > 0}
+      {#if resultExpired}
+        <section class="item-recovery expired-recovery" role="alert">
+          <div><strong>{en ? 'Report details need to be refreshed' : '報表明細需要重新查詢'}</strong>
+            <p>{t('error.analysis_expired')}</p>
+            <p>{en ? 'Confirm the account, stores and dates before starting. No new query will run until you submit.' : '請確認帳號、門店及日期後開始分析。按下開始分析前，不會執行新查詢。'}</p>
+          </div>
+          <button type="button" onclick={() => void reopenExpiredQuery()} disabled={running || exportingPDF || retrying || workflowRunning}>{en ? 'Query again' : '重新查詢'}</button>
+        </section>
+      {:else if itemFailureRows.length > 0}
         <section class="item-recovery" role="alert">
           <div><strong>{t('analysis.itemsFailed', { count: itemFailureRows.length })}</strong><p>{t('analysis.itemsRecoveryHint')}</p>
-            <ul>{#each itemFailureRows as failure}<li><b>{failure.label}</b> · {failure.message}</li>{/each}</ul>
+            <details><summary>{en ? 'View failure details' : '查看失敗詳情'}</summary><ul>{#each itemFailureRows as failure}<li><b>{failure.label}</b> · {failure.message}</li>{/each}</ul></details>
           </div>
           <button type="button" onclick={retryItemHydration} disabled={loadingItems || running || exportingPDF}>{t('analysis.retryItems')}</button>
         </section>
@@ -2441,7 +2537,7 @@
 
       <div class="analysis-workspace" bind:this={reportWorkspace} id={`report-panel-${activeView}`} role="tabpanel" aria-labelledby={`report-tab-${activeView}`} tabindex="0">
       {#if scopedViewWaiting}
-        <div class="filter-empty" role="status"><span class="material-symbols-rounded" aria-hidden="true">hourglass_top</span><div><strong>{t('analysis.itemsNotReady')}</strong><p>{t(viewMissingPeriods.some((period) => hydrationFailures[period.key]) ? 'analysis.itemsUnavailable' : 'analysis.itemsPreparing')}</p></div></div>
+        <div class="filter-empty" role="status"><span class="material-symbols-rounded" aria-hidden="true">{resultExpired ? 'info' : 'hourglass_top'}</span><div><strong>{t('analysis.itemsNotReady')}</strong><p>{t(resultExpired || viewMissingPeriods.some((period) => hydrationFailures[period.key]) ? 'analysis.itemsUnavailable' : 'analysis.itemsPreparing')}</p></div></div>
       {:else}
       {#if productScopeActive && !currentDetailsMissing && filteredItems.length === 0}
         <div class="filter-empty" role="status"><span class="material-symbols-rounded" aria-hidden="true">search_off</span><div><strong>{t('analysis.noResults')}</strong><p>{t('analysis.noMatchHint')}</p></div></div>
@@ -2516,7 +2612,7 @@
           {:else}
             <p class="focus-note">{t('analysis.focusHint')}</p>
             {#if periodNeedsItemHydration(focusPeriod)}
-              <div class="ranking-empty">{t(hydrationFailures[focusPeriod.key] ? 'analysis.itemsUnavailable' : 'common.loading')}</div>
+              <div class="ranking-empty">{t(resultExpired || hydrationFailures[focusPeriod.key] ? 'analysis.itemsUnavailable' : 'common.loading')}</div>
             {:else}<div class="focus-grid">
               {#each focusGroups as group (group.id)}
                 <article class="focus-group">
@@ -2622,6 +2718,14 @@
 
 {#if historyOpen}
   <ReportHistoryDialog locale={settings.locale} current={historyCurrent} onClose={() => historyOpen=false} />
+{/if}
+
+{#if cacheClearOpen}
+  <dialog class="app-dialog" aria-labelledby="clear-cache-title" use:modal={{busy:clearingCache,onClose:()=>cacheClearOpen=false}}>
+    <h2 id="clear-cache-title">{en ? 'Clear the local report?' : '清除本機報表？'}</h2>
+    <p>{en ? 'This removes the latest saved report and its details from this browser. Accounts, presets and saved history summaries remain. You can run a new query to save another report.' : '將清除這個瀏覽器最近一份報表及完整明細。帳號、常用條件及歷史摘要會保留；之後可重新查詢並儲存新報表。'}</p>
+    <div class="dialog-actions"><md-outlined-button onclick={() => cacheClearOpen=false} disabled={clearingCache}>{t('common.cancel')}</md-outlined-button><md-filled-button onclick={() => void clearSavedWebReport()} disabled={clearingCache}>{en ? 'Clear report' : '確定清除報表'}</md-filled-button></div>
+  </dialog>
 {/if}
 
 {#if presetsOpen}
@@ -2789,6 +2893,10 @@
 {/if}
 
 <style>
+  .local-report-notice { display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding:12px 16px; margin-block:12px; border:1px solid var(--md-sys-color-outline-variant); border-radius:12px; background:var(--md-sys-color-surface-container-low); font-size:13px; }
+  .local-report-notice > div:first-child { flex:1; min-width:min(100%,220px); }
+  .local-report-notice p { margin:4px 0 0; line-height:1.6; color:var(--md-sys-color-on-surface-variant); }
+  .local-report-actions { display:flex; gap:8px; flex-wrap:wrap; }
   .report-summary-bar.active-task{position:static;}
   .report-summary-bar{position:sticky;top:0;z-index:4;display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:12px 16px;border:1px solid var(--md-sys-color-outline-variant);border-radius:12px;background:var(--md-sys-color-surface-container);font-size:12px;}
   .analysis-page { max-width: 1480px; }
@@ -3300,6 +3408,10 @@
     .analysis-supplement-meter { min-width: 0; }
   }
 
+  @media (max-height: 540px) {
+    .report-navigation, .report-summary-bar, .analysis-query-actions { position: static; }
+  }
+
   @media (max-width: 1200px) {
     .report-tabs button { padding-inline: 10px; }
     .report-tabs .material-symbols-rounded { display: none; }
@@ -3323,7 +3435,19 @@
   }
 
   @media (max-width: 760px) {
-    .analysis-query-actions { bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }
+    .analysis-query-actions { position: static; backdrop-filter: none; box-shadow: none; }
+    .report-summary-bar, .report-navigation { position: static; }
+    .report-summary-bar { gap: 6px 12px; }
+    .report-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; width: 100%; }
+    .report-tabs button { min-height: 48px; white-space: normal; justify-content: center; line-height: 1.4; }
+    .navigation-tools { width: 100%; justify-content: space-between; }
+    .rank-seg-track button { min-height: 44px; min-width: 40px; }
+    .selection-heading button, .facet-actions button, .clear-filters, .query-draft-notice button, .shortcut-group button { min-height: 44px; }
+    .analysis-heading-actions > * { flex: 1 1 calc(50% - 8px); justify-content: center; }
+    .preset-trigger { min-height: 44px; }
+    .item-recovery { flex-direction: column; align-items: stretch; }
+    .item-recovery button, .item-recovery summary { min-height: 44px; }
+    .item-recovery p { line-height: 1.6; }
   }
 
   @media (max-width: 620px) {
@@ -3340,7 +3464,7 @@
     .filter-panel { padding: 12px; }
     .analysis-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
     .analysis-kpis > div { padding: 12px; }
-    .analysis-kpis > .kpi-primary, .analysis-kpis > div:nth-child(2) { grid-column: 1 / -1; }
+    .analysis-kpis > .kpi-primary { grid-column: 1 / -1; }
     .analysis-kpis dd { font-size: 22px; }
     .analysis-secondary-kpis { grid-template-columns: 1fr; gap: 8px; }
     .analysis-secondary-kpis > div { padding: 4px 12px; }

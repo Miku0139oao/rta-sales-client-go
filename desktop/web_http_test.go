@@ -32,6 +32,7 @@ func TestWebErrorCodes(t *testing.T) {
 		{&rtasales.UpstreamError{StatusCode: 429}, "rta_rate_limit"},
 		{&rtasales.UpstreamError{StatusCode: 503}, "rta_upstream"},
 		{errors.New("another account operation is already running"), "operation_busy"},
+		{fmt.Errorf("details: %w", ErrSalesAnalysisExpired), "analysis_expired"},
 	} {
 		if got := webErrorCode(test.err); got != test.code {
 			t.Errorf("%v: got %s, want %s", test.err, got, test.code)

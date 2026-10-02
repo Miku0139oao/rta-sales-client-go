@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import type { Translator } from '../i18n';
   import { formatTableCell, type AnalysisTable, type TableSort } from '../analysisTable';
   import { readColumns, tablePositions } from '../tableView';
@@ -20,6 +20,21 @@
     positionKey = '',
     preferenceError = '';
   let scroller: HTMLDivElement;
+  let cards = false;
+  let mobile = false;
+  onMount(() => {
+    if (typeof matchMedia !== 'function') return;
+    const media = matchMedia('(max-width: 760px)');
+    const update = () => {
+      mobile = media.matches;
+      cards = mobile;
+      page = 1;
+      top = 0;
+    };
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  });
   $: en = locale === 'en';
   $: nextSignature = `${table.id}:${table.columns.length}`;
   $: if (nextSignature !== signature) {
@@ -41,9 +56,10 @@
   }
   $: pageCount = Math.max(1, Math.ceil(table.rows.length / 50));
   $: if (page > pageCount) page = pageCount;
-  $: virtual = !paginated && table.rows.length > 500;
+  $: usePagination = paginated || cards;
+  $: virtual = !usePagination && table.rows.length > 500;
   $: start = virtual ? Math.max(0, Math.min(table.rows.length - 1, Math.floor(Math.max(0, top - 48) / 64) - 6)) : 0;
-  $: rows = paginated
+  $: rows = usePagination
     ? table.rows.slice((page - 1) * 50, page * 50)
     : virtual
       ? table.rows.slice(start, start + 24)
@@ -60,6 +76,23 @@
       column,
       direction: sort?.column === column && sort.direction === 'descending' ? 'ascending' : 'descending',
     });
+  }
+  function changePresentation() {
+    cards = !cards;
+    top = 0;
+    page = 1;
+    if (scroller) scroller.scrollTop = 0;
+  }
+  function cardFields(identity: number) {
+    const fields = visible.filter((index) => index !== identity);
+    // Product cards lead with net sales, units and the store instead of three
+    // identifiers. Other report tables retain their existing column order.
+    if (table.id !== 'products') return fields;
+    const priority = [8, 7, 0];
+    return [
+      ...priority.filter((index) => fields.includes(index)),
+      ...fields.filter((index) => !priority.includes(index)),
+    ];
   }
   function columns(index: number) {
     if (visible.includes(index) && visible.length === 1) return;
@@ -100,61 +133,134 @@
     </div>
   </details>
 </div>
-{#if preferenceError}<p role="status">{preferenceError}</p>{/if}
-<!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users must scroll data tables.) -->
-<div
-  class="table-scroll"
-  class:virtual
-  bind:this={scroller}
-  role="region"
-  aria-label={table.name}
-  tabindex="0"
-  onscroll={position}
->
-  <table aria-label={table.name} aria-rowcount={table.rows.length + 1}>
-    <thead
-      ><tr
-        >{#each visible as index}{@const column = table.columns[index]!}<th
-            class:numeric={column.format !== 'text'}
-            aria-sort={sort?.column === index ? sort.direction : 'none'}
-            ><button type="button" onclick={() => changeSort(index)}
-              >{column.label}<span aria-hidden="true"
-                >{sort?.column === index ? (sort.direction === 'descending' ? '↓' : '↑') : '↑↓'}</span
-              ></button
-            ></th
-          >{/each}</tr
-      ></thead
+{#if mobile}
+  <div class="mobile-table-tools">
+    <button type="button" aria-pressed={cards} onclick={changePresentation}
+      >{cards ? (en ? 'Switch to full table' : '切換完整表格') : en ? 'Switch to cards' : '切換卡片明細'}</button
     >
-    <tbody
-      >{#if virtual && start > 0}<tr aria-hidden="true" class="spacer"
-          ><td colspan={visible.length} style:height={`${start * 64}px`}></td></tr
+    {#if cards}<label
+        >{en ? 'Sort by' : '排序欄位'}<select
+          value={sort?.column ?? ''}
+          onchange={(event) => changeSort(Number(event.currentTarget.value))}
+        >
+          <option value="" disabled>{en ? 'Select column' : '選擇欄位'}</option>
+          {#each table.columns as column, index}<option value={index}>{column.label}</option>{/each}
+        </select></label
+      >
+      {#if sort}<button type="button" onclick={() => changeSort(sort!.column)}
+          >{sort.direction === 'ascending' ? (en ? 'Ascending ↑' : '升冪 ↑') : en ? 'Descending ↓' : '降冪 ↓'}</button
         >{/if}
-      {#each rows as row, rowIndex}<tr
-          class:virtual-row={virtual}
-          class:weekly-total={row.fixed}
-          aria-rowindex={virtual ? start + rowIndex + 2 : paginated ? (page - 1) * 50 + rowIndex + 2 : rowIndex + 2}
-          >{#each visible as index}{@const cell = row.cells[index] ?? null}<td
-              class:numeric={table.columns[index]?.format !== 'text'}
-              class:positive={table.columns[index]?.format === 'percent' && typeof cell === 'number' && cell > 0}
-              class:negative={table.columns[index]?.format === 'percent' && typeof cell === 'number' && cell < 0}
-            >
-              {#if row.product?.column === index && row.product.code}<button
-                  class="product-link"
-                  type="button"
-                  aria-label={t('data.productOpen', { name: row.product.name })}
-                  onclick={() => onProduct(row.product!.code, row.product!.name)}
-                  >{formatTableCell(cell, table.columns[index]!.format, locale)}</button
-                >{:else}<strong>{formatTableCell(cell, table.columns[index]!.format, locale)}</strong>{/if}
-              {#if row.secondary?.[index]}<span class="secondary">{row.secondary[index]}</span>{/if}
-            </td>{/each}</tr
-        >{:else}<tr><td colspan={visible.length} class="empty-table">{t('analysis.noResults')}</td></tr>{/each}
-      {#if virtual && start + rows.length < table.rows.length}<tr aria-hidden="true" class="spacer"
-          ><td colspan={visible.length} style:height={`${(table.rows.length - start - rows.length) * 64}px`}></td></tr
-        >{/if}
-    </tbody>
-  </table>
-</div>
-{#if paginated && pageCount > 1}<div class="pagination">
+    {:else}<p>{en ? 'Swipe horizontally to see all columns.' : '左右滑動表格可查看全部欄位。'}</p>{/if}
+  </div>
+{/if}
+{#if preferenceError}<p role="status">{preferenceError}</p>{/if}
+{#if cards}
+  <div class="data-cards" role="region" aria-label={table.name}>
+    {#each rows as row}
+      {@const identity =
+        row.product?.column ??
+        Math.max(
+          0,
+          table.columns.findIndex((column) => column.format === 'text'),
+        )}
+      {@const fields = cardFields(identity)}
+      <article class:weekly-total={row.fixed}>
+        <h3>
+          {#if row.product?.code}<button
+              type="button"
+              class="product-link"
+              aria-label={t('data.productOpen', { name: row.product.name })}
+              onclick={() => onProduct(row.product!.code, row.product!.name)}
+              >{formatTableCell(row.cells[identity] ?? null, table.columns[identity]!.format, locale)}</button
+            >{:else}{formatTableCell(row.cells[identity] ?? null, table.columns[identity]!.format, locale)}{/if}
+        </h3>
+        {#if row.secondary?.[identity]}<span class="secondary">{row.secondary[identity]}</span>{/if}
+        <dl>
+          {#each fields.slice(0, 3) as index}<div>
+              <dt>{table.columns[index]!.label}</dt>
+              <dd>
+                {formatTableCell(
+                  row.cells[index] ?? null,
+                  table.columns[index]!.format,
+                  locale,
+                )}{#if row.secondary?.[index]}<span class="secondary">{row.secondary[index]}</span>{/if}
+              </dd>
+            </div>{/each}
+        </dl>
+        {#if fields.length > 3}<details class="card-details">
+            <summary>{en ? 'More fields' : '更多欄位'}</summary>
+            <dl>
+              {#each fields.slice(3) as index}<div>
+                  <dt>{table.columns[index]!.label}</dt>
+                  <dd>
+                    {formatTableCell(
+                      row.cells[index] ?? null,
+                      table.columns[index]!.format,
+                      locale,
+                    )}{#if row.secondary?.[index]}<span class="secondary">{row.secondary[index]}</span>{/if}
+                  </dd>
+                </div>{/each}
+            </dl>
+          </details>{/if}
+      </article>
+    {:else}<p class="empty-table">{t('analysis.noResults')}</p>{/each}
+  </div>
+{:else}
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users must scroll data tables.) -->
+  <div
+    class="table-scroll"
+    class:virtual
+    bind:this={scroller}
+    role="region"
+    aria-label={table.name}
+    tabindex="0"
+    onscroll={position}
+  >
+    <table aria-label={table.name} aria-rowcount={table.rows.length + 1}>
+      <thead
+        ><tr
+          >{#each visible as index}{@const column = table.columns[index]!}<th
+              class:numeric={column.format !== 'text'}
+              aria-sort={sort?.column === index ? sort.direction : 'none'}
+              ><button type="button" onclick={() => changeSort(index)}
+                >{column.label}<span aria-hidden="true"
+                  >{sort?.column === index ? (sort.direction === 'descending' ? '↓' : '↑') : '↑↓'}</span
+                ></button
+              ></th
+            >{/each}</tr
+        ></thead
+      >
+      <tbody
+        >{#if virtual && start > 0}<tr aria-hidden="true" class="spacer"
+            ><td colspan={visible.length} style:height={`${start * 64}px`}></td></tr
+          >{/if}
+        {#each rows as row, rowIndex}<tr
+            class:virtual-row={virtual}
+            class:weekly-total={row.fixed}
+            aria-rowindex={virtual ? start + rowIndex + 2 : paginated ? (page - 1) * 50 + rowIndex + 2 : rowIndex + 2}
+            >{#each visible as index}{@const cell = row.cells[index] ?? null}<td
+                class:numeric={table.columns[index]?.format !== 'text'}
+                class:positive={table.columns[index]?.format === 'percent' && typeof cell === 'number' && cell > 0}
+                class:negative={table.columns[index]?.format === 'percent' && typeof cell === 'number' && cell < 0}
+              >
+                {#if row.product?.column === index && row.product.code}<button
+                    class="product-link"
+                    type="button"
+                    aria-label={t('data.productOpen', { name: row.product.name })}
+                    onclick={() => onProduct(row.product!.code, row.product!.name)}
+                    >{formatTableCell(cell, table.columns[index]!.format, locale)}</button
+                  >{:else}<strong>{formatTableCell(cell, table.columns[index]!.format, locale)}</strong>{/if}
+                {#if row.secondary?.[index]}<span class="secondary">{row.secondary[index]}</span>{/if}
+              </td>{/each}</tr
+          >{:else}<tr><td colspan={visible.length} class="empty-table">{t('analysis.noResults')}</td></tr>{/each}
+        {#if virtual && start + rows.length < table.rows.length}<tr aria-hidden="true" class="spacer"
+            ><td colspan={visible.length} style:height={`${(table.rows.length - start - rows.length) * 64}px`}></td></tr
+          >{/if}
+      </tbody>
+    </table>
+  </div>
+{/if}
+{#if usePagination && pageCount > 1}<div class="pagination">
     <button
       type="button"
       disabled={page === 1}
@@ -173,6 +279,86 @@
   </div>{/if}
 
 <style>
+  .mobile-table-tools {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    padding-bottom: 12px;
+  }
+  .mobile-table-tools label {
+    display: grid;
+    gap: 4px;
+    flex: 1;
+    min-width: 140px;
+    font-size: 12px;
+  }
+  .mobile-table-tools button,
+  .mobile-table-tools select {
+    min-height: 44px;
+    padding: 8px 12px;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 10px;
+    background: var(--md-sys-color-surface);
+    color: var(--md-sys-color-primary);
+    font: inherit;
+  }
+  .mobile-table-tools select {
+    width: 100%;
+    font-size: 16px;
+  }
+  .mobile-table-tools p {
+    margin: 0;
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 12px;
+  }
+  .data-cards {
+    display: grid;
+    gap: 10px;
+    padding-block: 4px;
+  }
+  .data-cards article {
+    min-width: 0;
+    padding: 14px;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 12px;
+  }
+  .data-cards h3 {
+    margin: 0;
+    font-size: 16px;
+    overflow-wrap: anywhere;
+  }
+  .data-cards dl {
+    margin: 10px 0 0;
+    display: grid;
+    gap: 10px;
+  }
+  .data-cards dl > div {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+    gap: 12px;
+    align-items: baseline;
+  }
+  .data-cards dt {
+    font-size: 12px;
+    color: var(--md-sys-color-on-surface-variant);
+    overflow-wrap: anywhere;
+  }
+  .data-cards dd {
+    margin: 0;
+    text-align: right;
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+  }
+  .card-details {
+    margin-top: 10px;
+    border-top: 1px solid var(--md-sys-color-outline-variant);
+  }
+  .card-details summary {
+    min-height: 44px;
+    color: var(--md-sys-color-primary);
+  }
   .table-tools {
     display: flex;
     align-items: end;
@@ -356,5 +542,37 @@
   .table-scroll:focus-visible {
     outline: 2px solid var(--md-sys-color-primary);
     outline-offset: -2px;
+  }
+  @media (max-width: 760px) {
+    .table-tools {
+      gap: 8px;
+      align-items: center;
+    }
+    .table-tools > label {
+      flex-basis: 100%;
+      min-width: 0;
+      max-width: none;
+    }
+    input[type='search'] {
+      min-height: 44px;
+      font-size: 16px;
+    }
+    .table-tools > details {
+      margin-left: auto;
+    }
+    .column-options {
+      max-width: calc(100vw - 64px);
+      min-width: 0;
+      width: 220px;
+    }
+    .column-options label,
+    .pagination button,
+    .product-link,
+    th button {
+      min-height: 44px;
+    }
+    .table-scroll {
+      max-height: 65dvh;
+    }
   }
 </style>

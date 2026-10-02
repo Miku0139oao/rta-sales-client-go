@@ -18,8 +18,8 @@ import (
 // per article; one store already exceeds 700KiB. Arrays keep the same numbers.
 func (p SalesAnalysisPackedItems) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		K string    `json:"k"`
-		D []string  `json:"d"`
+		K string            `json:"k"`
+		D []string          `json:"d"`
 		R []json.RawMessage `json:"r"`
 	}
 	out := wire{K: p.PeriodKey, D: p.Dict, R: make([]json.RawMessage, 0, len(p.Rows))}
@@ -38,12 +38,12 @@ func (p SalesAnalysisPackedItems) MarshalJSON() ([]byte, error) {
 
 func (p *SalesAnalysisPackedItems) UnmarshalJSON(data []byte) error {
 	var compact struct {
-		K          string            `json:"k"`
-		D          []string          `json:"d"`
-		R          []json.RawMessage `json:"r"`
-		PeriodKey  string            `json:"periodKey"`
-		Dict       []string          `json:"dict"`
-		Rows       []json.RawMessage `json:"rows"`
+		K         string            `json:"k"`
+		D         []string          `json:"d"`
+		R         []json.RawMessage `json:"r"`
+		PeriodKey string            `json:"periodKey"`
+		Dict      []string          `json:"dict"`
+		Rows      []json.RawMessage `json:"rows"`
 	}
 	if err := json.Unmarshal(data, &compact); err != nil {
 		return err
@@ -120,6 +120,9 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// ErrSalesAnalysisExpired identifies missing report data for actionable recovery.
+var ErrSalesAnalysisExpired = errors.New("sales analysis result is no longer available")
+
 // GetSalesAnalysisItems returns one period's article rows from the last
 // analysis kept in this process. RunSalesAnalysis omits those rows so the
 // Wails/WebView2 bridge does not marshal a multi-store dump in one call.
@@ -137,7 +140,7 @@ func (a *App) GetSalesAnalysisItems(request SalesAnalysisItemsRequest) (SalesAna
 	a.salesResultMu.Lock()
 	defer a.salesResultMu.Unlock()
 	if a.salesResult == nil || a.salesResult.OperationID != operationID {
-		return SalesAnalysisPackedItems{}, errors.New("sales analysis result is no longer available")
+		return SalesAnalysisPackedItems{}, ErrSalesAnalysisExpired
 	}
 	packed, ok := a.salesPacked[periodKey]
 	if !ok {
@@ -163,7 +166,7 @@ func (a *App) GetSalesAnalysisReportGlyphs(request OperationRequest) (string, er
 	a.salesResultMu.Lock()
 	defer a.salesResultMu.Unlock()
 	if a.salesResult == nil || (operationID != "" && a.salesResult.OperationID != operationID) {
-		return "", errors.New("sales analysis result is no longer available")
+		return "", ErrSalesAnalysisExpired
 	}
 	seen := make(map[rune]struct{}, 512)
 	add := func(value string) {
@@ -560,9 +563,9 @@ func rankSummaryItems(items []SalesAnalysisItem, byAmount bool, limit int) []Sal
 
 func facetOptionsFromItems(items []SalesAnalysisItem) map[string][]string {
 	levels := []struct {
-		key      string
-		codeOf   func(SalesAnalysisItem) string
-		nameOf   func(SalesAnalysisItem) string
+		key    string
+		codeOf func(SalesAnalysisItem) string
+		nameOf func(SalesAnalysisItem) string
 	}{
 		{"category1", func(item SalesAnalysisItem) string { return item.Category1Code }, func(item SalesAnalysisItem) string { return item.Category1 }},
 		{"category2", func(item SalesAnalysisItem) string { return item.Category2Code }, func(item SalesAnalysisItem) string { return item.Category2 }},

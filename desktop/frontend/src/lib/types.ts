@@ -196,6 +196,8 @@ export interface SalesAnalysisRequest {
   periods?: SalesAnalysisPeriodRequest[];
   concurrency: number;
   simulateStoreCount?: number;
+  /** Browser-only draft metadata; webBackend removes this before the RPC. */
+  localQuery?: { periodMode: 'month' | 'range'; month: string; weekCompare: boolean };
 }
 
 export interface SalesAnalysisPeriodRequest {
@@ -404,6 +406,7 @@ export interface SalesAnalysisSnapshot {
   result: SalesAnalysisResult | null;
   profileId: string;
   savedAt: string;
+  localQuery?: SalesAnalysisRequest['localQuery'];
 }
 
 export interface SalesAnalysisWeek {

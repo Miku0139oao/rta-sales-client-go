@@ -411,6 +411,20 @@ async function renderHydratingReport(value: SalesAnalysisResult, load: (request:
 }
 
 describe('analysis item recovery', () => {
+  it('stops repeated expired-period requests and opens the original query for review without automatically querying',async()=>{
+    const original=analysisResult();
+    const value={...original,periods:['current','previous','previous2','yearAgo','yearAgoNext'].map(key=>({...original.periods![0]!,key,label:key,items:undefined,itemCount:1}))};
+    const {getItems,run}=await renderHydratingReport(value,async()=>{throw new Error('sales analysis result is no longer available');});
+    await screen.findByText('報表明細需要重新查詢');
+    expect(getItems).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/5 個期間的明細未載入/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no longer available/)).not.toBeInTheDocument();
+    expect(screen.queryByText('載入中')).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button',{name:'重新查詢'}));
+    expect(screen.getByLabelText('帳號')).toHaveValue('profile-1');
+    expect(screen.getByText('開始分析')).toBeInTheDocument();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
   it('keeps successful periods, retries only the failed period, and never reruns the query', async () => {
     const original = analysisResult();
     const current = original.periods![0]!;

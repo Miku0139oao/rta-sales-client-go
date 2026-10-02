@@ -210,6 +210,7 @@
 html {
   min-width: 320px;
   height: 100%;
+  height: 100dvh;
   overflow: hidden;
   background: var(--md-sys-color-surface);
   scrollbar-width: none;
@@ -413,7 +414,7 @@ md-icon-button {
 .navigation-rail {
   min-height: 0;
   padding: 12px 8px;
-  overflow: hidden;
+  overflow-y: auto;
   border-right: 1px solid var(--app-border-soft);
   background: var(--app-navigation);
 }
@@ -2082,6 +2083,9 @@ th.proposed-column {
   .top-app-bar {
     min-height: 66px;
     padding: 9px 16px;
+    padding-top: calc(9px + env(safe-area-inset-top, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
   }
 
   .brand-mark {
@@ -2099,11 +2103,14 @@ th.proposed-column {
   }
 
   main {
-    padding: 28px 16px 104px;
+    padding: 18px 16px 24px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
   }
 
   .bottom-navigation {
-    position: fixed;
+    position: relative;
+    flex: 0 0 auto;
     z-index: 30;
     right: 0;
     bottom: 0;
@@ -2242,6 +2249,17 @@ th.proposed-column {
 
   .appearance-fields {
     grid-template-columns: 1fr;
+  }
+
+  input:not([type='checkbox']):not([type='radio']), select, textarea {
+    font-size: 16px;
+  }
+
+  .web-banner-details summary {
+    min-height: 44px;
+    padding-block: 12px;
+    cursor: pointer;
+    color: var(--md-sys-color-primary);
   }
 }
 

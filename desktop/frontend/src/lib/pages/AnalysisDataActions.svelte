@@ -68,6 +68,11 @@
   button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 3px; }
   p { font-size: 12px; overflow-wrap: anywhere; color: var(--md-sys-color-primary); }
   p[role="alert"] { color: var(--md-sys-color-error); }
+  @media (max-width:760px) {
+    button, select { min-height:44px; }
+    select { font-size:16px; max-width:100%; }
+    .action-row { justify-content:flex-start; }
+  }
   textarea { width: 100%; box-sizing: border-box; font-family: monospace; }
   @media (max-width: 520px) { .data-hint { flex-basis: 100%; } .action-row { justify-content: flex-start; } .compact .action-row { justify-content: flex-end; } }
 </style>

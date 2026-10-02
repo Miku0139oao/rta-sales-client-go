@@ -727,6 +727,9 @@ func webErrorCode(err error) string {
 	if errors.Is(err, context.Canceled) {
 		return "cancelled"
 	}
+	if errors.Is(err, ErrSalesAnalysisExpired) {
+		return "analysis_expired"
+	}
 	var auth *rtasales.AuthError
 	if errors.As(err, &auth) {
 		return "rta_auth"

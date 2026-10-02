@@ -75,6 +75,7 @@
     overflow-wrap: anywhere;
   }
   button {
+    min-height: 44px;
     border: 1px solid var(--md-sys-color-outline-variant);
     border-radius: 20px;
     padding: 8px 14px;
@@ -86,4 +87,11 @@
     width: 100px;
     accent-color: var(--md-sys-color-primary);
   }
+  @media (max-width: 760px) {
+    .activity { position: static; gap: 8px; padding: 12px; border-radius: 12px; margin-bottom: 12px; }
+    .copy { flex-basis: 100%; }
+    progress { flex: 1; min-width: 48px; }
+    button { padding-inline: 12px; }
+  }
+  @media (max-height: 540px) { .activity { position: static; } }
 </style>

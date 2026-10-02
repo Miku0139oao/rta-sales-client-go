@@ -45,7 +45,7 @@ func (a *App) GetSalesAnalysisReportMemo(request SalesAnalysisReportMemoRequest)
 	a.salesResultMu.Lock()
 	defer a.salesResultMu.Unlock()
 	if a.salesResult == nil || a.salesResult.OperationID != operationID {
-		return SalesAnalysisReportMemo{}, errors.New("sales analysis result is no longer available")
+		return SalesAnalysisReportMemo{}, ErrSalesAnalysisExpired
 	}
 	level := strings.TrimSpace(request.CategoryLevel)
 	if level == "" {

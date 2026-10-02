@@ -1,4 +1,4 @@
-export const WEB_BANNER_ACK_KEY = 'rta-web-privacy-ack-v2';
+export const WEB_BANNER_ACK_KEY = 'rta-web-privacy-ack-v3';
 
 export function readWebBannerAck(): boolean {
   if (typeof localStorage === 'undefined') return false;

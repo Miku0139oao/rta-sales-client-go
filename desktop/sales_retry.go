@@ -40,7 +40,7 @@ func (a *App) RetrySalesAnalysis(request OperationRequest) (SalesAnalysisResult,
 	valid := state != nil && state.id == request.OperationID && a.salesResult != nil && a.salesResult.OperationID == request.OperationID && !a.salesResult.Pending
 	a.salesResultMu.Unlock()
 	if !valid {
-		return SalesAnalysisResult{}, errors.New("retry context expired; run the analysis again / 重試資料已失效，請重新查詢")
+		return SalesAnalysisResult{}, ErrSalesAnalysisExpired
 	}
 	ids := make([]string, len(state.stores))
 	for i, store := range state.stores {
