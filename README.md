@@ -24,7 +24,15 @@ New builds read version and changelog metadata from a fixed [GitHub Pages manife
 
 **0.4.8 and earlier API-based clients need a one-time manual upgrade to a Pages-enabled release.** Finish work, close the app, keep a backup, then replace it at the same path and filename. Old clients cannot learn this endpoint automatically and may encounter GitHub API rate limits. See [update safety and deployment](docs/portable-updates.md).
 
-## v0.4.14 (current stable)
+## v0.4.15 (current stable)
+
+The web edition saves the latest complete report and all period details on this browser, using localStorage for small reports and IndexedDB for larger reports. Reopening restores the original account and query without depending on an expired server report. Saved reports show their timestamp and offer explicit refresh and clear actions; failed or incomplete queries retain the previous saved report.
+
+Mobile analysis uses touch-friendly navigation and paginated product cards, with full-table and full-column export options. Old summary-only reports whose server details have expired need one new query.
+
+[v0.4.15 release notes (Traditional Chinese)](docs/releases/v0.4.15.zh-TW.md) · [Browser report storage](docs/browser-report-cache.md) · [Validation and publication](docs/releases/v0.4.15.validation.md).
+
+## v0.4.14
 
 Sales analysis now has cross-page task progress, failed-job-only retry, report scope/freshness, searchable configurable tables, local history comparison, and saved one-click query/export workflows. PDF/Excel/AI files can be bundled into one ZIP. Historical summaries stay on the device and are limited to 20 records without automatic deletion.
 
